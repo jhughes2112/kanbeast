@@ -26,7 +26,7 @@ try
     var apiClient = new KanbanApiClient(config.ServerUrl);
     var gitService = new GitService();
     var toolExecutor = new ToolExecutor();
-    var llmService = new LlmService(config.LLMConfigs);
+    ILlmService llmService = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds);
 
     // Fetch ticket details
     Console.WriteLine("Fetching ticket details...");
@@ -93,7 +93,8 @@ try
     var developerKernel = llmService.CreateKernel(new object[]
     {
         new ShellTools(toolExecutor),
-        new FileTools(toolExecutor)
+        new FileTools(toolExecutor),
+        new DeveloperTaskTools(apiClient)
     });
 
     var managerAgent = new ManagerAgent(apiClient, toolExecutor, config.ManagerPrompt, llmService, managerKernel);
@@ -109,24 +110,39 @@ try
     // Work on each task
     foreach (var task in ticket!.Tasks)
     {
-        if (task.IsCompleted)
-            continue;
-
-        Console.WriteLine($"Working on task: {task.Description}");
-        
-        // Developer works on the task
-        var success = await developerAgent.WorkOnTaskAsync(task.Description, workDir);
-        
-        if (success)
+        foreach (var subtask in task.Subtasks)
         {
-            // Manager verifies completion
-            var verified = await managerAgent.VerifyTaskCompletionAsync(task.Description, workDir);
-            
-            if (verified)
+            if (subtask.Status == SubtaskStatus.Complete)
+                continue;
+
+            Console.WriteLine($"Working on subtask: {subtask.Name}");
+
+            var success = await developerAgent.WorkOnTaskAsync(task, subtask, ticket.Id, workDir);
+
+            if (!success)
             {
-                await apiClient.UpdateTaskStatusAsync(ticket.Id, task.Id, true);
-                Console.WriteLine($"Task completed: {task.Description}");
+                return 1;
             }
+
+            var refreshed = await apiClient.GetTicketAsync(config.TicketId);
+            var refreshedTask = refreshed?.Tasks.FirstOrDefault(t => t.Id == task.Id);
+            var refreshedSubtask = refreshedTask?.Subtasks.FirstOrDefault(s => s.Id == subtask.Id);
+
+            if (refreshedSubtask?.Status != SubtaskStatus.Complete)
+            {
+                await apiClient.AddActivityLogAsync(ticket.Id, $"Manager: Subtask not marked complete - {subtask.Name}");
+                return 1;
+            }
+
+            var verified = await managerAgent.VerifyTaskCompletionAsync(subtask.Name, workDir);
+            if (!verified)
+            {
+                await apiClient.UpdateSubtaskStatusAsync(ticket.Id, task.Id, subtask.Id, SubtaskStatus.Incomplete);
+                await apiClient.AddActivityLogAsync(ticket.Id, $"Manager: Verification failed for {subtask.Name}");
+                return 1;
+            }
+
+            Console.WriteLine($"Subtask completed: {subtask.Name}");
         }
     }
 
@@ -166,39 +182,108 @@ catch (Exception ex)
 
 static WorkerConfig? BuildConfiguration(WorkerOptions options)
 {
-    var ticketId = options.TicketId ?? GetEnvValue("TICKET_ID");
-    var serverUrl = options.ServerUrl ?? GetEnvValue("SERVER_URL") ?? "http://localhost:5000";
+    WorkerConfig? config = null;
+    string? ticketId = options.TicketId ?? GetEnvValue("TICKET_ID");
+    string? serverUrl = options.ServerUrl ?? GetEnvValue("SERVER_URL") ?? "http://localhost:5000";
 
-    if (string.IsNullOrEmpty(ticketId))
-        return null;
-
-    var promptDirectory = "env/prompts";
-    var resolvedPromptDirectory = ResolvePromptDirectory(promptDirectory);
-    var systemPrompts = LoadPromptTemplates(resolvedPromptDirectory);
-
-    var managerPrompt = BuildManagerPrompt(systemPrompts);
-    var developerPrompt = BuildDeveloperPrompt(systemPrompts);
-
-    return new WorkerConfig
+    if (!string.IsNullOrEmpty(ticketId))
     {
-        TicketId = ticketId,
-        ServerUrl = serverUrl,
-        GitConfig = new GitConfig
+        string? llmConfigFile = options.LlmConfigFile ?? GetEnvValue("LLM_CONFIG_FILE");
+        List<LLMConfig>? llmConfigs = LoadLlmConfigs(llmConfigFile);
+
+        if (llmConfigs != null && llmConfigs.Count > 0)
         {
-            RepositoryUrl = options.GitUrl ?? GetEnvValue("GIT_URL") ?? string.Empty,
-            Username = options.GitUsername ?? GetEnvValue("GIT_USERNAME") ?? "KanBeast Worker",
-            Email = options.GitEmail ?? GetEnvValue("GIT_EMAIL") ?? "worker@kanbeast.local",
-            SshKey = options.GitSshKey ?? GetEnvValue("GIT_SSH_KEY")
-        },
-        LLMConfigs = ParseJsonEnv<List<LLMConfig>>("LLM_CONFIGS") ?? new List<LLMConfig>(),
-        ManagerPrompt = string.IsNullOrWhiteSpace(managerPrompt)
-            ? "You are a project manager. Break down tasks and verify completion."
-            : managerPrompt,
-        DeveloperPrompt = string.IsNullOrWhiteSpace(developerPrompt)
-            ? "You are a software developer. Implement features and write tests."
-            : developerPrompt,
-        PromptDirectory = resolvedPromptDirectory
-    };
+            int retryCount = GetIntOptionOrEnv(options.LlmRetryCount, "LLM_RETRY_COUNT", 0);
+            int retryDelaySeconds = GetIntOptionOrEnv(options.LlmRetryDelaySeconds, "LLM_RETRY_DELAY_SECONDS", 0);
+
+            string promptDirectory = "env/prompts";
+            string resolvedPromptDirectory = ResolvePromptDirectory(promptDirectory);
+            List<PromptTemplate> systemPrompts = LoadPromptTemplates(resolvedPromptDirectory);
+
+            string managerPrompt = BuildManagerPrompt(systemPrompts);
+            string developerPrompt = BuildDeveloperPrompt(systemPrompts);
+
+            config = new WorkerConfig
+            {
+                TicketId = ticketId,
+                ServerUrl = serverUrl,
+                GitConfig = new GitConfig
+                {
+                    RepositoryUrl = options.GitUrl ?? GetEnvValue("GIT_URL") ?? string.Empty,
+                    Username = options.GitUsername ?? GetEnvValue("GIT_USERNAME") ?? "KanBeast Worker",
+                    Email = options.GitEmail ?? GetEnvValue("GIT_EMAIL") ?? "worker@kanbeast.local",
+                    SshKey = options.GitSshKey ?? GetEnvValue("GIT_SSH_KEY")
+                },
+                LLMConfigs = llmConfigs,
+                LlmRetryCount = retryCount,
+                LlmRetryDelaySeconds = retryDelaySeconds,
+                ManagerPrompt = string.IsNullOrWhiteSpace(managerPrompt)
+                    ? "You are a project manager. Break down tasks and verify completion."
+                    : managerPrompt,
+                DeveloperPrompt = string.IsNullOrWhiteSpace(developerPrompt)
+                    ? "You are a software developer. Implement features and write tests."
+                    : developerPrompt,
+                PromptDirectory = resolvedPromptDirectory
+            };
+        }
+    }
+
+    return config;
+}
+
+static List<LLMConfig>? LoadLlmConfigs(string? configFile)
+{
+    List<LLMConfig>? configs = null;
+
+    if (!string.IsNullOrWhiteSpace(configFile))
+    {
+        string resolvedPath = ResolveLlmConfigPath(configFile);
+
+        if (File.Exists(resolvedPath))
+        {
+            string json = File.ReadAllText(resolvedPath);
+            JsonSerializerOptions options = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            };
+
+            configs = JsonSerializer.Deserialize<List<LLMConfig>>(json, options);
+        }
+    }
+
+    return configs;
+}
+
+static string ResolveLlmConfigPath(string configFile)
+{
+    string resolvedPath = Path.IsPathRooted(configFile)
+        ? configFile
+        : Path.Combine(AppContext.BaseDirectory, configFile);
+
+    return resolvedPath;
+}
+
+static int GetIntOptionOrEnv(int? optionValue, string envKey, int defaultValue)
+{
+    int value = defaultValue;
+
+    if (optionValue.HasValue)
+    {
+        value = optionValue.Value;
+    }
+    else
+    {
+        string? envValue = GetEnvValue(envKey);
+        if (!string.IsNullOrWhiteSpace(envValue))
+        {
+            if (int.TryParse(envValue, out int parsed))
+            {
+                value = parsed;
+            }
+        }
+    }
+
+    return value;
 }
 
 static string? GetEnvValue(string key)
@@ -369,7 +454,13 @@ class WorkerOptions
     [Option("git-ssh-key", HelpText = "Git SSH key content.")]
     public string? GitSshKey { get; set; }
 
-    [Option("prompt-dir", HelpText = "Directory containing prompt files.")]
-    public string? PromptDirectory { get; set; }
+    [Option("llm-config-file", HelpText = "Path to a JSON list of LLM endpoints.")]
+    public string? LlmConfigFile { get; set; }
+
+    [Option("llm-retry-count", HelpText = "Number of retries before falling back to the next LLM.")]
+    public int? LlmRetryCount { get; set; }
+
+    [Option("llm-retry-delay-seconds", HelpText = "Delay between retries in seconds.")]
+    public int? LlmRetryDelaySeconds { get; set; }
 
 }

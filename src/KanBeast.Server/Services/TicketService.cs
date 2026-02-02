@@ -12,7 +12,7 @@ public interface ITicketService
     Task<bool> DeleteTicketAsync(string id);
     Task<Ticket?> UpdateTicketStatusAsync(string id, TicketStatus status);
     Task<Ticket?> AddTaskToTicketAsync(string id, KanbanTask task);
-    Task<Ticket?> UpdateTaskStatusAsync(string ticketId, string taskId, bool isCompleted);
+    Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
     Task<Ticket?> AddActivityLogAsync(string id, string activity);
     Task<Ticket?> SetBranchNameAsync(string id, string branchName);
 }
@@ -69,12 +69,18 @@ public class TicketService : ITicketService
         if (!_tickets.TryGetValue(id, out var ticket))
             return Task.FromResult<Ticket?>(null);
 
+        task.LastUpdatedAt = DateTime.UtcNow;
+        foreach (var subtask in task.Subtasks)
+        {
+            subtask.LastUpdatedAt = DateTime.UtcNow;
+        }
+
         ticket.Tasks.Add(task);
         ticket.UpdatedAt = DateTime.UtcNow;
         return Task.FromResult<Ticket?>(ticket);
     }
 
-    public Task<Ticket?> UpdateTaskStatusAsync(string ticketId, string taskId, bool isCompleted)
+    public Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
     {
         if (!_tickets.TryGetValue(ticketId, out var ticket))
             return Task.FromResult<Ticket?>(null);
@@ -83,8 +89,13 @@ public class TicketService : ITicketService
         if (task == null)
             return Task.FromResult<Ticket?>(null);
 
-        task.IsCompleted = isCompleted;
-        task.CompletedAt = isCompleted ? DateTime.UtcNow : null;
+        var subtask = task.Subtasks.FirstOrDefault(s => s.Id == subtaskId);
+        if (subtask == null)
+            return Task.FromResult<Ticket?>(null);
+
+        subtask.Status = status;
+        subtask.LastUpdatedAt = DateTime.UtcNow;
+        task.LastUpdatedAt = DateTime.UtcNow;
         ticket.UpdatedAt = DateTime.UtcNow;
         return Task.FromResult<Ticket?>(ticket);
     }

@@ -37,41 +37,52 @@ public class ManagerAgent : IManagerAgent
     {
         await _apiClient.AddActivityLogAsync(ticket.Id, "Manager: Analyzing ticket and breaking down into tasks");
 
-        var userPrompt = $"Ticket Title: {ticket.Title}\nTicket Description: {ticket.Description}\n\nBreak this ticket into ordered, testable subtasks with acceptance criteria. Return one task per line.";
-        var response = await _llmService.RunAsync(_kernel, _systemPrompt, userPrompt);
-        var tasks = ParseTasks(response);
+        string userPrompt = $"Ticket Title: {ticket.Title}\nTicket Description: {ticket.Description}\n\nBreak this ticket into ordered, testable subtasks with acceptance criteria. Return one task per line.";
+        string response = await _llmService.RunAsync(_kernel, _systemPrompt, userPrompt, CancellationToken.None);
+        List<string> tasks = ParseTasks(response);
 
         if (tasks.Count == 0)
         {
             tasks.Add($"Implement core functionality for: {ticket.Title}");
         }
 
-        // Add tasks to the ticket
-        foreach (var task in tasks)
+        KanbanTaskDto kanbanTask = new KanbanTaskDto
         {
-            await _apiClient.AddTaskAsync(ticket.Id, task);
-            await _apiClient.AddActivityLogAsync(ticket.Id, $"Manager: Added task - {task}");
-        }
+            Id = Guid.NewGuid().ToString(),
+            Name = ticket.Title,
+            Description = ticket.Description,
+            Subtasks = tasks.Select(task => new KanbanSubtaskDto
+            {
+                Id = Guid.NewGuid().ToString(),
+                Name = task,
+                Description = string.Empty,
+                Status = SubtaskStatus.Incomplete
+            }).ToList()
+        };
+
+        await _apiClient.AddTaskAsync(ticket.Id, kanbanTask);
+        await _apiClient.AddActivityLogAsync(ticket.Id, $"Manager: Added task with {kanbanTask.Subtasks.Count} subtasks");
 
         return tasks;
     }
 
     public async Task<bool> VerifyTaskCompletionAsync(string taskDescription, string workDir)
     {
-        var userPrompt = $"Verify the following task is complete and correct. Use available tools if needed.\nTask: {taskDescription}\nWorking directory: {workDir}\n\nRespond with 'APPROVED' or 'REJECTED: <reason>'.";
-        var response = await _llmService.RunAsync(_kernel, _systemPrompt, userPrompt);
+        string userPrompt = $"Verify the following task is complete and correct. Use available tools if needed.\nTask: {taskDescription}\nWorking directory: {workDir}\n\nRespond with 'APPROVED' or 'REJECTED: <reason>'.";
+        string response = await _llmService.RunAsync(_kernel, _systemPrompt, userPrompt, CancellationToken.None);
+        bool approved = false;
 
         if (response.Contains("APPROVED", StringComparison.OrdinalIgnoreCase))
         {
-            return true;
+            approved = true;
         }
 
-        return false;
+        return approved;
     }
 
     public async Task<bool> AllTasksCompleteAsync(TicketDto ticket)
     {
-        return ticket.Tasks.All(t => t.IsCompleted);
+        return ticket.Tasks.All(t => t.Subtasks.All(s => s.Status == SubtaskStatus.Complete));
     }
 
     private static List<string> ParseTasks(string response)

@@ -84,8 +84,9 @@ function renderTicket(ticket) {
         existingTicket.remove();
     }
 
-    const completedTasks = ticket.tasks.filter(t => t.isCompleted).length;
-    const totalTasks = ticket.tasks.length;
+    const subtasks = ticket.tasks.flatMap(task => task.subtasks || []);
+    const completedTasks = subtasks.filter(subtask => subtask.status === 'Complete').length;
+    const totalTasks = subtasks.length;
 
     const ticketElement = document.createElement('div');
     ticketElement.className = 'ticket';
@@ -96,7 +97,7 @@ function renderTicket(ticket) {
         <div class="ticket-description">${escapeHtml(ticket.description)}</div>
         ${totalTasks > 0 ? `
             <div class="ticket-tasks">
-                <span class="ticket-tasks-summary">Tasks: ${completedTasks}/${totalTasks}</span>
+                <span class="ticket-tasks-summary">Subtasks: ${completedTasks}/${totalTasks}</span>
             </div>
         ` : ''}
         <div class="ticket-meta">

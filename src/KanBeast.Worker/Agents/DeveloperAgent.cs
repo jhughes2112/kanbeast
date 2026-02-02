@@ -6,7 +6,7 @@ namespace KanBeast.Worker.Agents;
 
 public interface IDeveloperAgent
 {
-    Task<bool> WorkOnTaskAsync(string taskDescription, string workDir);
+    Task<bool> WorkOnTaskAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string ticketId, string workDir);
 }
 
 public class DeveloperAgent : IDeveloperAgent
@@ -34,21 +34,23 @@ public class DeveloperAgent : IDeveloperAgent
         _kernel = kernel;
     }
 
-    public async Task<bool> WorkOnTaskAsync(string taskDescription, string workDir)
+    public async Task<bool> WorkOnTaskAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string ticketId, string workDir)
     {
-        await _apiClient.AddActivityLogAsync(_ticketId, $"Developer: Starting work on - {taskDescription}");
+        await _apiClient.AddActivityLogAsync(_ticketId, $"Developer: Starting work on - {subtask.Name}");
+        bool success = false;
 
         try
         {
-            var userPrompt = $"Task: {taskDescription}\nWorking directory: {workDir}\n\nImplement the task using available tools. When done, summarize changes and test results.";
-            var response = await _llmService.RunAsync(_kernel, _systemPrompt, userPrompt);
+            string userPrompt = $"Task: {task.Name}\nTask Description: {task.Description}\nSubtask: {subtask.Name}\nSubtask Description: {subtask.Description}\nTicket Id: {ticketId}\nTask Id: {task.Id}\nSubtask Id: {subtask.Id}\nWorking directory: {workDir}\n\nImplement the subtask using available tools. When finished, call complete_subtask with the ids. Summarize changes and test results.";
+            string response = await _llmService.RunAsync(_kernel, _systemPrompt, userPrompt, CancellationToken.None);
             await _apiClient.AddActivityLogAsync(_ticketId, $"Developer: {response}");
-            return true;
+            success = true;
         }
         catch (Exception ex)
         {
             await _apiClient.AddActivityLogAsync(_ticketId, $"Developer: Error - {ex.Message}");
-            return false;
         }
+
+        return success;
     }
 }

@@ -110,10 +110,10 @@ public class TicketsController : ControllerBase
         return Ok(ticket);
     }
 
-    [HttpPatch("{ticketId}/tasks/{taskId}")]
-    public async Task<ActionResult<Ticket>> UpdateTaskStatus(string ticketId, string taskId, [FromBody] TaskStatusUpdate update)
+    [HttpPatch("{ticketId}/tasks/{taskId}/subtasks/{subtaskId}")]
+    public async Task<ActionResult<Ticket>> UpdateSubtaskStatus(string ticketId, string taskId, string subtaskId, [FromBody] SubtaskStatusUpdate update)
     {
-        var ticket = await _ticketService.UpdateTaskStatusAsync(ticketId, taskId, update.IsCompleted);
+        var ticket = await _ticketService.UpdateSubtaskStatusAsync(ticketId, taskId, subtaskId, update.Status);
         if (ticket == null)
             return NotFound();
 
@@ -145,6 +145,6 @@ public class TicketsController : ControllerBase
 }
 
 public record TicketStatusUpdate(TicketStatus Status);
-public record TaskStatusUpdate(bool IsCompleted);
+public record SubtaskStatusUpdate(SubtaskStatus Status);
 public record ActivityUpdate(string Message);
 public record BranchUpdate(string BranchName);

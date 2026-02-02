@@ -7,8 +7,8 @@ public interface IKanbanApiClient
 {
     Task<TicketDto?> GetTicketAsync(string ticketId);
     Task UpdateTicketStatusAsync(string ticketId, string status);
-    Task AddTaskAsync(string ticketId, string description);
-    Task UpdateTaskStatusAsync(string ticketId, string taskId, bool isCompleted);
+    Task AddTaskAsync(string ticketId, KanbanTaskDto task);
+    Task UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
     Task AddActivityLogAsync(string ticketId, string message);
     Task SetBranchNameAsync(string ticketId, string branchName);
 }
@@ -32,14 +32,14 @@ public class KanbanApiClient : IKanbanApiClient
         await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/status", new { status });
     }
 
-    public async Task AddTaskAsync(string ticketId, string description)
+    public async Task AddTaskAsync(string ticketId, KanbanTaskDto task)
     {
-        await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks", new { description });
+        await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks", task);
     }
 
-    public async Task UpdateTaskStatusAsync(string ticketId, string taskId, bool isCompleted)
+    public async Task UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
     {
-        await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{taskId}", new { isCompleted });
+        await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{taskId}/subtasks/{subtaskId}", new { status });
     }
 
     public async Task AddActivityLogAsync(string ticketId, string message)

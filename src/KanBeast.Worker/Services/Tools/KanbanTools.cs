@@ -1,3 +1,4 @@
+using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
 using Microsoft.SemanticKernel;
 
@@ -19,15 +20,15 @@ public class KanbanTools
     }
 
     [KernelFunction("add_task")]
-    public Task AddTaskAsync(string ticketId, string description)
+    public Task AddTaskAsync(string ticketId, KanbanTaskDto task)
     {
-        return _apiClient.AddTaskAsync(ticketId, description);
+        return _apiClient.AddTaskAsync(ticketId, task);
     }
 
-    [KernelFunction("update_task")]
-    public Task UpdateTaskStatusAsync(string ticketId, string taskId, bool isCompleted)
+    [KernelFunction("update_subtask")]
+    public Task UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
     {
-        return _apiClient.UpdateTaskStatusAsync(ticketId, taskId, isCompleted);
+        return _apiClient.UpdateSubtaskStatusAsync(ticketId, taskId, subtaskId, status);
     }
 
     [KernelFunction("add_activity")]
