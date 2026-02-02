@@ -15,12 +15,15 @@ public class ToolExecutor : IToolExecutor
 {
     public async Task<string> ExecuteBashCommandAsync(string command, string workDir)
     {
+        var shellPath = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash";
+        var shellArgs = OperatingSystem.IsWindows() ? $"/c {command}" : $"-c \"{command.Replace("\"", "\\\"")}\"";
+        
         var process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
-                FileName = "/bin/bash",
-                Arguments = $"-c \"{command.Replace("\"", "\\\"")}\"",
+                FileName = shellPath,
+                Arguments = shellArgs,
                 WorkingDirectory = workDir,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,

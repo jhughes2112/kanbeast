@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  kanbeast-server:
+    build:
+      context: .
+      dockerfile: src/KanBeast.Server/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ASPNETCORE_URLS=http://+:8080
+    volumes:
+      - kanbeast-data:/app/data
+    networks:
+      - kanbeast-network
+
+  # Worker containers are spawned dynamically by the server
+  # This is a template that shows how a worker would be configured
+  # In production, the server would spawn these using Docker API
+
+networks:
+  kanbeast-network:
+    driver: bridge
+
+volumes:
+  kanbeast-data:

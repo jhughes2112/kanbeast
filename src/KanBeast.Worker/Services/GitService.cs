@@ -56,10 +56,21 @@ public class GitService : IGitService
 
     public async Task RebaseToMasterAsync(string workDir)
     {
+        // Get current branch name before switching
+        var currentBranch = await ExecuteGitCommandAsync("rev-parse --abbrev-ref HEAD", workDir);
+        currentBranch = currentBranch.Trim();
+        
+        // Switch to master and update it
         await ExecuteGitCommandAsync("checkout master", workDir);
         await ExecuteGitCommandAsync("pull", workDir);
-        var branch = await ExecuteGitCommandAsync("rev-parse --abbrev-ref HEAD", workDir);
-        await ExecuteGitCommandAsync($"rebase {branch.Trim()}", workDir);
+        
+        // Switch back to feature branch and rebase onto master
+        await ExecuteGitCommandAsync($"checkout {currentBranch}", workDir);
+        await ExecuteGitCommandAsync("rebase master", workDir);
+        
+        // Switch back to master and merge (fast-forward)
+        await ExecuteGitCommandAsync("checkout master", workDir);
+        await ExecuteGitCommandAsync($"merge --ff-only {currentBranch}", workDir);
         await ExecuteGitCommandAsync("push", workDir);
     }
 
