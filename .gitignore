@@ -48,10 +48,8 @@ artifacts/
 *.nuget.props
 *.nuget.targets
 
-# Docker
+# Docker (ignore only .dockerignore files, keep Dockerfiles and docker-compose)
 **/.dockerignore
-**/docker-compose*
-**/Dockerfile*
 
 # IDE
 .vscode/

@@ -12,7 +12,7 @@ public interface IWorkerOrchestrator
 
 public class WorkerOrchestrator : IWorkerOrchestrator
 {
-    private readonly Dictionary<string, Process> _activeWorkers = new();
+    private readonly Dictionary<string, string> _activeWorkers = new();
     private readonly ISettingsService _settingsService;
     private readonly ITicketService _ticketService;
     private readonly ILogger<WorkerOrchestrator> _logger;
@@ -44,8 +44,8 @@ public class WorkerOrchestrator : IWorkerOrchestrator
         ticket.WorkerId = workerId;
         await _ticketService.AddActivityLogAsync(ticketId, $"Worker {workerId} assigned");
 
-        // Store the worker (in production, this would be a Docker container ID)
-        _activeWorkers[workerId] = null!; // Placeholder for actual process
+        // Store the worker ID and status
+        _activeWorkers[workerId] = "Running";
 
         return workerId;
     }
@@ -64,6 +64,6 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
     public Task<Dictionary<string, string>> GetActiveWorkersAsync()
     {
-        return Task.FromResult(_activeWorkers.Keys.ToDictionary(k => k, k => "Running"));
+        return Task.FromResult(new Dictionary<string, string>(_activeWorkers));
     }
 }
