@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>KanBeast - AI-Driven Kanban Board</title>
+    <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+    <header>
+        <h1>🦁 KanBeast</h1>
+        <nav>
+            <button id="newTicketBtn" class="btn-primary">+ New Ticket</button>
+            <button id="settingsBtn" class="btn-secondary">⚙️ Settings</button>
+        </nav>
+    </header>
+
+    <main id="kanbanBoard">
+        <div class="column" data-status="Backlog">
+            <h2>📋 Backlog</h2>
+            <div class="ticket-container" id="backlog-container"></div>
+        </div>
+        <div class="column" data-status="Active">
+            <h2>🚀 Active</h2>
+            <div class="ticket-container" id="active-container"></div>
+        </div>
+        <div class="column" data-status="Testing">
+            <h2>🧪 Testing</h2>
+            <div class="ticket-container" id="testing-container"></div>
+        </div>
+        <div class="column" data-status="Done">
+            <h2>✅ Done</h2>
+            <div class="ticket-container" id="done-container"></div>
+        </div>
+    </main>
+
+    <!-- New Ticket Modal -->
+    <div id="newTicketModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Create New Ticket</h2>
+            <form id="newTicketForm">
+                <div class="form-group">
+                    <label for="ticketTitle">Title:</label>
+                    <input type="text" id="ticketTitle" required>
+                </div>
+                <div class="form-group">
+                    <label for="ticketDescription">Description:</label>
+                    <textarea id="ticketDescription" rows="4" required></textarea>
+                </div>
+                <button type="submit" class="btn-primary">Create Ticket</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Ticket Detail Modal -->
+    <div id="ticketDetailModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <div id="ticketDetail"></div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div id="settingsModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Settings</h2>
+            <div id="settingsContent">
+                <h3>LLM Configurations</h3>
+                <div id="llmConfigs"></div>
+                <button id="addLLMBtn" class="btn-secondary">+ Add LLM</button>
+                
+                <h3>Git Configuration</h3>
+                <form id="gitConfigForm">
+                    <div class="form-group">
+                        <label for="gitUrl">Repository URL:</label>
+                        <input type="text" id="gitUrl">
+                    </div>
+                    <div class="form-group">
+                        <label for="gitUsername">Username:</label>
+                        <input type="text" id="gitUsername">
+                    </div>
+                    <div class="form-group">
+                        <label for="gitEmail">Email:</label>
+                        <input type="email" id="gitEmail">
+                    </div>
+                    <div class="form-group">
+                        <label for="gitSshKey">SSH Key:</label>
+                        <textarea id="gitSshKey" rows="4"></textarea>
+                    </div>
+                    <button type="submit" class="btn-primary">Save Settings</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@latest/dist/browser/signalr.min.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
