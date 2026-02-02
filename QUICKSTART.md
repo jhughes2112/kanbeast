@@ -48,20 +48,10 @@ dotnet run -- --ticket-id <YOUR-TICKET-ID> --server-url http://localhost:5042
 
 ## Running with Docker
 
-### Build Images
+### Build and Run
 
-```bash
-# Build server image
-docker build -t kanbeast-server -f src/KanBeast.Server/Dockerfile .
-
-# Build worker image
-docker build -t kanbeast-worker -f src/KanBeast.Worker/Dockerfile .
-```
-
-### Run with Docker Compose
-
-```bash
-docker-compose up --build
+```powershell
+./run-docker.bat
 ```
 
 Access the application at http://localhost:8080
@@ -167,7 +157,7 @@ Make sure you're running from the repository root:
 
 ```bash
 cd /path/to/kanbeast
-docker build -t kanbeast-server -f src/KanBeast.Server/Dockerfile .
+docker build -t kanbeast -f Dockerfile .
 ```
 
 ### Worker Can't Connect

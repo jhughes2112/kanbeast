@@ -67,10 +67,9 @@ This implementation provides a complete, working foundation for an AI-driven Kan
 ### 4. Infrastructure
 
 **Docker Support**:
-- ✅ Dockerfile for server (ASP.NET Core)
-- ✅ Dockerfile for worker (with git installed)
-- ✅ Docker Compose configuration
+- ✅ Single Dockerfile builds server and worker
 - ✅ Multi-stage builds for optimization
+- ✅ Windows batch script to run the server container
 
 **Documentation**:
 - ✅ Comprehensive README with architecture overview
@@ -249,7 +248,7 @@ For production, the server should:
      -e GIT_EMAIL=<email> \
      -e LLM_CONFIGS=<json> \
      --network kanbeast-network \
-     kanbeast-worker
+     kanbeast dotnet /app/worker/KanBeast.Worker.dll
    ```
 3. Monitor container logs
 4. Handle container failures and retries
@@ -291,15 +290,14 @@ For production, the server should:
 
 ### Docker Testing
 
-1. **Build images**
-   ```bash
-   docker build -t kanbeast-server -f src/KanBeast.Server/Dockerfile .
-   docker build -t kanbeast-worker -f src/KanBeast.Worker/Dockerfile .
+1. **Build and run**
+   ```powershell
+   ./run-docker.bat
    ```
 
-2. **Run with Docker Compose**
+2. **Run a worker from the same image (optional)**
    ```bash
-   docker-compose up --build
+   docker run --rm --network kanbeast-network kanbeast dotnet /app/worker/KanBeast.Worker.dll -- --ticket-id <ID> --server-url http://kanbeast-server:8080
    ```
 
 3. **Access at http://localhost:8080**

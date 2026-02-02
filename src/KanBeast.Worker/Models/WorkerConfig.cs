@@ -8,6 +8,7 @@ public class WorkerConfig
     public required List<LLMConfig> LLMConfigs { get; set; }
     public required string ManagerPrompt { get; set; }
     public required string DeveloperPrompt { get; set; }
+    public required string PromptDirectory { get; set; }
 }
 
 public class LLMConfig
@@ -27,4 +28,12 @@ public class GitConfig
     public string? SshKey { get; set; }
     public required string Username { get; set; }
     public required string Email { get; set; }
+}
+
+public class PromptTemplate
+{
+    public string Key { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
 }

@@ -20,15 +20,17 @@ public class GitConfig
     public string Email { get; set; } = string.Empty;
 }
 
-public class SystemPrompts
+public class PromptTemplate
 {
-    public string ManagerPrompt { get; set; } = @"You are a project manager responsible for breaking down feature requests into actionable tasks. Analyze the ticket and create a detailed task list that a developer can follow.";
-    public string DeveloperPrompt { get; set; } = @"You are a software developer. Implement the assigned tasks by editing files and executing commands. Write clean, maintainable code following best practices.";
+    public string Key { get; set; } = string.Empty;
+    public string DisplayName { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string Content { get; set; } = string.Empty;
 }
 
 public class Settings
 {
     public List<LLMConfig> LLMConfigs { get; set; } = new();
     public GitConfig GitConfig { get; set; } = new();
-    public SystemPrompts SystemPrompts { get; set; } = new();
+    public List<PromptTemplate> SystemPrompts { get; set; } = new();
 }

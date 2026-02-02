@@ -55,24 +55,31 @@ KanBeast is a complete kanban management system that combines traditional projec
 ✅ **Docker-Based Deployment**
 - Server runs in Docker container
 - Workers spawn as separate Docker containers
-- Docker Compose configuration included
+- Single Dockerfile builds both server and worker
+- Windows batch script to run the server container
 
 ## Getting Started
 
 ### Prerequisites
 
-- Docker and Docker Compose
+- Docker
 - .NET 9.0 SDK (for local development)
 - Git
 
-### Running with Docker Compose
+### Running with Docker
 
-```bash
+```powershell
 # Build and start the server
-docker-compose up --build
+./run-docker.bat
 
 # Access the application
-open http://localhost:8080
+start http://localhost:8080
+```
+
+To run a worker container from the same image:
+
+```bash
+docker run --rm --network kanbeast-network kanbeast dotnet /app/worker/KanBeast.Worker.dll -- --ticket-id <ticket-guid> --server-url http://kanbeast-server:8080
 ```
 
 ### Local Development
@@ -158,17 +165,16 @@ kanbeast/
 │   │   │   ├── css/
 │   │   │   ├── js/
 │   │   │   └── index.html
-│   │   ├── Dockerfile
 │   │   └── Program.cs
 │   │
 │   └── KanBeast.Worker/
 │       ├── Agents/            # Manager & Developer agents
 │       ├── Models/            # Worker models
 │       ├── Services/          # Git, API client, tools
-│       ├── Dockerfile
 │       └── Program.cs
 │
-├── docker-compose.yml
+├── Dockerfile
+├── run-docker.bat
 ├── KanBeast.sln
 └── README.md
 ```
@@ -178,7 +184,7 @@ kanbeast/
 - **Backend**: C# 13, .NET 9.0, ASP.NET Core
 - **Frontend**: HTML5, CSS3, Vanilla JavaScript
 - **Real-time**: SignalR
-- **Containerization**: Docker, Docker Compose
+- **Containerization**: Docker
 - **Version Control**: Git
 
 ## Future Enhancements

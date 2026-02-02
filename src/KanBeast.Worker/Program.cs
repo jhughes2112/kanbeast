@@ -1,12 +1,15 @@
 ﻿using System.Text.Json;
+using CommandLine;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
+using KanBeast.Worker.Services.Tools;
 using KanBeast.Worker.Agents;
 
 Console.WriteLine("KanBeast Worker Starting...");
 
 // Parse command line arguments or environment variables
-var config = ParseConfiguration(args);
+var config = Parser.Default.ParseArguments<WorkerOptions>(args)
+    .MapResult(BuildConfiguration, _ => null);
 
 if (config == null)
 {
@@ -23,6 +26,7 @@ try
     var apiClient = new KanbanApiClient(config.ServerUrl);
     var gitService = new GitService();
     var toolExecutor = new ToolExecutor();
+    var llmService = new LlmService(config.LLMConfigs);
 
     // Fetch ticket details
     Console.WriteLine("Fetching ticket details...");
@@ -79,8 +83,21 @@ try
     }
 
     // Initialize agents
-    var managerAgent = new ManagerAgent(apiClient, toolExecutor, config.ManagerPrompt);
-    var developerAgent = new DeveloperAgent(toolExecutor, apiClient, config.DeveloperPrompt, ticket.Id);
+    var managerKernel = llmService.CreateKernel(new object[]
+    {
+        new ShellTools(toolExecutor),
+        new FileTools(toolExecutor),
+        new KanbanTools(apiClient)
+    });
+
+    var developerKernel = llmService.CreateKernel(new object[]
+    {
+        new ShellTools(toolExecutor),
+        new FileTools(toolExecutor)
+    });
+
+    var managerAgent = new ManagerAgent(apiClient, toolExecutor, config.ManagerPrompt, llmService, managerKernel);
+    var developerAgent = new DeveloperAgent(toolExecutor, apiClient, config.DeveloperPrompt, ticket.Id, llmService, developerKernel);
 
     // Manager breaks down the ticket
     Console.WriteLine("Manager: Breaking down ticket into tasks...");
@@ -147,16 +164,20 @@ catch (Exception ex)
     return 1;
 }
 
-static WorkerConfig? ParseConfiguration(string[] args)
+static WorkerConfig? BuildConfiguration(WorkerOptions options)
 {
-    // In a real implementation, this would parse command line args or read from environment
-    // For now, return a default configuration for testing
-    
-    var ticketId = GetArgValue(args, "--ticket-id");
-    var serverUrl = GetArgValue(args, "--server-url") ?? "http://localhost:5000";
-    
+    var ticketId = options.TicketId ?? GetEnvValue("TICKET_ID");
+    var serverUrl = options.ServerUrl ?? GetEnvValue("SERVER_URL") ?? "http://localhost:5000";
+
     if (string.IsNullOrEmpty(ticketId))
         return null;
+
+    var promptDirectory = "env/prompts";
+    var resolvedPromptDirectory = ResolvePromptDirectory(promptDirectory);
+    var systemPrompts = LoadPromptTemplates(resolvedPromptDirectory);
+
+    var managerPrompt = BuildManagerPrompt(systemPrompts);
+    var developerPrompt = BuildDeveloperPrompt(systemPrompts);
 
     return new WorkerConfig
     {
@@ -164,21 +185,191 @@ static WorkerConfig? ParseConfiguration(string[] args)
         ServerUrl = serverUrl,
         GitConfig = new GitConfig
         {
-            RepositoryUrl = GetArgValue(args, "--git-url") ?? "",
-            Username = GetArgValue(args, "--git-username") ?? "KanBeast Worker",
-            Email = GetArgValue(args, "--git-email") ?? "worker@kanbeast.local",
-            SshKey = GetArgValue(args, "--git-ssh-key")
+            RepositoryUrl = options.GitUrl ?? GetEnvValue("GIT_URL") ?? string.Empty,
+            Username = options.GitUsername ?? GetEnvValue("GIT_USERNAME") ?? "KanBeast Worker",
+            Email = options.GitEmail ?? GetEnvValue("GIT_EMAIL") ?? "worker@kanbeast.local",
+            SshKey = options.GitSshKey ?? GetEnvValue("GIT_SSH_KEY")
         },
-        LLMConfigs = new List<LLMConfig>(),
-        ManagerPrompt = "You are a project manager. Break down tasks and verify completion.",
-        DeveloperPrompt = "You are a software developer. Implement features and write tests."
+        LLMConfigs = ParseJsonEnv<List<LLMConfig>>("LLM_CONFIGS") ?? new List<LLMConfig>(),
+        ManagerPrompt = string.IsNullOrWhiteSpace(managerPrompt)
+            ? "You are a project manager. Break down tasks and verify completion."
+            : managerPrompt,
+        DeveloperPrompt = string.IsNullOrWhiteSpace(developerPrompt)
+            ? "You are a software developer. Implement features and write tests."
+            : developerPrompt,
+        PromptDirectory = resolvedPromptDirectory
     };
 }
 
-static string? GetArgValue(string[] args, string key)
+static string? GetEnvValue(string key)
 {
-    var index = Array.IndexOf(args, key);
-    if (index >= 0 && index + 1 < args.Length)
-        return args[index + 1];
-    return null;
+    return Environment.GetEnvironmentVariable(key);
+}
+
+static string ResolvePromptDirectory(string promptDirectory)
+{
+    return Path.IsPathRooted(promptDirectory)
+        ? promptDirectory
+        : Path.Combine(AppContext.BaseDirectory, promptDirectory);
+}
+
+static List<PromptTemplate> LoadPromptTemplates(string promptDirectory)
+{
+    var prompts = GetDefaultPromptTemplates();
+    foreach (var prompt in prompts)
+    {
+        var path = Path.Combine(promptDirectory, prompt.FileName);
+        if (File.Exists(path))
+        {
+            prompt.Content = File.ReadAllText(path);
+        }
+    }
+
+    return prompts;
+}
+
+static T? ParseJsonEnv<T>(string key)
+{
+    var value = GetEnvValue(key);
+    if (string.IsNullOrWhiteSpace(value))
+    {
+        return default;
+    }
+
+    try
+    {
+        return JsonSerializer.Deserialize<T>(value);
+    }
+    catch
+    {
+        return default;
+    }
+}
+
+static string BuildManagerPrompt(List<PromptTemplate> prompts)
+{
+    var sections = new[]
+    {
+        "manager-master",
+        "manager-breakdown",
+        "manager-assign",
+        "manager-verify",
+        "manager-accept",
+        "manager-testing"
+    };
+
+    return BuildPromptFromSections(prompts, sections);
+}
+
+static string BuildDeveloperPrompt(List<PromptTemplate> prompts)
+{
+    var sections = new[]
+    {
+        "developer-implementation",
+        "developer-testing"
+    };
+
+    return BuildPromptFromSections(prompts, sections);
+}
+
+static string BuildPromptFromSections(IEnumerable<PromptTemplate> prompts, IEnumerable<string> keys)
+{
+    var content = keys
+        .Select(key => prompts.FirstOrDefault(prompt => prompt.Key == key))
+        .Where(prompt => prompt != null)
+        .Select(prompt => string.IsNullOrWhiteSpace(prompt!.DisplayName)
+            ? prompt.Content
+            : $"{prompt.DisplayName}\n{prompt.Content}")
+        .Where(promptContent => !string.IsNullOrWhiteSpace(promptContent))
+        .ToList();
+
+    return string.Join("\n\n", content);
+}
+
+static List<PromptTemplate> GetDefaultPromptTemplates()
+{
+    return new List<PromptTemplate>
+    {
+        new()
+        {
+            Key = "manager-master",
+            DisplayName = "Manager: Mode Selection",
+            FileName = "manager-master.txt",
+            Content = string.Empty
+        },
+        new()
+        {
+            Key = "manager-breakdown",
+            DisplayName = "Manager: Break Down Ticket",
+            FileName = "manager-breakdown.txt",
+            Content = string.Empty
+        },
+        new()
+        {
+            Key = "manager-assign",
+            DisplayName = "Manager: Assign Task",
+            FileName = "manager-assign.txt",
+            Content = string.Empty
+        },
+        new()
+        {
+            Key = "manager-verify",
+            DisplayName = "Manager: Verify Task",
+            FileName = "manager-verify.txt",
+            Content = string.Empty
+        },
+        new()
+        {
+            Key = "manager-accept",
+            DisplayName = "Manager: Accept Task",
+            FileName = "manager-accept.txt",
+            Content = string.Empty
+        },
+        new()
+        {
+            Key = "manager-testing",
+            DisplayName = "Manager: Testing Phase",
+            FileName = "manager-testing.txt",
+            Content = string.Empty
+        },
+        new()
+        {
+            Key = "developer-implementation",
+            DisplayName = "Developer: Implement Features",
+            FileName = "developer-implementation.txt",
+            Content = string.Empty
+        },
+        new()
+        {
+            Key = "developer-testing",
+            DisplayName = "Developer: Test Changes",
+            FileName = "developer-testing.txt",
+            Content = string.Empty
+        }
+    };
+}
+
+class WorkerOptions
+{
+    [Option("ticket-id", HelpText = "Ticket id for the worker.")]
+    public string? TicketId { get; set; }
+
+    [Option("server-url", HelpText = "Server URL for the worker.")]
+    public string? ServerUrl { get; set; }
+
+    [Option("git-url", HelpText = "Git repository URL.")]
+    public string? GitUrl { get; set; }
+
+    [Option("git-username", HelpText = "Git username.")]
+    public string? GitUsername { get; set; }
+
+    [Option("git-email", HelpText = "Git email.")]
+    public string? GitEmail { get; set; }
+
+    [Option("git-ssh-key", HelpText = "Git SSH key content.")]
+    public string? GitSshKey { get; set; }
+
+    [Option("prompt-dir", HelpText = "Directory containing prompt files.")]
+    public string? PromptDirectory { get; set; }
+
 }

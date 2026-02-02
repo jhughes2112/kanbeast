@@ -9,6 +9,8 @@ public interface IToolExecutor
     Task<string> ReadFileAsync(string filePath);
     Task WriteFileAsync(string filePath, string content);
     Task EditFileAsync(string filePath, string oldContent, string newContent);
+    Task<string> PatchFileAsync(string workDir, string patch);
+    Task<string> ListFilesAsync(string directoryPath);
 }
 
 public class ToolExecutor : IToolExecutor
@@ -65,11 +67,51 @@ public class ToolExecutor : IToolExecutor
             throw new FileNotFoundException($"File not found: {filePath}");
 
         var fileContent = await File.ReadAllTextAsync(filePath);
-        
-        if (!fileContent.Contains(oldContent))
+
+        var firstIndex = fileContent.IndexOf(oldContent, StringComparison.Ordinal);
+        if (firstIndex < 0)
             throw new InvalidOperationException($"Old content not found in file: {filePath}");
 
-        var updatedContent = fileContent.Replace(oldContent, newContent);
+        var secondIndex = fileContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
+        if (secondIndex >= 0)
+            throw new InvalidOperationException($"Old content matched multiple times in file: {filePath}");
+
+        var updatedContent = fileContent[..firstIndex] + newContent + fileContent[(firstIndex + oldContent.Length)..];
         await File.WriteAllTextAsync(filePath, updatedContent);
+    }
+
+    public async Task<string> PatchFileAsync(string workDir, string patch)
+    {
+        if (!Directory.Exists(workDir))
+            throw new DirectoryNotFoundException($"Directory not found: {workDir}");
+
+        var patchFile = Path.Combine(Path.GetTempPath(), $"kanbeast_patch_{Guid.NewGuid():N}.patch");
+        await File.WriteAllTextAsync(patchFile, patch);
+
+        try
+        {
+            var result = await ExecuteBashCommandAsync($"git apply --whitespace=nowarn \"{patchFile}\"", workDir);
+            return result;
+        }
+        finally
+        {
+            if (File.Exists(patchFile))
+            {
+                File.Delete(patchFile);
+            }
+        }
+    }
+
+    public Task<string> ListFilesAsync(string directoryPath)
+    {
+        if (!Directory.Exists(directoryPath))
+            throw new DirectoryNotFoundException($"Directory not found: {directoryPath}");
+
+        var entries = Directory
+            .EnumerateFileSystemEntries(directoryPath, "*", SearchOption.TopDirectoryOnly)
+            .Select(Path.GetFileName)
+            .Where(name => !string.IsNullOrEmpty(name));
+
+        return Task.FromResult(string.Join('\n', entries));
     }
 }

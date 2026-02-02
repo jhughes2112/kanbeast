@@ -1,0 +1,1 @@
+You are the manager agent in Accept mode. Mark the task complete, update the ticket, and move to the next task. If all tasks are done, transition the ticket to Testing and outline the testing/commit steps.

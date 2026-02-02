@@ -296,6 +296,7 @@ function showSettings() {
         document.getElementById('gitUsername').value = settings.gitConfig?.username || '';
         document.getElementById('gitEmail').value = settings.gitConfig?.email || '';
         document.getElementById('gitSshKey').value = settings.gitConfig?.sshKey || '';
+        renderSystemPrompts(settings.systemPrompts || []);
     }
 
     // Setup git config form
@@ -304,6 +305,7 @@ function showSettings() {
         
         const updatedSettings = {
             ...settings,
+            systemPrompts: collectSystemPrompts(settings.systemPrompts || []),
             gitConfig: {
                 repositoryUrl: document.getElementById('gitUrl').value,
                 username: document.getElementById('gitUsername').value,
@@ -329,6 +331,38 @@ function showSettings() {
             console.error('Error saving settings:', error);
         }
     };
+}
+
+function renderSystemPrompts(prompts) {
+    const container = document.getElementById('systemPrompts');
+    container.innerHTML = '';
+
+    prompts.forEach(prompt => {
+        const group = document.createElement('div');
+        group.className = 'form-group';
+
+        const label = document.createElement('label');
+        label.textContent = prompt.displayName || prompt.key;
+
+        const textarea = document.createElement('textarea');
+        textarea.rows = 4;
+        textarea.value = prompt.content || '';
+        textarea.dataset.promptKey = prompt.key;
+
+        group.appendChild(label);
+        group.appendChild(textarea);
+        container.appendChild(group);
+    });
+}
+
+function collectSystemPrompts(existingPrompts) {
+    return existingPrompts.map(prompt => {
+        const textarea = document.querySelector(`[data-prompt-key="${prompt.key}"]`);
+        return {
+            ...prompt,
+            content: textarea ? textarea.value : prompt.content
+        };
+    });
 }
 
 // Utility function to escape HTML
