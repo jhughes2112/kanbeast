@@ -32,7 +32,7 @@ public class GitService : IGitService
         // If SSH key is provided in settings, write it to ~/.ssh and configure
         if (!string.IsNullOrWhiteSpace(gitConfig.SshKey))
         {
-            _sshKeyPath = SetupSshKey(gitConfig.SshKey);
+            _sshKeyPath = SetupSshKey(gitConfig.SshKey, gitConfig.RepositoryUrl);
             if (_sshKeyPath != null)
             {
                 _gitSshCommand = $"ssh -i \"{_sshKeyPath}\" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null";
@@ -102,7 +102,7 @@ public class GitService : IGitService
         }
     }
 
-    private static string? SetupSshKey(string sshKeyContent)
+    private static string? SetupSshKey(string sshKeyContent, string? repositoryUrl)
     {
         try
         {
@@ -189,15 +189,34 @@ public class GitService : IGitService
                 ExecuteCommand("chmod", $"600 {keyPath}");
             }
 
-            // Create SSH config to disable host key checking globally
+            // Create SSH config entry for the specific host
             string configPath = Path.Combine(sshDir, "config");
-            string sshConfig = $"Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/{keyFileName}\n";
+            string hostName = ExtractHostFromRepositoryUrl(repositoryUrl) ?? "github.com";
 
-            // Write config with explicit Unix line endings
-            using (StreamWriter writer = new StreamWriter(configPath, false, new System.Text.UTF8Encoding(false)))
+            // Check if host entry already exists in config
+            bool hostExists = false;
+            if (File.Exists(configPath))
             {
-                writer.NewLine = "\n";
-                writer.Write(sshConfig);
+                string existingConfig = File.ReadAllText(configPath);
+                hostExists = existingConfig.Contains($"Host {hostName}");
+            }
+
+            if (!hostExists)
+            {
+                string hostEntry = $"\nHost {hostName}\n  HostName {hostName}\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/{keyFileName}\n";
+
+                // Append to config file (create if it doesn't exist)
+                using (StreamWriter writer = new StreamWriter(configPath, true, new System.Text.UTF8Encoding(false)))
+                {
+                    writer.NewLine = "\n";
+                    writer.Write(hostEntry);
+                }
+
+                Console.WriteLine($"SSH config entry added for {hostName}");
+            }
+            else
+            {
+                Console.WriteLine($"SSH config entry for {hostName} already exists, skipping");
             }
 
             if (!OperatingSystem.IsWindows())
@@ -215,6 +234,41 @@ public class GitService : IGitService
             Console.WriteLine($"Failed to setup SSH key: {ex.Message}");
             return null;
         }
+    }
+
+    private static string? ExtractHostFromRepositoryUrl(string? repositoryUrl)
+    {
+        if (string.IsNullOrWhiteSpace(repositoryUrl))
+        {
+            return null;
+        }
+
+        // Handle SSH format: git@github.com:user/repo.git
+        if (repositoryUrl.Contains("@") && repositoryUrl.Contains(":"))
+        {
+            int atIndex = repositoryUrl.IndexOf('@');
+            int colonIndex = repositoryUrl.IndexOf(':', atIndex);
+            if (atIndex >= 0 && colonIndex > atIndex)
+            {
+                return repositoryUrl.Substring(atIndex + 1, colonIndex - atIndex - 1);
+            }
+        }
+
+        // Handle SSH format: ssh://git@github.com/user/repo.git
+        if (repositoryUrl.StartsWith("ssh://", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                Uri uri = new Uri(repositoryUrl);
+                return uri.Host;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+
+        return null;
     }
 
     private static void ExecuteCommand(string command, string arguments)
