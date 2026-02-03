@@ -1,9 +1,10 @@
 using System.Diagnostics;
-using System.Text.Json;
+using System.Text;
 using KanBeast.Server.Models;
 
 namespace KanBeast.Server.Services;
 
+// Controls worker container lifecycle operations.
 public interface IWorkerOrchestrator
 {
     Task<string> StartWorkerAsync(string ticketId);
@@ -11,22 +12,20 @@ public interface IWorkerOrchestrator
     Task<Dictionary<string, string>> GetActiveWorkersAsync();
 }
 
+// Launches worker containers and tracks active worker processes.
 public class WorkerOrchestrator : IWorkerOrchestrator
 {
-    private readonly Dictionary<string, string> _activeWorkers = new();
-    private readonly ISettingsService _settingsService;
+    private readonly Dictionary<string, string> _activeWorkers = new Dictionary<string, string>();
     private readonly ITicketService _ticketService;
     private readonly ILogger<WorkerOrchestrator> _logger;
     private readonly ServerOptions _options;
     private const string WorkerEnvDirectory = "/app/env";
 
     public WorkerOrchestrator(
-        ISettingsService settingsService,
         ITicketService ticketService,
         ILogger<WorkerOrchestrator> logger,
         ServerOptions options)
     {
-        _settingsService = settingsService;
         _ticketService = ticketService;
         _logger = logger;
         _options = options;
@@ -34,23 +33,35 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
     public async Task<string> StartWorkerAsync(string ticketId)
     {
-        var ticket = await _ticketService.GetTicketAsync(ticketId);
+        Ticket? ticket = await _ticketService.GetTicketAsync(ticketId);
         if (ticket == null)
+        {
             throw new InvalidOperationException($"Ticket {ticketId} not found");
+        }
 
-        var settings = await _settingsService.GetSettingsAsync();
-        var workerId = Guid.NewGuid().ToString();
+        string workerId = Guid.NewGuid().ToString();
 
         await EnsureDockerNetworkAsync();
 
-        var containerName = $"kanbeast-worker-{workerId}";
-        var envVars = BuildWorkerEnvironment(ticketId, settings);
+        string containerName = $"kanbeast-worker-{workerId}";
+        Dictionary<string, string> envVars = BuildWorkerEnvironment(ticketId);
 
         _logger.LogInformation("Starting worker {WorkerId} for ticket {TicketId}", workerId, ticketId);
-        var envArgs = string.Join(" ", envVars.Select(envVar => $"-e \"{EscapeDockerArg(envVar.Key)}={EscapeDockerArg(envVar.Value)}\""));
 
-        var args = $"run -d --name {EscapeDockerArg(containerName)} --network {EscapeDockerArg(_options.DockerNetwork)} {envArgs} {EscapeDockerArg(_options.WorkerImage)} dotnet /app/worker/KanBeast.Worker.dll";
-        var containerId = await RunDockerCommandAsync(args);
+        StringBuilder envArgsBuilder = new StringBuilder();
+        foreach ((string Key, string Value) in envVars)
+        {
+            if (envArgsBuilder.Length > 0)
+            {
+                envArgsBuilder.Append(' ');
+            }
+
+            envArgsBuilder.Append($"-e \"{EscapeDockerArg(Key)}={EscapeDockerArg(Value)}\"");
+        }
+
+        string envArgs = envArgsBuilder.ToString();
+        string args = $"run -d --name {EscapeDockerArg(containerName)} --network {EscapeDockerArg(_options.DockerNetwork)} {envArgs} {EscapeDockerArg(_options.WorkerImage)} dotnet /app/worker/KanBeast.Worker.dll";
+        string containerId = await RunDockerCommandAsync(args);
 
         // Update ticket with worker ID
         ticket.WorkerId = workerId;
@@ -65,7 +76,9 @@ public class WorkerOrchestrator : IWorkerOrchestrator
     public Task<bool> StopWorkerAsync(string workerId)
     {
         if (!_activeWorkers.ContainsKey(workerId))
+        {
             return Task.FromResult(false);
+        }
 
         _logger.LogInformation($"Stopping worker {workerId}");
         
@@ -76,20 +89,17 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
     public Task<Dictionary<string, string>> GetActiveWorkersAsync()
     {
-        return Task.FromResult(new Dictionary<string, string>(_activeWorkers));
+        Dictionary<string, string> activeWorkers = new Dictionary<string, string>(_activeWorkers);
+
+        return Task.FromResult(activeWorkers);
     }
 
-    private Dictionary<string, string> BuildWorkerEnvironment(string ticketId, Settings settings)
+    private Dictionary<string, string> BuildWorkerEnvironment(string ticketId)
     {
         return new Dictionary<string, string>
         {
             ["TICKET_ID"] = ticketId,
-            ["SERVER_URL"] = _options.ServerUrl,
-            ["GIT_URL"] = settings.GitConfig.RepositoryUrl ?? string.Empty,
-            ["GIT_USERNAME"] = settings.GitConfig.Username ?? string.Empty,
-            ["GIT_EMAIL"] = settings.GitConfig.Email ?? string.Empty,
-            ["GIT_SSH_KEY"] = settings.GitConfig.SshKey ?? string.Empty,
-            ["LLM_CONFIGS"] = JsonSerializer.Serialize(settings.LLMConfigs ?? new List<LLMConfig>())
+            ["SERVER_URL"] = _options.ServerUrl
         };
     }
 
@@ -107,18 +117,18 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
     private async Task<string> RunDockerCommandAsync(string arguments)
     {
-        var startInfo = new ProcessStartInfo("docker", arguments)
+        ProcessStartInfo startInfo = new ProcessStartInfo("docker", arguments)
         {
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false
         };
 
-        using var process = new Process { StartInfo = startInfo };
+        using Process process = new Process { StartInfo = startInfo };
         process.Start();
 
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var error = await process.StandardError.ReadToEndAsync();
+        string output = await process.StandardOutput.ReadToEndAsync();
+        string error = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)
@@ -131,9 +141,11 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
     private static string EscapeDockerArg(string value)
     {
-        return value
+        string escaped = value
             .Replace("\r", "")
             .Replace("\n", "\\n")
             .Replace("\"", "\\\"");
+
+        return escaped;
     }
 }

@@ -1,7 +1,9 @@
+using System.Text.Json;
 using KanBeast.Server.Models;
 
 namespace KanBeast.Server.Services;
 
+// Defines operations for retrieving and persisting settings data.
 public interface ISettingsService
 {
     Task<Settings> GetSettingsAsync();
@@ -10,57 +12,82 @@ public interface ISettingsService
     Task<bool> RemoveLLMConfigAsync(string id);
 }
 
+// Manages settings stored on disk and prompt files for the server.
 public class SettingsService : ISettingsService
 {
     private readonly string _promptDirectory;
+    private readonly string _settingsPath;
     private Settings _settings;
 
     public SettingsService(IWebHostEnvironment environment)
     {
         _promptDirectory = Path.Combine(environment.ContentRootPath, "env", "prompts");
+        _settingsPath = Path.Combine(environment.ContentRootPath, "env", "settings.json");
         Directory.CreateDirectory(_promptDirectory);
-        _settings = new Settings
-        {
-            SystemPrompts = LoadPromptTemplates()
-        };
+        SettingsFile settingsFile = LoadSettingsFile();
+        _settings = BuildSettings(settingsFile);
     }
 
     public Task<Settings> GetSettingsAsync()
     {
-        _settings.SystemPrompts = LoadPromptTemplates();
+        SettingsFile settingsFile = LoadSettingsFile();
+        _settings = BuildSettings(settingsFile);
         return Task.FromResult(_settings);
     }
 
     public Task<Settings> UpdateSettingsAsync(Settings settings)
     {
-        var prompts = settings.SystemPrompts?.Count > 0 ? settings.SystemPrompts : _settings.SystemPrompts;
+        List<PromptTemplate> prompts = settings.SystemPrompts.Count > 0
+            ? settings.SystemPrompts
+            : _settings.SystemPrompts;
         settings.SystemPrompts = UpdatePromptFiles(prompts);
+
+        SettingsFile fileSettings = BuildSettingsFile(settings);
+        SaveSettingsFile(fileSettings);
         _settings = settings;
+
         return Task.FromResult(_settings);
     }
 
     public Task<LLMConfig?> AddLLMConfigAsync(LLMConfig config)
     {
         _settings.LLMConfigs.Add(config);
+        SettingsFile fileSettings = BuildSettingsFile(_settings);
+        SaveSettingsFile(fileSettings);
+
         return Task.FromResult<LLMConfig?>(config);
     }
 
     public Task<bool> RemoveLLMConfigAsync(string id)
     {
-        var config = _settings.LLMConfigs.FirstOrDefault(c => c.Id == id);
+        LLMConfig? config = null;
+        foreach (LLMConfig candidate in _settings.LLMConfigs)
+        {
+            if (string.Equals(candidate.Id, id, StringComparison.Ordinal))
+            {
+                config = candidate;
+                break;
+            }
+        }
+
         if (config == null)
+        {
             return Task.FromResult(false);
+        }
 
         _settings.LLMConfigs.Remove(config);
+        SettingsFile fileSettings = BuildSettingsFile(_settings);
+        SaveSettingsFile(fileSettings);
+
         return Task.FromResult(true);
     }
 
     private List<PromptTemplate> LoadPromptTemplates()
     {
-        var prompts = GetDefaultPrompts();
-        foreach (var prompt in prompts)
+        List<PromptTemplate> prompts = GetDefaultPrompts();
+        foreach (PromptTemplate prompt in prompts)
         {
-            var path = Path.Combine(_promptDirectory, prompt.FileName);
+            string path = Path.Combine(_promptDirectory, prompt.FileName);
             if (!File.Exists(path))
             {
                 File.WriteAllText(path, prompt.Content);
@@ -76,13 +103,13 @@ public class SettingsService : ISettingsService
 
     private List<PromptTemplate> UpdatePromptFiles(IEnumerable<PromptTemplate> prompts)
     {
-        var updatedPrompts = new List<PromptTemplate>();
-        foreach (var prompt in prompts)
+        List<PromptTemplate> updatedPrompts = new List<PromptTemplate>();
+        foreach (PromptTemplate prompt in prompts)
         {
-            var fileName = string.IsNullOrWhiteSpace(prompt.FileName)
+            string fileName = string.IsNullOrWhiteSpace(prompt.FileName)
                 ? $"{prompt.Key}.txt"
                 : prompt.FileName;
-            var path = Path.Combine(_promptDirectory, fileName);
+            string path = Path.Combine(_promptDirectory, fileName);
             File.WriteAllText(path, prompt.Content ?? string.Empty);
 
             updatedPrompts.Add(new PromptTemplate
@@ -99,64 +126,159 @@ public class SettingsService : ISettingsService
 
     private static List<PromptTemplate> GetDefaultPrompts()
     {
-        return new List<PromptTemplate>
+        List<PromptTemplate> templates = new List<PromptTemplate>
         {
             new()
             {
                 Key = "manager-master",
                 DisplayName = "Manager: Mode Selection",
                 FileName = "manager-master.txt",
-                Content = "You are the manager agent. First, determine the current workflow mode based on evidence (ticket status, task list, activity log, and test results). Modes: Breakdown, Assign, Verify, Accept, Testing. State the chosen mode and why, then follow the corresponding mode prompt. If evidence is insufficient, ask for clarification instead of guessing."
+                Content = "Role: Manager agent for KanBeast.\n\nPurpose:\n- Decide the current workflow mode from ticket status, tasks, activity log, and test results.\n- Choose one mode: Breakdown, Assign, Verify, Accept, Testing.\n\nProcess:\n1) State the chosen mode and why.\n2) Follow the matching mode prompt.\n3) If evidence is insufficient, ask for clarification and stop.\n\nTone: concise, direct, and outcome-focused."
             },
             new()
             {
                 Key = "manager-breakdown",
                 DisplayName = "Manager: Break Down Ticket",
                 FileName = "manager-breakdown.txt",
-                Content = "You are the manager agent in Breakdown mode. Produce a numbered list of small, ordered subtasks. Each task must be specific, testable, and independently completable. Include acceptance criteria for each task."
+                Content = "Role: Manager agent in Breakdown mode.\n\nOutput:\n- Provide an ordered list of small, testable subtasks.\n- Each task includes acceptance criteria and any key constraints.\n\nRules:\n- Keep tasks independent and measurable.\n- Avoid vague phrasing.\n- Ask for missing details instead of guessing."
             },
             new()
             {
                 Key = "manager-assign",
                 DisplayName = "Manager: Assign Task",
                 FileName = "manager-assign.txt",
-                Content = "You are the manager agent in Assign mode. Select the next incomplete task, restate the goal, enumerate acceptance criteria, and list any constraints or files to inspect. Confirm readiness to proceed before work begins."
+                Content = "Role: Manager agent in Assign mode.\n\nOutput:\n- Select the next incomplete task.\n- Restate the goal and acceptance criteria.\n- List constraints and relevant files to inspect.\n\nProcess:\n- Confirm readiness before work starts.\n- Do not assign multiple tasks at once."
             },
             new()
             {
                 Key = "manager-verify",
                 DisplayName = "Manager: Verify Task",
                 FileName = "manager-verify.txt",
-                Content = "You are the manager agent in Verify mode. Rigorously verify the work against acceptance criteria. If anything is missing, incorrect, or untested, reject the task and provide precise, actionable feedback. Only accept when everything is complete."
+                Content = "Role: Manager agent in Verify mode.\n\nProcess:\n- Verify work against acceptance criteria.\n- Use tools when needed to check files, outputs, and tests.\n\nOutput:\n- Respond with APPROVED or REJECTED: <reason>.\n- If rejected, provide precise, actionable fixes."
             },
             new()
             {
                 Key = "manager-accept",
                 DisplayName = "Manager: Accept Task",
                 FileName = "manager-accept.txt",
-                Content = "You are the manager agent in Accept mode. Mark the task complete, update the ticket, and move to the next task. If all tasks are done, transition the ticket to Testing and outline the testing/commit steps."
+                Content = "Role: Manager agent in Accept mode.\n\nProcess:\n- Mark the verified task complete and update the ticket.\n- Move to the next task or transition to Testing if all tasks are complete.\n\nOutput:\n- Provide a short completion summary and next step."
             },
             new()
             {
                 Key = "manager-testing",
                 DisplayName = "Manager: Testing Phase",
                 FileName = "manager-testing.txt",
-                Content = "You are the manager agent in Testing mode. Ensure tests are written and run. If any test fails, return to Active with remediation steps. Only mark the ticket Done after all tests pass and changes are ready to commit."
+                Content = "Role: Manager agent in Testing mode.\n\nProcess:\n- Ensure relevant tests are present and executed.\n- If tests fail, return to Active with remediation steps.\n- Only mark Done after all tests pass and changes are ready to commit."
             },
             new()
             {
                 Key = "developer-implementation",
                 DisplayName = "Developer: Implement Features",
                 FileName = "developer-implementation.txt",
-                Content = "You are the developer agent. Implement the assigned task by editing files, executing commands, and writing clean, maintainable code. Follow existing conventions, avoid unnecessary changes, and ensure the solution builds."
+                Content = "Role: Developer agent implementing tasks in a codebase.\n\nProcess:\n- Read relevant files before editing.\n- Follow repository conventions and minimize changes.\n- Use available tools for file edits and commands.\n\nOutput:\n- Summarize changes and test results.\n- If blocked, explain what is missing."
             },
             new()
             {
                 Key = "developer-testing",
                 DisplayName = "Developer: Test Changes",
                 FileName = "developer-testing.txt",
-                Content = "You are the developer agent acting as the test engineer. Write or update tests, run the relevant suite, analyze failures, and fix issues. Do not report completion until tests pass."
+                Content = "Role: Developer agent in testing mode.\n\nProcess:\n- Add or update tests as needed.\n- Run relevant test suites and analyze failures.\n- Fix issues and re-run until green.\n\nOutput:\n- Report test commands and results."
+            },
+            new()
+            {
+                Key = "manager-compaction-summary",
+                DisplayName = "Manager: Compaction Summary Prompt",
+                FileName = "manager-compaction-summary.txt",
+                Content = "Write a continuation summary for the manager agent.\n\nInclude:\n1) Task overview and success criteria.\n2) Completed work and verified outcomes.\n3) Open issues, risks, or blockers.\n4) Next steps in priority order.\n5) Key context that must be preserved.\n\nKeep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags."
+            },
+            new()
+            {
+                Key = "manager-compaction-system",
+                DisplayName = "Manager: Compaction System Prompt",
+                FileName = "manager-compaction-system.txt",
+                Content = "You summarize manager context so work can continue after compaction. Keep output concise, structured, and factual. Do not invent details."
+            },
+            new()
+            {
+                Key = "developer-compaction-summary",
+                DisplayName = "Developer: Compaction Summary Prompt",
+                FileName = "developer-compaction-summary.txt",
+                Content = "Write a continuation summary for the developer agent.\n\nInclude:\n1) Task overview and acceptance criteria.\n2) Code changes made (files and key edits).\n3) Tests run and results.\n4) Problems found and fixes applied.\n5) Remaining work and next steps.\n\nKeep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags."
+            },
+            new()
+            {
+                Key = "developer-compaction-system",
+                DisplayName = "Developer: Compaction System Prompt",
+                FileName = "developer-compaction-system.txt",
+                Content = "You summarize developer context so work can continue after compaction. Keep output concise, structured, and factual. Do not invent details."
             }
         };
+
+        return templates;
+    }
+
+    private SettingsFile LoadSettingsFile()
+    {
+        SettingsFile settingsFile = new SettingsFile();
+
+        if (File.Exists(_settingsPath))
+        {
+            string json = File.ReadAllText(_settingsPath);
+            JsonSerializerOptions options = new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            };
+
+            SettingsFile? parsedSettings = JsonSerializer.Deserialize<SettingsFile>(json, options);
+            if (parsedSettings != null)
+            {
+                settingsFile = parsedSettings;
+            }
+        }
+
+        return settingsFile;
+    }
+
+    private void SaveSettingsFile(SettingsFile settings)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath) ?? string.Empty);
+        JsonSerializerOptions options = new JsonSerializerOptions
+        {
+            WriteIndented = true
+        };
+
+        string json = JsonSerializer.Serialize(settings, options);
+        File.WriteAllText(_settingsPath, json);
+    }
+
+    private Settings BuildSettings(SettingsFile fileSettings)
+    {
+        Settings settings = new Settings
+        {
+            LLMConfigs = fileSettings.LLMConfigs,
+            GitConfig = fileSettings.GitConfig,
+            LlmRetryCount = fileSettings.LlmRetryCount,
+            LlmRetryDelaySeconds = fileSettings.LlmRetryDelaySeconds,
+            ManagerCompaction = fileSettings.ManagerCompaction,
+            DeveloperCompaction = fileSettings.DeveloperCompaction,
+            SystemPrompts = LoadPromptTemplates()
+        };
+
+        return settings;
+    }
+
+    private static SettingsFile BuildSettingsFile(Settings settings)
+    {
+        SettingsFile fileSettings = new SettingsFile
+        {
+            LLMConfigs = settings.LLMConfigs,
+            GitConfig = settings.GitConfig,
+            LlmRetryCount = settings.LlmRetryCount,
+            LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds,
+            ManagerCompaction = settings.ManagerCompaction,
+            DeveloperCompaction = settings.DeveloperCompaction
+        };
+
+        return fileSettings;
     }
 }

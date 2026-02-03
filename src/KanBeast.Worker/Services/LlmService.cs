@@ -5,19 +5,26 @@ using Microsoft.SemanticKernel.Connectors.OpenAI;
 
 namespace KanBeast.Worker.Services;
 
+// Defines the LLM operations required by the worker agents.
 public interface ILlmService
 {
     Kernel CreateKernel(IEnumerable<object> tools);
     Task<string> RunAsync(Kernel kernel, string systemPrompt, string userPrompt, CancellationToken cancellationToken);
+    Task AddContextStatementAsync(string statement, CancellationToken cancellationToken);
+    Task ClearContextStatementsAsync(CancellationToken cancellationToken);
+    IReadOnlyList<string> GetContextStatements();
 }
 
+// Wraps a single LLM endpoint and executes chat completions.
 public class LlmService : ILlmService
 {
     private readonly LLMConfig _config;
+    private readonly List<string> _contextStatements;
 
     public LlmService(LLMConfig config)
     {
         _config = config;
+        _contextStatements = new List<string>();
     }
 
     public Kernel CreateKernel(IEnumerable<object> tools)
@@ -58,5 +65,26 @@ public class LlmService : ILlmService
         string content = response.Content ?? string.Empty;
 
         return content;
+    }
+
+    public Task AddContextStatementAsync(string statement, CancellationToken cancellationToken)
+    {
+        _contextStatements.Add(statement);
+
+        return Task.CompletedTask;
+    }
+
+    public Task ClearContextStatementsAsync(CancellationToken cancellationToken)
+    {
+        _contextStatements.Clear();
+
+        return Task.CompletedTask;
+    }
+
+    public IReadOnlyList<string> GetContextStatements()
+    {
+        IReadOnlyList<string> statements = _contextStatements.AsReadOnly();
+
+        return statements;
     }
 }

@@ -4,11 +4,13 @@ using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Agents;
 
+// Defines developer responsibilities for executing subtasks.
 public interface IDeveloperAgent
 {
     Task<bool> WorkOnTaskAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string ticketId, string workDir);
 }
 
+// Drives implementation work for assigned subtasks.
 public class DeveloperAgent : IDeveloperAgent
 {
     private readonly IToolExecutor _toolExecutor;
@@ -41,7 +43,18 @@ public class DeveloperAgent : IDeveloperAgent
 
         try
         {
-            string userPrompt = $"Task: {task.Name}\nTask Description: {task.Description}\nSubtask: {subtask.Name}\nSubtask Description: {subtask.Description}\nTicket Id: {ticketId}\nTask Id: {task.Id}\nSubtask Id: {subtask.Id}\nWorking directory: {workDir}\n\nImplement the subtask using available tools. When finished, call complete_subtask with the ids. Summarize changes and test results.";
+            List<string> contextStatements = new List<string>();
+            contextStatements.Add($"Task: {task.Name}");
+            contextStatements.Add($"Task Description: {task.Description}");
+            contextStatements.Add($"Subtask: {subtask.Name}");
+            contextStatements.Add($"Subtask Description: {subtask.Description}");
+            contextStatements.Add($"Ticket Id: {ticketId}");
+            contextStatements.Add($"Task Id: {task.Id}");
+            contextStatements.Add($"Subtask Id: {subtask.Id}");
+            contextStatements.Add($"Working directory: {workDir}");
+            await UpdateContextStatementsAsync(contextStatements);
+
+            string userPrompt = "Implement the current subtask using available tools. When finished, call complete_subtask with the ids. Summarize changes and test results.";
             string response = await _llmService.RunAsync(_kernel, _systemPrompt, userPrompt, CancellationToken.None);
             await _apiClient.AddActivityLogAsync(_ticketId, $"Developer: {response}");
             success = true;
@@ -52,5 +65,15 @@ public class DeveloperAgent : IDeveloperAgent
         }
 
         return success;
+    }
+
+    private async Task UpdateContextStatementsAsync(List<string> statements)
+    {
+        await _llmService.ClearContextStatementsAsync(CancellationToken.None);
+
+        foreach (string statement in statements)
+        {
+            await _llmService.AddContextStatementAsync(statement, CancellationToken.None);
+        }
     }
 }

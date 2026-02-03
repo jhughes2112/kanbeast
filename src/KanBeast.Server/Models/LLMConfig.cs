@@ -1,5 +1,6 @@
 namespace KanBeast.Server.Models;
 
+// Describes a single LLM endpoint available to the system.
 public class LLMConfig
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
@@ -12,6 +13,7 @@ public class LLMConfig
     public bool IsEnabled { get; set; } = true;
 }
 
+// Stores Git integration settings for workers.
 public class GitConfig
 {
     public string RepositoryUrl { get; set; } = string.Empty;
@@ -20,6 +22,7 @@ public class GitConfig
     public string Email { get; set; } = string.Empty;
 }
 
+// Represents a prompt template used by the server UI.
 public class PromptTemplate
 {
     public string Key { get; set; } = string.Empty;
@@ -28,9 +31,33 @@ public class PromptTemplate
     public string Content { get; set; } = string.Empty;
 }
 
+// Defines settings persisted in env/settings.json.
+public class SettingsFile
+{
+    public List<LLMConfig> LLMConfigs { get; set; } = new();
+    public GitConfig GitConfig { get; set; } = new();
+    public int LlmRetryCount { get; set; }
+    public int LlmRetryDelaySeconds { get; set; }
+    public CompactionSettings ManagerCompaction { get; set; } = new();
+    public CompactionSettings DeveloperCompaction { get; set; } = new();
+}
+
+// Configures compaction behavior for agent context handling.
+public class CompactionSettings
+{
+    public string Type { get; set; } = string.Empty;
+    public int ContextSizeThreshold { get; set; }
+    public int SummarizerConfigIndex { get; set; }
+}
+
+// Aggregates runtime settings for the API and UI.
 public class Settings
 {
     public List<LLMConfig> LLMConfigs { get; set; } = new();
     public GitConfig GitConfig { get; set; } = new();
+    public int LlmRetryCount { get; set; }
+    public int LlmRetryDelaySeconds { get; set; }
+    public CompactionSettings ManagerCompaction { get; set; } = new();
+    public CompactionSettings DeveloperCompaction { get; set; } = new();
     public List<PromptTemplate> SystemPrompts { get; set; } = new();
 }

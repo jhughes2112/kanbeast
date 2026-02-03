@@ -1,8 +1,10 @@
+using System.Text;
 using KanBeast.Worker.Models;
 using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Services;
 
+// Coordinates multiple LLM endpoints with retry, fallback, and context handling.
 public class LlmProxy : ILlmService
 {
     private readonly List<LLMConfig> _configs;
@@ -10,14 +12,18 @@ public class LlmProxy : ILlmService
     private readonly TimeSpan _retryDelay;
     private readonly HashSet<int> _downedIndices;
     private readonly Dictionary<Kernel, KernelSet> _kernelSets;
+    private readonly List<string> _contextStatements;
+    private readonly ICompaction _compaction;
 
-    public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds)
+    public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds, HashSet<int> downedIndices, ICompaction compaction)
     {
         _configs = configs;
         _retryCount = retryCount;
         _retryDelay = TimeSpan.FromSeconds(retryDelaySeconds);
-        _downedIndices = new HashSet<int>();
+        _downedIndices = downedIndices;
         _kernelSets = new Dictionary<Kernel, KernelSet>();
+        _contextStatements = new List<string>();
+        _compaction = compaction;
     }
 
     public Kernel CreateKernel(IEnumerable<object> tools)
@@ -38,7 +44,7 @@ public class LlmProxy : ILlmService
         }
 
         KernelSet resolvedKernelSet = kernelSet;
-
+        string resolvedSystemPrompt = BuildSystemPrompt(systemPrompt);
         string result = string.Empty;
         bool succeeded = false;
 
@@ -54,7 +60,7 @@ public class LlmProxy : ILlmService
             {
                 try
                 {
-                    result = await entry.Service.RunAsync(entry.Kernel, systemPrompt, userPrompt, cancellationToken);
+                    result = await entry.Service.RunAsync(entry.Kernel, resolvedSystemPrompt, userPrompt, cancellationToken);
                     succeeded = true;
                 }
                 catch (Exception)
@@ -89,6 +95,57 @@ public class LlmProxy : ILlmService
         return result;
     }
 
+    public async Task AddContextStatementAsync(string statement, CancellationToken cancellationToken)
+    {
+        _contextStatements.Add(statement);
+
+        List<string> workingStatements = new List<string>(_contextStatements);
+        List<string> compactedStatements = await _compaction.CompactAsync(workingStatements, cancellationToken);
+
+        _contextStatements.Clear();
+        foreach (string compactedStatement in compactedStatements)
+        {
+            _contextStatements.Add(compactedStatement);
+        }
+    }
+
+    public Task ClearContextStatementsAsync(CancellationToken cancellationToken)
+    {
+        _contextStatements.Clear();
+
+        return Task.CompletedTask;
+    }
+
+    public IReadOnlyList<string> GetContextStatements()
+    {
+        IReadOnlyList<string> statements = _contextStatements.AsReadOnly();
+
+        return statements;
+    }
+
+    private string BuildSystemPrompt(string systemPrompt)
+    {
+        string resolvedPrompt = systemPrompt;
+
+        if (_contextStatements.Count > 0)
+        {
+            StringBuilder builder = new StringBuilder();
+            builder.Append(systemPrompt);
+            builder.Append("\n\nContext:\n");
+
+            foreach (string statement in _contextStatements)
+            {
+                builder.Append("- ");
+                builder.Append(statement);
+                builder.Append('\n');
+            }
+
+            resolvedPrompt = builder.ToString().TrimEnd();
+        }
+
+        return resolvedPrompt;
+    }
+
     private KernelSet BuildKernelSet(IEnumerable<object> tools)
     {
         List<KernelEntry> entries = new List<KernelEntry>();
@@ -114,6 +171,7 @@ public class LlmProxy : ILlmService
         return kernelSet;
     }
 
+    // Tracks kernels and services for each configured LLM.
     private sealed class KernelSet
     {
         public KernelSet(List<KernelEntry> entries)
@@ -127,6 +185,7 @@ public class LlmProxy : ILlmService
         public List<KernelEntry> Entries { get; }
     }
 
+    // Binds a single LLM kernel to its config index for retry tracking.
     private sealed class KernelEntry
     {
         public KernelEntry(int configIndex, Kernel kernel, LlmService service)

@@ -4,11 +4,12 @@ using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
 using KanBeast.Worker.Services.Tools;
 using KanBeast.Worker.Agents;
+using Microsoft.SemanticKernel;
 
 Console.WriteLine("KanBeast Worker Starting...");
 
 // Parse command line arguments or environment variables
-var config = Parser.Default.ParseArguments<WorkerOptions>(args)
+WorkerConfig? config = Parser.Default.ParseArguments<WorkerOptions>(args)
     .MapResult(BuildConfiguration, _ => null);
 
 if (config == null)
@@ -23,14 +24,26 @@ Console.WriteLine($"Worker initialized for ticket: {config.TicketId}");
 try
 {
     // Initialize services
-    var apiClient = new KanbanApiClient(config.ServerUrl);
-    var gitService = new GitService();
-    var toolExecutor = new ToolExecutor();
-    ILlmService llmService = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds);
+    KanbanApiClient apiClient = new KanbanApiClient(config.ServerUrl);
+    GitService gitService = new GitService();
+    ToolExecutor toolExecutor = new ToolExecutor();
+    HashSet<int> downedLlmIndices = new HashSet<int>();
+    ICompaction managerCompaction = BuildCompaction(
+        config.ManagerCompaction,
+        config.LLMConfigs,
+        config.ManagerCompactionSummaryPrompt,
+        config.ManagerCompactionSystemPrompt);
+    ICompaction developerCompaction = BuildCompaction(
+        config.DeveloperCompaction,
+        config.LLMConfigs,
+        config.DeveloperCompactionSummaryPrompt,
+        config.DeveloperCompactionSystemPrompt);
+    ILlmService managerLlmService = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, managerCompaction);
+    ILlmService developerLlmService = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, developerCompaction);
 
     // Fetch ticket details
     Console.WriteLine("Fetching ticket details...");
-    var ticket = await apiClient.GetTicketAsync(config.TicketId);
+    TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);
     
     if (ticket == null)
     {
@@ -42,7 +55,7 @@ try
     await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work");
 
     // Setup working directory
-    var workDir = Path.Combine(Path.GetTempPath(), $"kanbeast-{ticket.Id}");
+    string workDir = Path.Combine(Path.GetTempPath(), $"kanbeast-{ticket.Id}");
     if (Directory.Exists(workDir))
     {
         Directory.Delete(workDir, true);
@@ -59,12 +72,12 @@ try
         
         try
         {
-            var repoDir = Path.Combine(workDir, "repo");
+            string repoDir = Path.Combine(workDir, "repo");
             await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, repoDir);
             await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, repoDir);
 
             // Create or checkout branch
-            var branchName = ticket.BranchName ?? $"feature/ticket-{ticket.Id}";
+            string branchName = ticket.BranchName ?? $"feature/ticket-{ticket.Id}";
             Console.WriteLine($"Branch: {branchName}");
             await gitService.CreateOrCheckoutBranchAsync(branchName, repoDir);
             
@@ -83,50 +96,74 @@ try
     }
 
     // Initialize agents
-    var managerKernel = llmService.CreateKernel(new object[]
+    Kernel managerKernel = managerLlmService.CreateKernel(new object[]
     {
         new ShellTools(toolExecutor),
         new FileTools(toolExecutor),
         new KanbanTools(apiClient)
     });
 
-    var developerKernel = llmService.CreateKernel(new object[]
+    Kernel developerKernel = developerLlmService.CreateKernel(new object[]
     {
         new ShellTools(toolExecutor),
         new FileTools(toolExecutor),
         new DeveloperTaskTools(apiClient)
     });
 
-    var managerAgent = new ManagerAgent(apiClient, toolExecutor, config.ManagerPrompt, llmService, managerKernel);
-    var developerAgent = new DeveloperAgent(toolExecutor, apiClient, config.DeveloperPrompt, ticket.Id, llmService, developerKernel);
+    ManagerAgent managerAgent = new ManagerAgent(apiClient, toolExecutor, config.ManagerPrompt, managerLlmService, managerKernel);
+    DeveloperAgent developerAgent = new DeveloperAgent(toolExecutor, apiClient, config.DeveloperPrompt, ticket.Id, developerLlmService, developerKernel);
 
     // Manager breaks down the ticket
     Console.WriteLine("Manager: Breaking down ticket into tasks...");
-    var tasks = await managerAgent.BreakDownTicketAsync(ticket);
+    List<string> tasks = await managerAgent.BreakDownTicketAsync(ticket);
     
     // Refresh ticket to get the updated tasks
     ticket = await apiClient.GetTicketAsync(config.TicketId);
 
     // Work on each task
-    foreach (var task in ticket!.Tasks)
+    foreach (KanbanTaskDto task in ticket!.Tasks)
     {
-        foreach (var subtask in task.Subtasks)
+        foreach (KanbanSubtaskDto subtask in task.Subtasks)
         {
             if (subtask.Status == SubtaskStatus.Complete)
                 continue;
 
             Console.WriteLine($"Working on subtask: {subtask.Name}");
 
-            var success = await developerAgent.WorkOnTaskAsync(task, subtask, ticket.Id, workDir);
+            bool success = await developerAgent.WorkOnTaskAsync(task, subtask, ticket.Id, workDir);
 
             if (!success)
             {
                 return 1;
             }
 
-            var refreshed = await apiClient.GetTicketAsync(config.TicketId);
-            var refreshedTask = refreshed?.Tasks.FirstOrDefault(t => t.Id == task.Id);
-            var refreshedSubtask = refreshedTask?.Subtasks.FirstOrDefault(s => s.Id == subtask.Id);
+            TicketDto? refreshed = await apiClient.GetTicketAsync(config.TicketId);
+            KanbanTaskDto? refreshedTask = null;
+            KanbanSubtaskDto? refreshedSubtask = null;
+
+            if (refreshed != null)
+            {
+                foreach (KanbanTaskDto candidate in refreshed.Tasks)
+                {
+                    if (string.Equals(candidate.Id, task.Id, StringComparison.Ordinal))
+                    {
+                        refreshedTask = candidate;
+                        break;
+                    }
+                }
+
+                if (refreshedTask != null)
+                {
+                    foreach (KanbanSubtaskDto candidate in refreshedTask.Subtasks)
+                    {
+                        if (string.Equals(candidate.Id, subtask.Id, StringComparison.Ordinal))
+                        {
+                            refreshedSubtask = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
 
             if (refreshedSubtask?.Status != SubtaskStatus.Complete)
             {
@@ -134,7 +171,7 @@ try
                 return 1;
             }
 
-            var verified = await managerAgent.VerifyTaskCompletionAsync(subtask.Name, workDir);
+            bool verified = await managerAgent.VerifyTaskCompletionAsync(subtask.Name, workDir);
             if (!verified)
             {
                 await apiClient.UpdateSubtaskStatusAsync(ticket.Id, task.Id, subtask.Id, SubtaskStatus.Incomplete);
@@ -188,14 +225,10 @@ static WorkerConfig? BuildConfiguration(WorkerOptions options)
 
     if (!string.IsNullOrEmpty(ticketId))
     {
-        string? llmConfigFile = options.LlmConfigFile ?? GetEnvValue("LLM_CONFIG_FILE");
-        List<LLMConfig>? llmConfigs = LoadLlmConfigs(llmConfigFile);
+        WorkerSettings? settings = LoadWorkerSettings();
 
-        if (llmConfigs != null && llmConfigs.Count > 0)
+        if (settings != null && settings.LLMConfigs.Count > 0)
         {
-            int retryCount = GetIntOptionOrEnv(options.LlmRetryCount, "LLM_RETRY_COUNT", 0);
-            int retryDelaySeconds = GetIntOptionOrEnv(options.LlmRetryDelaySeconds, "LLM_RETRY_DELAY_SECONDS", 0);
-
             string promptDirectory = "env/prompts";
             string resolvedPromptDirectory = ResolvePromptDirectory(promptDirectory);
             List<PromptTemplate> systemPrompts = LoadPromptTemplates(resolvedPromptDirectory);
@@ -207,16 +240,16 @@ static WorkerConfig? BuildConfiguration(WorkerOptions options)
             {
                 TicketId = ticketId,
                 ServerUrl = serverUrl,
-                GitConfig = new GitConfig
-                {
-                    RepositoryUrl = options.GitUrl ?? GetEnvValue("GIT_URL") ?? string.Empty,
-                    Username = options.GitUsername ?? GetEnvValue("GIT_USERNAME") ?? "KanBeast Worker",
-                    Email = options.GitEmail ?? GetEnvValue("GIT_EMAIL") ?? "worker@kanbeast.local",
-                    SshKey = options.GitSshKey ?? GetEnvValue("GIT_SSH_KEY")
-                },
-                LLMConfigs = llmConfigs,
-                LlmRetryCount = retryCount,
-                LlmRetryDelaySeconds = retryDelaySeconds,
+                GitConfig = settings.GitConfig,
+                LLMConfigs = settings.LLMConfigs,
+                LlmRetryCount = settings.LlmRetryCount,
+                LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds,
+                ManagerCompaction = settings.ManagerCompaction,
+                DeveloperCompaction = settings.DeveloperCompaction,
+                ManagerCompactionSummaryPrompt = GetPromptContent(systemPrompts, "manager-compaction-summary"),
+                ManagerCompactionSystemPrompt = GetPromptContent(systemPrompts, "manager-compaction-system"),
+                DeveloperCompactionSummaryPrompt = GetPromptContent(systemPrompts, "developer-compaction-summary"),
+                DeveloperCompactionSystemPrompt = GetPromptContent(systemPrompts, "developer-compaction-system"),
                 ManagerPrompt = string.IsNullOrWhiteSpace(managerPrompt)
                     ? "You are a project manager. Break down tasks and verify completion."
                     : managerPrompt,
@@ -231,59 +264,33 @@ static WorkerConfig? BuildConfiguration(WorkerOptions options)
     return config;
 }
 
-static List<LLMConfig>? LoadLlmConfigs(string? configFile)
+static WorkerSettings? LoadWorkerSettings()
 {
-    List<LLMConfig>? configs = null;
+    WorkerSettings? settings = null;
+    string resolvedPath = ResolveSettingsPath();
 
-    if (!string.IsNullOrWhiteSpace(configFile))
+    if (File.Exists(resolvedPath))
     {
-        string resolvedPath = ResolveLlmConfigPath(configFile);
-
-        if (File.Exists(resolvedPath))
+        string json = File.ReadAllText(resolvedPath);
+        JsonSerializerOptions options = new JsonSerializerOptions
         {
-            string json = File.ReadAllText(resolvedPath);
-            JsonSerializerOptions options = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            };
+            PropertyNameCaseInsensitive = true
+        };
 
-            configs = JsonSerializer.Deserialize<List<LLMConfig>>(json, options);
-        }
+        settings = JsonSerializer.Deserialize<WorkerSettings>(json, options);
     }
 
-    return configs;
+    return settings;
 }
 
-static string ResolveLlmConfigPath(string configFile)
+static string ResolveSettingsPath()
 {
+    string configFile = "env/settings.json";
     string resolvedPath = Path.IsPathRooted(configFile)
         ? configFile
         : Path.Combine(AppContext.BaseDirectory, configFile);
 
     return resolvedPath;
-}
-
-static int GetIntOptionOrEnv(int? optionValue, string envKey, int defaultValue)
-{
-    int value = defaultValue;
-
-    if (optionValue.HasValue)
-    {
-        value = optionValue.Value;
-    }
-    else
-    {
-        string? envValue = GetEnvValue(envKey);
-        if (!string.IsNullOrWhiteSpace(envValue))
-        {
-            if (int.TryParse(envValue, out int parsed))
-            {
-                value = parsed;
-            }
-        }
-    }
-
-    return value;
 }
 
 static string? GetEnvValue(string key)
@@ -298,12 +305,48 @@ static string ResolvePromptDirectory(string promptDirectory)
         : Path.Combine(AppContext.BaseDirectory, promptDirectory);
 }
 
+static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> llmConfigs, string summaryPrompt, string summarySystemPrompt)
+{
+    ICompaction compaction = new CompactionNone();
+
+    if (string.Equals(settings.Type, "summarizer", StringComparison.OrdinalIgnoreCase))
+    {
+        LLMConfig summarizerConfig = llmConfigs[settings.SummarizerConfigIndex];
+        LlmService summarizerService = new LlmService(summarizerConfig);
+        Kernel summarizerKernel = summarizerService.CreateKernel(Array.Empty<object>());
+        compaction = new CompactionSummarizer(
+            summarizerService,
+            summarizerKernel,
+            summaryPrompt,
+            summarySystemPrompt,
+            settings.ContextSizeThreshold);
+    }
+
+    return compaction;
+}
+
+static string GetPromptContent(List<PromptTemplate> prompts, string key)
+{
+    string content = string.Empty;
+
+    foreach (PromptTemplate prompt in prompts)
+    {
+        if (string.Equals(prompt.Key, key, StringComparison.Ordinal))
+        {
+            content = prompt.Content;
+            break;
+        }
+    }
+
+    return content;
+}
+
 static List<PromptTemplate> LoadPromptTemplates(string promptDirectory)
 {
-    var prompts = GetDefaultPromptTemplates();
-    foreach (var prompt in prompts)
+    List<PromptTemplate> prompts = GetDefaultPromptTemplates();
+    foreach (PromptTemplate prompt in prompts)
     {
-        var path = Path.Combine(promptDirectory, prompt.FileName);
+        string path = Path.Combine(promptDirectory, prompt.FileName);
         if (File.Exists(path))
         {
             prompt.Content = File.ReadAllText(path);
@@ -313,27 +356,9 @@ static List<PromptTemplate> LoadPromptTemplates(string promptDirectory)
     return prompts;
 }
 
-static T? ParseJsonEnv<T>(string key)
-{
-    var value = GetEnvValue(key);
-    if (string.IsNullOrWhiteSpace(value))
-    {
-        return default;
-    }
-
-    try
-    {
-        return JsonSerializer.Deserialize<T>(value);
-    }
-    catch
-    {
-        return default;
-    }
-}
-
 static string BuildManagerPrompt(List<PromptTemplate> prompts)
 {
-    var sections = new[]
+    string[] sections = new[]
     {
         "manager-master",
         "manager-breakdown",
@@ -348,7 +373,7 @@ static string BuildManagerPrompt(List<PromptTemplate> prompts)
 
 static string BuildDeveloperPrompt(List<PromptTemplate> prompts)
 {
-    var sections = new[]
+    string[] sections = new[]
     {
         "developer-implementation",
         "developer-testing"
@@ -359,81 +384,131 @@ static string BuildDeveloperPrompt(List<PromptTemplate> prompts)
 
 static string BuildPromptFromSections(IEnumerable<PromptTemplate> prompts, IEnumerable<string> keys)
 {
-    var content = keys
-        .Select(key => prompts.FirstOrDefault(prompt => prompt.Key == key))
-        .Where(prompt => prompt != null)
-        .Select(prompt => string.IsNullOrWhiteSpace(prompt!.DisplayName)
-            ? prompt.Content
-            : $"{prompt.DisplayName}\n{prompt.Content}")
-        .Where(promptContent => !string.IsNullOrWhiteSpace(promptContent))
-        .ToList();
+    List<string> content = new List<string>();
+
+    foreach (string key in keys)
+    {
+        PromptTemplate? selectedPrompt = null;
+
+        foreach (PromptTemplate prompt in prompts)
+        {
+            if (string.Equals(prompt.Key, key, StringComparison.Ordinal))
+            {
+                selectedPrompt = prompt;
+                break;
+            }
+        }
+
+        if (selectedPrompt != null)
+        {
+            string promptContent = string.IsNullOrWhiteSpace(selectedPrompt.DisplayName)
+                ? selectedPrompt.Content
+                : $"{selectedPrompt.DisplayName}\n{selectedPrompt.Content}";
+
+            if (!string.IsNullOrWhiteSpace(promptContent))
+            {
+                content.Add(promptContent);
+            }
+        }
+    }
 
     return string.Join("\n\n", content);
 }
 
 static List<PromptTemplate> GetDefaultPromptTemplates()
 {
-    return new List<PromptTemplate>
+    List<PromptTemplate> templates = new List<PromptTemplate>
     {
         new()
         {
             Key = "manager-master",
             DisplayName = "Manager: Mode Selection",
             FileName = "manager-master.txt",
-            Content = string.Empty
+            Content = "Role: Manager agent for KanBeast.\n\nPurpose:\n- Decide the current workflow mode from ticket status, tasks, activity log, and test results.\n- Choose one mode: Breakdown, Assign, Verify, Accept, Testing.\n\nProcess:\n1) State the chosen mode and why.\n2) Follow the matching mode prompt.\n3) If evidence is insufficient, ask for clarification and stop.\n\nTone: concise, direct, and outcome-focused."
         },
         new()
         {
             Key = "manager-breakdown",
             DisplayName = "Manager: Break Down Ticket",
             FileName = "manager-breakdown.txt",
-            Content = string.Empty
+            Content = "Role: Manager agent in Breakdown mode.\n\nOutput:\n- Provide an ordered list of small, testable subtasks.\n- Each task includes acceptance criteria and any key constraints.\n\nRules:\n- Keep tasks independent and measurable.\n- Avoid vague phrasing.\n- Ask for missing details instead of guessing."
         },
         new()
         {
             Key = "manager-assign",
             DisplayName = "Manager: Assign Task",
             FileName = "manager-assign.txt",
-            Content = string.Empty
+            Content = "Role: Manager agent in Assign mode.\n\nOutput:\n- Select the next incomplete task.\n- Restate the goal and acceptance criteria.\n- List constraints and relevant files to inspect.\n\nProcess:\n- Confirm readiness before work starts.\n- Do not assign multiple tasks at once."
         },
         new()
         {
             Key = "manager-verify",
             DisplayName = "Manager: Verify Task",
             FileName = "manager-verify.txt",
-            Content = string.Empty
+            Content = "Role: Manager agent in Verify mode.\n\nProcess:\n- Verify work against acceptance criteria.\n- Use tools when needed to check files, outputs, and tests.\n\nOutput:\n- Respond with APPROVED or REJECTED: <reason>.\n- If rejected, provide precise, actionable fixes."
         },
         new()
         {
             Key = "manager-accept",
             DisplayName = "Manager: Accept Task",
             FileName = "manager-accept.txt",
-            Content = string.Empty
+            Content = "Role: Manager agent in Accept mode.\n\nProcess:\n- Mark the verified task complete and update the ticket.\n- Move to the next task or transition to Testing if all tasks are complete.\n\nOutput:\n- Provide a short completion summary and next step."
         },
         new()
         {
             Key = "manager-testing",
             DisplayName = "Manager: Testing Phase",
             FileName = "manager-testing.txt",
-            Content = string.Empty
+            Content = "Role: Manager agent in Testing mode.\n\nProcess:\n- Ensure relevant tests are present and executed.\n- If tests fail, return to Active with remediation steps.\n- Only mark Done after all tests pass and changes are ready to commit."
         },
         new()
         {
             Key = "developer-implementation",
             DisplayName = "Developer: Implement Features",
             FileName = "developer-implementation.txt",
-            Content = string.Empty
+            Content = "Role: Developer agent implementing tasks in a codebase.\n\nProcess:\n- Read relevant files before editing.\n- Follow repository conventions and minimize changes.\n- Use available tools for file edits and commands.\n\nOutput:\n- Summarize changes and test results.\n- If blocked, explain what is missing."
         },
         new()
         {
             Key = "developer-testing",
             DisplayName = "Developer: Test Changes",
             FileName = "developer-testing.txt",
-            Content = string.Empty
+            Content = "Role: Developer agent in testing mode.\n\nProcess:\n- Add or update tests as needed.\n- Run relevant test suites and analyze failures.\n- Fix issues and re-run until green.\n\nOutput:\n- Report test commands and results."
+        },
+        new()
+        {
+            Key = "manager-compaction-summary",
+            DisplayName = "Manager: Compaction Summary Prompt",
+            FileName = "manager-compaction-summary.txt",
+            Content = "Write a continuation summary for the manager agent.\n\nInclude:\n1) Task overview and success criteria.\n2) Completed work and verified outcomes.\n3) Open issues, risks, or blockers.\n4) Next steps in priority order.\n5) Key context that must be preserved.\n\nKeep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags."
+        },
+        new()
+        {
+            Key = "manager-compaction-system",
+            DisplayName = "Manager: Compaction System Prompt",
+            FileName = "manager-compaction-system.txt",
+            Content = "You summarize manager context so work can continue after compaction. Keep output concise, structured, and factual. Do not invent details."
+        },
+        new()
+        {
+            Key = "developer-compaction-summary",
+            DisplayName = "Developer: Compaction Summary Prompt",
+            FileName = "developer-compaction-summary.txt",
+            Content = "Write a continuation summary for the developer agent.\n\nInclude:\n1) Task overview and acceptance criteria.\n2) Code changes made (files and key edits).\n3) Tests run and results.\n4) Problems found and fixes applied.\n5) Remaining work and next steps.\n\nKeep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags."
+        },
+        new()
+        {
+            Key = "developer-compaction-system",
+            DisplayName = "Developer: Compaction System Prompt",
+            FileName = "developer-compaction-system.txt",
+            Content = "You summarize developer context so work can continue after compaction. Keep output concise, structured, and factual. Do not invent details."
         }
     };
+
+    return templates;
 }
 
+// Captures supported command-line options for the worker process.
 class WorkerOptions
 {
     [Option("ticket-id", HelpText = "Ticket id for the worker.")]
@@ -441,26 +516,5 @@ class WorkerOptions
 
     [Option("server-url", HelpText = "Server URL for the worker.")]
     public string? ServerUrl { get; set; }
-
-    [Option("git-url", HelpText = "Git repository URL.")]
-    public string? GitUrl { get; set; }
-
-    [Option("git-username", HelpText = "Git username.")]
-    public string? GitUsername { get; set; }
-
-    [Option("git-email", HelpText = "Git email.")]
-    public string? GitEmail { get; set; }
-
-    [Option("git-ssh-key", HelpText = "Git SSH key content.")]
-    public string? GitSshKey { get; set; }
-
-    [Option("llm-config-file", HelpText = "Path to a JSON list of LLM endpoints.")]
-    public string? LlmConfigFile { get; set; }
-
-    [Option("llm-retry-count", HelpText = "Number of retries before falling back to the next LLM.")]
-    public int? LlmRetryCount { get; set; }
-
-    [Option("llm-retry-delay-seconds", HelpText = "Delay between retries in seconds.")]
-    public int? LlmRetryDelaySeconds { get; set; }
 
 }
