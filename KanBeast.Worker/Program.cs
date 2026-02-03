@@ -41,7 +41,6 @@ try
 {
     KanbanApiClient apiClient = new KanbanApiClient(config.ServerUrl);
     GitService gitService = new GitService(config.GitConfig);
-    ToolExecutor toolExecutor = new ToolExecutor();
     HashSet<int> downedLlmIndices = new HashSet<int>();
     ICompaction managerCompaction = BuildCompaction(
         config.ManagerCompaction,
@@ -91,7 +90,6 @@ try
                 apiClient,
                 managerLlmService,
                 developerLlmService,
-                toolExecutor,
                 config.GetPrompt("manager-system"),
                 config.GetPrompt("developer-implementation"),
                 config.MaxIterationsPerSubtask);

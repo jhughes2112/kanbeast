@@ -30,7 +30,6 @@ public class AgentOrchestrator : IAgentOrchestrator
     private readonly IKanbanApiClient _apiClient;
     private readonly ILlmService _managerLlmService;
     private readonly ILlmService _developerLlmService;
-    private readonly IToolExecutor _toolExecutor;
     private readonly string _managerPrompt;
     private readonly string _developerImplementationPrompt;
     private readonly int _maxIterationsPerSubtask;
@@ -44,7 +43,6 @@ public class AgentOrchestrator : IAgentOrchestrator
         IKanbanApiClient apiClient,
         ILlmService managerLlmService,
         ILlmService developerLlmService,
-        IToolExecutor toolExecutor,
         string managerPrompt,
         string developerImplementationPrompt,
         int maxIterationsPerSubtask)
@@ -53,7 +51,6 @@ public class AgentOrchestrator : IAgentOrchestrator
         _apiClient = apiClient;
         _managerLlmService = managerLlmService;
         _developerLlmService = developerLlmService;
-        _toolExecutor = toolExecutor;
         _managerPrompt = managerPrompt;
         _developerImplementationPrompt = developerImplementationPrompt;
         _maxIterationsPerSubtask = maxIterationsPerSubtask;
@@ -177,8 +174,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         Kernel kernel = _managerLlmService.CreateKernel(new object[]
         {
-            new ShellTools(_toolExecutor),
-            new FileTools(_toolExecutor),
+            new ShellTools(workDir),
+            new FileTools(workDir),
             ticketTools
         });
 
@@ -223,8 +220,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         Kernel kernel = _managerLlmService.CreateKernel(new object[]
         {
-            new ShellTools(_toolExecutor),
-            new FileTools(_toolExecutor),
+            new ShellTools(workDir),
+            new FileTools(workDir),
             ticketTools
         });
 
@@ -268,8 +265,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         Kernel kernel = _developerLlmService.CreateKernel(new object[]
         {
-            new ShellTools(_toolExecutor),
-            new FileTools(_toolExecutor),
+            new ShellTools(workDir),
+            new FileTools(workDir),
             ticketTools
         });
 
@@ -327,8 +324,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         Kernel kernel = _managerLlmService.CreateKernel(new object[]
         {
-            new ShellTools(_toolExecutor),
-            new FileTools(_toolExecutor),
+            new ShellTools(workDir),
+            new FileTools(workDir),
             ticketTools
         });
 
@@ -366,8 +363,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         Kernel kernel = _managerLlmService.CreateKernel(new object[]
         {
-            new ShellTools(_toolExecutor),
-            new FileTools(_toolExecutor),
+            new ShellTools(workDir),
+            new FileTools(workDir),
             ticketTools
         });
 

@@ -7,6 +7,8 @@ namespace KanBeast.Worker.Services.Tools;
 // Tools for LLM to interact with the ticket system: logging, subtasks, status updates.
 public class TicketTools
 {
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+
     private readonly IKanbanApiClient _apiClient;
     private readonly TicketHolder _ticketHolder;
     private string? _currentTaskId;
@@ -58,8 +60,25 @@ public class TicketTools
     public async Task<string> LogMessageAsync(
         [Description("Message to log")] string message)
     {
-        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, message);
-        return "Message logged";
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return "Error: Message cannot be empty";
+        }
+
+        try
+        {
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, message);
+            return "Message logged";
+        }
+        catch (TaskCanceledException)
+        {
+            return "Error: Request timed out while logging message";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to log message: {ex.Message}";
+        }
     }
 
     [KernelFunction("create_subtasks")]
@@ -68,36 +87,65 @@ public class TicketTools
         [Description("Name of the main task grouping these subtasks")] string taskName,
         [Description("Array of subtask names in order of execution")] string[] subtasks)
     {
-        if (subtasks.Length == 0)
+        if (string.IsNullOrWhiteSpace(taskName))
+        {
+            return "Error: Task name cannot be empty";
+        }
+
+        if (subtasks == null || subtasks.Length == 0)
         {
             return "Error: No subtasks provided";
         }
 
-        KanbanTask task = new KanbanTask
+        try
         {
-            Name = taskName,
-            Subtasks = new List<KanbanSubtask>()
-        };
-
-        foreach (string subtaskName in subtasks)
-        {
-            task.Subtasks.Add(new KanbanSubtask
+            KanbanTask task = new KanbanTask
             {
-                Name = subtaskName,
-                Status = SubtaskStatus.Incomplete
-            });
+                Name = taskName,
+                Subtasks = new List<KanbanSubtask>()
+            };
+
+            foreach (string subtaskName in subtasks)
+            {
+                if (!string.IsNullOrWhiteSpace(subtaskName))
+                {
+                    task.Subtasks.Add(new KanbanSubtask
+                    {
+                        Name = subtaskName,
+                        Status = SubtaskStatus.Incomplete
+                    });
+                }
+            }
+
+            if (task.Subtasks.Count == 0)
+            {
+                return "Error: All subtask names were empty";
+            }
+
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            TicketDto? updated = await _apiClient.AddTaskToTicketAsync(_ticketHolder.Ticket.Id, task);
+
+            if (updated == null)
+            {
+                return "Error: API returned null when creating subtasks";
+            }
+
+            _ticketHolder.Update(updated);
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created task '{taskName}' with {task.Subtasks.Count} subtasks");
+
+            SubtasksCreated = true;
+            SubtaskCount = task.Subtasks.Count;
+
+            return $"Created {task.Subtasks.Count} subtasks under '{taskName}'";
         }
-
-        TicketDto? updated = await _apiClient.AddTaskToTicketAsync(_ticketHolder.Ticket.Id, task);
-        _ticketHolder.Update(updated);
-        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created task '{taskName}' with {subtasks.Length} subtasks");
-
-        SubtasksCreated = updated != null;
-        SubtaskCount = subtasks.Length;
-
-        return SubtasksCreated
-            ? $"Created {subtasks.Length} subtasks under '{taskName}'"
-            : "Error: Failed to create subtasks";
+        catch (TaskCanceledException)
+        {
+            return "Error: Request timed out while creating subtasks";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to create subtasks: {ex.Message}";
+        }
     }
 
     [KernelFunction("assign_to_developer")]
@@ -106,17 +154,39 @@ public class TicketTools
         [Description("Mode: 'implementation', 'testing', or 'write-tests'")] string mode,
         [Description("Clear goal statement for the developer")] string goal)
     {
-        AssignedMode = mode.ToLowerInvariant() switch
+        if (string.IsNullOrWhiteSpace(mode))
         {
-            "testing" => DeveloperMode.Testing,
-            "write-tests" or "writetests" => DeveloperMode.WriteTests,
-            _ => DeveloperMode.Implementation
-        };
+            return "Error: Mode cannot be empty";
+        }
 
-        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Assigned to developer: {goal}");
-        Assigned = true;
+        if (string.IsNullOrWhiteSpace(goal))
+        {
+            return "Error: Goal cannot be empty";
+        }
 
-        return $"Subtask assigned to developer in {AssignedMode} mode";
+        try
+        {
+            AssignedMode = mode.ToLowerInvariant() switch
+            {
+                "testing" => DeveloperMode.Testing,
+                "write-tests" or "writetests" => DeveloperMode.WriteTests,
+                _ => DeveloperMode.Implementation
+            };
+
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Assigned to developer: {goal}");
+            Assigned = true;
+
+            return $"Subtask assigned to developer in {AssignedMode} mode";
+        }
+        catch (TaskCanceledException)
+        {
+            return "Error: Request timed out while assigning to developer";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to assign to developer: {ex.Message}";
+        }
     }
 
     [KernelFunction("subtask_complete")]
@@ -125,18 +195,43 @@ public class TicketTools
         [Description("Status: 'done', 'blocked', or 'partial'")] string status,
         [Description("Summary of what was done")] string message)
     {
-        DeveloperStatus = status.ToLowerInvariant() switch
+        if (string.IsNullOrWhiteSpace(status))
         {
-            "done" or "complete" => SubtaskCompleteStatus.Done,
-            "blocked" => SubtaskCompleteStatus.Blocked,
-            _ => SubtaskCompleteStatus.Partial
-        };
+            return "Error: Status cannot be empty";
+        }
 
-        DeveloperMessage = message;
-        DeveloperComplete = true;
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            return "Error: Message cannot be empty";
+        }
 
-        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: {status} - {message}");
-        return $"Subtask marked as {status}";
+        try
+        {
+            DeveloperStatus = status.ToLowerInvariant() switch
+            {
+                "done" or "complete" => SubtaskCompleteStatus.Done,
+                "blocked" => SubtaskCompleteStatus.Blocked,
+                _ => SubtaskCompleteStatus.Partial
+            };
+
+            DeveloperMessage = message;
+            DeveloperComplete = true;
+
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: {status} - {message}");
+
+            return $"Subtask marked as {status}";
+        }
+        catch (TaskCanceledException)
+        {
+            DeveloperComplete = true;
+            return $"Warning: Logged locally but API timed out. Subtask marked as {status}";
+        }
+        catch (Exception ex)
+        {
+            DeveloperComplete = true;
+            return $"Warning: Logged locally but API failed: {ex.Message}. Subtask marked as {status}";
+        }
     }
 
     [KernelFunction("approve_subtask")]
@@ -146,15 +241,33 @@ public class TicketTools
     {
         if (_currentTaskId == null || _currentSubtaskId == null)
         {
-            return "Error: No subtask selected";
+            return "Error: No subtask selected for approval";
         }
 
-        TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Complete);
-        _ticketHolder.Update(updated);
-        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask approved{(notes != null ? $": {notes}" : "")}");
+        try
+        {
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Complete);
 
-        SubtaskApproved = true;
-        return "Subtask approved";
+            if (updated == null)
+            {
+                return "Error: API returned null when approving subtask";
+            }
+
+            _ticketHolder.Update(updated);
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask approved{(notes != null ? $": {notes}" : "")}");
+
+            SubtaskApproved = true;
+            return "Subtask approved";
+        }
+        catch (TaskCanceledException)
+        {
+            return "Error: Request timed out while approving subtask";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to approve subtask: {ex.Message}";
+        }
     }
 
     [KernelFunction("reject_subtask")]
@@ -164,16 +277,39 @@ public class TicketTools
     {
         if (_currentTaskId == null || _currentSubtaskId == null)
         {
-            return "Error: No subtask selected";
+            return "Error: No subtask selected for rejection";
         }
 
-        TicketDto? updated = await _apiClient.UpdateSubtaskRejectionAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, reason);
-        _ticketHolder.Update(updated);
-        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask rejected: {reason}");
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return "Error: Rejection reason cannot be empty";
+        }
 
-        SubtaskApproved = false;
-        RejectionReason = reason;
-        return $"Subtask rejected: {reason}";
+        try
+        {
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            TicketDto? updated = await _apiClient.UpdateSubtaskRejectionAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, reason);
+
+            if (updated == null)
+            {
+                return "Error: API returned null when rejecting subtask";
+            }
+
+            _ticketHolder.Update(updated);
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask rejected: {reason}");
+
+            SubtaskApproved = false;
+            RejectionReason = reason;
+            return $"Subtask rejected: {reason}";
+        }
+        catch (TaskCanceledException)
+        {
+            return "Error: Request timed out while rejecting subtask";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to reject subtask: {ex.Message}";
+        }
     }
 
     [KernelFunction("mark_complete")]
@@ -181,12 +317,35 @@ public class TicketTools
     public async Task<string> MarkCompleteAsync(
         [Description("Summary of what was accomplished")] string summary)
     {
-        TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Done");
-        _ticketHolder.Update(updated);
-        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket complete: {summary}");
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return "Error: Summary cannot be empty";
+        }
 
-        TicketComplete = true;
-        return "Ticket marked complete";
+        try
+        {
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Done");
+
+            if (updated == null)
+            {
+                return "Error: API returned null when marking ticket complete";
+            }
+
+            _ticketHolder.Update(updated);
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket complete: {summary}");
+
+            TicketComplete = true;
+            return "Ticket marked complete";
+        }
+        catch (TaskCanceledException)
+        {
+            return "Error: Request timed out while marking ticket complete";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to mark ticket complete: {ex.Message}";
+        }
     }
 
     [KernelFunction("mark_blocked")]
@@ -194,12 +353,35 @@ public class TicketTools
     public async Task<string> MarkBlockedAsync(
         [Description("Reason the ticket is blocked")] string reason)
     {
-        TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Blocked");
-        _ticketHolder.Update(updated);
-        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket blocked: {reason}");
+        if (string.IsNullOrWhiteSpace(reason))
+        {
+            return "Error: Blocked reason cannot be empty";
+        }
 
-        TicketComplete = false;
-        BlockedReason = reason;
-        return $"Ticket blocked: {reason}";
+        try
+        {
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Blocked");
+
+            if (updated == null)
+            {
+                return "Error: API returned null when marking ticket blocked";
+            }
+
+            _ticketHolder.Update(updated);
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket blocked: {reason}");
+
+            TicketComplete = false;
+            BlockedReason = reason;
+            return $"Ticket blocked: {reason}";
+        }
+        catch (TaskCanceledException)
+        {
+            return "Error: Request timed out while marking ticket blocked";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to mark ticket blocked: {ex.Message}";
+        }
     }
 }
