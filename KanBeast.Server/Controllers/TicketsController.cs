@@ -94,35 +94,38 @@ public class TicketsController : ControllerBase
             return NotFound();
         }
 
-        _logger.LogInformation("PATCH /tickets/{Id}/status - changed to {Status} (WorkerId={WorkerId})", id, update.Status, ticket.WorkerId ?? "null");
+        _logger.LogInformation("PATCH /tickets/{Id}/status - changed to {Status}", id, update.Status);
 
-        // If moving to Backlog, clear the worker ID so it can be restarted
-        if (update.Status == TicketStatus.Backlog && !string.IsNullOrEmpty(ticket.WorkerId))
+        // If moving to Backlog, stop any running worker
+        if (update.Status == TicketStatus.Backlog)
         {
-            _logger.LogInformation("Clearing WorkerId for ticket #{Id}", id);
-            ticket.WorkerId = null;
-            await _ticketService.UpdateTicketAsync(id, ticket);
+            string workerId = $"ticket-{id}";
+            try
+            {
+                bool stopped = await _workerOrchestrator.StopWorkerAsync(workerId);
+                if (stopped)
+                {
+                    _logger.LogInformation("Stopped worker {WorkerId} for cancelled ticket #{Id}", workerId, id);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to stop worker for ticket #{Id}: {Message}", id, ex.Message);
+            }
         }
 
         // If moving to Active, start a worker
         if (update.Status == TicketStatus.Active)
         {
-            if (string.IsNullOrEmpty(ticket.WorkerId))
+            try
             {
-                try
-                {
-                    _logger.LogInformation("Starting worker for ticket #{Id}...", id);
-                    string workerId = await _workerOrchestrator.StartWorkerAsync(id);
-                    _logger.LogInformation("Worker started: {WorkerId} for ticket #{Id}", workerId, id);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Failed to start worker for ticket #{Id}: {Message}", id, ex.Message);
-                }
+                _logger.LogInformation("Starting worker for ticket #{Id}...", id);
+                string workerId = await _workerOrchestrator.StartWorkerAsync(id);
+                _logger.LogInformation("Worker started: {WorkerId} for ticket #{Id}", workerId, id);
             }
-            else
+            catch (Exception ex)
             {
-                _logger.LogInformation("Ticket #{Id} already has worker {WorkerId}, not starting new one", id, ticket.WorkerId);
+                _logger.LogError(ex, "Failed to start worker for ticket #{Id}: {Message}", id, ex.Message);
             }
         }
 

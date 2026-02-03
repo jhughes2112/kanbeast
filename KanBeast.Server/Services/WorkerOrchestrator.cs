@@ -62,21 +62,17 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
         await EnsureDockerNetworkAsync();
 
-        Dictionary<string, string> envVars = BuildWorkerEnvironment(ticketId);
-
-        List<string> envList = new List<string>();
-        foreach ((string key, string value) in envVars)
-        {
-            envList.Add($"{key}={value}");
-            _logger.LogInformation("  ENV: {Key}={Value}", key, value);
-        }
-
         CreateContainerParameters createParams = new CreateContainerParameters
         {
             Image = _containerContext.Image,
             Name = containerName,
-            Env = envList,
-            Entrypoint = new List<string> { "dotnet", "/app/worker/KanBeast.Worker.dll" },
+            Entrypoint = new List<string>
+            {
+                "dotnet",
+                "/app/worker/KanBeast.Worker.dll",
+                "--ticket-id", ticketId,
+                "--server-url", _containerContext.ServerUrl
+            },
             HostConfig = new HostConfig
             {
                 NetworkMode = _containerContext.Network,
@@ -84,6 +80,8 @@ public class WorkerOrchestrator : IWorkerOrchestrator
                 AutoRemove = true
             }
         };
+
+        _logger.LogInformation("Entrypoint: dotnet /app/worker/KanBeast.Worker.dll --ticket-id {TicketId} --server-url {ServerUrl}", ticketId, _containerContext.ServerUrl);
 
         _logger.LogInformation("Creating container...");
         CreateContainerResponse response = await _dockerClient.Containers.CreateContainerAsync(createParams);
@@ -131,15 +129,6 @@ public class WorkerOrchestrator : IWorkerOrchestrator
         Dictionary<string, string> activeWorkers = new Dictionary<string, string>(_activeWorkers);
 
         return Task.FromResult(activeWorkers);
-    }
-
-    private Dictionary<string, string> BuildWorkerEnvironment(string ticketId)
-    {
-        return new Dictionary<string, string>
-        {
-            ["TICKET_ID"] = ticketId,
-            ["SERVER_URL"] = _containerContext.ServerUrl
-        };
     }
 
     private async Task EnsureDockerNetworkAsync()
