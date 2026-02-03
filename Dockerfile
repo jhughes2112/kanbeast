@@ -17,4 +17,5 @@ WORKDIR /app
 COPY --from=build /app/publish/server ./server
 COPY --from=build /app/publish/worker ./worker
 COPY env ./env
+COPY wwwroot ./wwwroot
 ENTRYPOINT ["dotnet", "/app/server/KanBeast.Server.dll"]

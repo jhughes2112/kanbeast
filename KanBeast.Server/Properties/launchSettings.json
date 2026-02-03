@@ -4,10 +4,11 @@
       "commandName": "Project",
       "workingDirectory": "D:\\kanbeast",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Production"
+        "ASPNETCORE_ENVIRONMENT": "Production",
+        "ASPNETCORE_URLS": "http://localhost:8080"
       },
       "dotnetRunMessages": false,
-      "applicationUrl": ""
+      "applicationUrl": "http://localhost:8080"
     }
   },
   "$schema": "https://json.schemastore.org/launchsettings.json"
