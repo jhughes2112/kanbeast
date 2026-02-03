@@ -17,83 +17,89 @@ public class SettingsService : ISettingsService
 {
     private readonly string _promptDirectory;
     private readonly string _settingsPath;
-    private Settings _settings;
 
     public SettingsService(IWebHostEnvironment environment)
     {
         _promptDirectory = Path.Combine(environment.ContentRootPath, "env", "prompts");
         _settingsPath = Path.Combine(environment.ContentRootPath, "env", "settings.json");
         Directory.CreateDirectory(_promptDirectory);
-        SettingsFile settingsFile = LoadSettingsFile();
-        _settings = BuildSettings(settingsFile);
     }
 
     public Task<Settings> GetSettingsAsync()
     {
         SettingsFile settingsFile = LoadSettingsFile();
-        _settings = BuildSettings(settingsFile);
-        return Task.FromResult(_settings);
+        Settings settings = BuildSettings(settingsFile);
+        return Task.FromResult(settings);
     }
 
-    public Task<Settings> UpdateSettingsAsync(Settings settings)
+    public Task<Settings> UpdateSettingsAsync(Settings incomingSettings)
     {
-        // Merge incoming settings with existing - only overwrite fields that were actually provided
-        if (settings.LLMConfigs.Count > 0)
+        SettingsFile settingsFile = LoadSettingsFile();
+        Settings currentSettings = BuildSettings(settingsFile);
+
+        // Merge incoming settings with current - only overwrite fields that were actually provided
+        if (incomingSettings.LLMConfigs.Count > 0)
         {
-            _settings.LLMConfigs = settings.LLMConfigs;
+            currentSettings.LLMConfigs = incomingSettings.LLMConfigs;
         }
 
-        if (!string.IsNullOrEmpty(settings.GitConfig.RepositoryUrl) ||
-            !string.IsNullOrEmpty(settings.GitConfig.Username) ||
-            !string.IsNullOrEmpty(settings.GitConfig.Email))
+        if (!string.IsNullOrEmpty(incomingSettings.GitConfig.RepositoryUrl) ||
+            !string.IsNullOrEmpty(incomingSettings.GitConfig.Username) ||
+            !string.IsNullOrEmpty(incomingSettings.GitConfig.Email))
         {
-            _settings.GitConfig = settings.GitConfig;
+            currentSettings.GitConfig = incomingSettings.GitConfig;
         }
 
-        if (settings.LlmRetryCount > 0)
+        if (incomingSettings.LlmRetryCount > 0)
         {
-            _settings.LlmRetryCount = settings.LlmRetryCount;
+            currentSettings.LlmRetryCount = incomingSettings.LlmRetryCount;
         }
 
-        if (settings.LlmRetryDelaySeconds > 0)
+        if (incomingSettings.LlmRetryDelaySeconds > 0)
         {
-            _settings.LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds;
+            currentSettings.LlmRetryDelaySeconds = incomingSettings.LlmRetryDelaySeconds;
         }
 
-        if (!string.IsNullOrEmpty(settings.ManagerCompaction.Type))
+        if (!string.IsNullOrEmpty(incomingSettings.ManagerCompaction.Type))
         {
-            _settings.ManagerCompaction = settings.ManagerCompaction;
+            currentSettings.ManagerCompaction = incomingSettings.ManagerCompaction;
         }
 
-        if (!string.IsNullOrEmpty(settings.DeveloperCompaction.Type))
+        if (!string.IsNullOrEmpty(incomingSettings.DeveloperCompaction.Type))
         {
-            _settings.DeveloperCompaction = settings.DeveloperCompaction;
+            currentSettings.DeveloperCompaction = incomingSettings.DeveloperCompaction;
         }
 
-        if (settings.SystemPrompts.Count > 0)
+        if (incomingSettings.SystemPrompts.Count > 0)
         {
-            _settings.SystemPrompts = UpdatePromptFiles(settings.SystemPrompts);
+            currentSettings.SystemPrompts = UpdatePromptFiles(incomingSettings.SystemPrompts);
         }
 
-        SettingsFile fileSettings = BuildSettingsFile(_settings);
-        SaveSettingsFile(fileSettings);
+        SettingsFile updatedFile = BuildSettingsFile(currentSettings);
+        SaveSettingsFile(updatedFile);
 
-        return Task.FromResult(_settings);
+        return Task.FromResult(currentSettings);
     }
 
     public Task<LLMConfig?> AddLLMConfigAsync(LLMConfig config)
     {
-        _settings.LLMConfigs.Add(config);
-        SettingsFile fileSettings = BuildSettingsFile(_settings);
-        SaveSettingsFile(fileSettings);
+        SettingsFile settingsFile = LoadSettingsFile();
+        Settings settings = BuildSettings(settingsFile);
+        settings.LLMConfigs.Add(config);
+
+        SettingsFile updatedFile = BuildSettingsFile(settings);
+        SaveSettingsFile(updatedFile);
 
         return Task.FromResult<LLMConfig?>(config);
     }
 
     public Task<bool> RemoveLLMConfigAsync(string id)
     {
+        SettingsFile settingsFile = LoadSettingsFile();
+        Settings settings = BuildSettings(settingsFile);
+
         LLMConfig? config = null;
-        foreach (LLMConfig candidate in _settings.LLMConfigs)
+        foreach (LLMConfig candidate in settings.LLMConfigs)
         {
             if (string.Equals(candidate.Id, id, StringComparison.Ordinal))
             {
@@ -107,9 +113,9 @@ public class SettingsService : ISettingsService
             return Task.FromResult(false);
         }
 
-        _settings.LLMConfigs.Remove(config);
-        SettingsFile fileSettings = BuildSettingsFile(_settings);
-        SaveSettingsFile(fileSettings);
+        settings.LLMConfigs.Remove(config);
+        SettingsFile updatedFile = BuildSettingsFile(settings);
+        SaveSettingsFile(updatedFile);
 
         return Task.FromResult(true);
     }
