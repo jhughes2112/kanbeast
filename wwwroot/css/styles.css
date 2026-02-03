@@ -696,6 +696,64 @@ nav {
     color: white;
 }
 
+/* Accordions */
+.accordion {
+    margin-bottom: 0.75rem;
+    border: 1px solid var(--gray-200);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.accordion-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.875rem 1rem;
+    background: var(--gray-100);
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--gray-700);
+    transition: background 0.2s ease;
+}
+
+.accordion-header:hover {
+    background: var(--gray-200);
+}
+
+.accordion-icon {
+    font-size: 0.75rem;
+    transition: transform 0.2s ease;
+}
+
+.accordion.collapsed .accordion-icon {
+    transform: rotate(-90deg);
+}
+
+.accordion-content {
+    padding: 1rem;
+    background: var(--gray-50);
+    border-top: 1px solid var(--gray-200);
+}
+
+.accordion.collapsed .accordion-content {
+    display: none;
+}
+
+/* LLM Config Cards in Accordion */
+.llm-config {
+    margin-bottom: 0.75rem;
+}
+
+.llm-config .accordion-header {
+    background: var(--gray-200);
+    padding: 0.625rem 0.875rem;
+    font-size: 0.875rem;
+}
+
+.llm-config .accordion-content {
+    padding: 0.875rem;
+}
+
 @media (max-width: 1400px) {
     #kanbanBoard {
         grid-template-columns: repeat(2, 1fr);

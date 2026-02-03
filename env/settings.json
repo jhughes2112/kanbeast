@@ -1,26 +1,34 @@
 {
-  "LLMConfigs": [
+  "llmConfigs": [
     {
-      "ApiKey": "YOUR_API_KEY_HERE",
-      "Model": "gpt-4o",
-      "Endpoint": null
+      "id": "",
+      "apiKey": "sk-YOUR_API_KEY_HERE",
+      "model": "gpt-5.2",
+      "endpoint": "https://api.openai.com/v1",
+      "contextLength": 128000
     }
   ],
-  "GitConfig": {
-    "RepositoryUrl": "",
-    "Username": "",
-    "Email": ""
+  "gitConfig": {
+    "repositoryUrl": "",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\\n...your-ssh-key-here...\\n-----END OPENSSH PRIVATE KEY-----",
+    "password": null,
+    "apiToken": null,
+    "username": "",
+    "email": ""
   },
-  "LlmRetryCount": 3,
-  "LlmRetryDelaySeconds": 5,
-  "ManagerCompaction": {
-    "Type": "none",
-    "ContextSizeThreshold": 0,
-    "SummarizerConfigIndex": 0
+  "llmRetryCount": 3,
+  "llmRetryDelaySeconds": 5,
+  "managerCompaction": {
+    "type": "disabled",
+    "contextSizeThreshold": 100000
   },
-  "DeveloperCompaction": {
-    "Type": "none",
-    "ContextSizeThreshold": 0,
-    "SummarizerConfigIndex": 0
+  "developerCompaction": {
+    "type": "disabled",
+    "contextSizeThreshold": 100000
+  },
+  "webSearch": {
+    "provider": "duckduckgo",
+    "googleApiKey": null,
+    "googleSearchEngineId": null
   }
 }

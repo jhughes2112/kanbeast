@@ -684,6 +684,8 @@ function showSettings() {
         document.getElementById('gitUsername').value = settings.gitConfig.username || '';
         document.getElementById('gitEmail').value = settings.gitConfig.email || '';
         document.getElementById('gitSshKey').value = settings.gitConfig.sshKey || '';
+        document.getElementById('gitApiToken').value = settings.gitConfig.apiToken || '';
+        document.getElementById('gitPassword').value = settings.gitConfig.password || '';
     }
 
     // Populate compaction settings
@@ -698,7 +700,22 @@ function showSettings() {
     // Populate LLM configs
     renderLLMConfigs();
 
+    // Setup accordion handlers
+    setupAccordions();
+
     modal.classList.add('active');
+}
+
+function setupAccordions() {
+    document.querySelectorAll('.accordion-header').forEach(header => {
+        header.removeEventListener('click', toggleAccordion);
+        header.addEventListener('click', toggleAccordion);
+    });
+}
+
+function toggleAccordion(e) {
+    const accordion = e.currentTarget.closest('.accordion');
+    accordion.classList.toggle('collapsed');
 }
 
 function updateCompactionVisibility() {
@@ -721,28 +738,36 @@ function renderLLMConfigs() {
 
     llmConfigs.forEach((config, index) => {
         const configEl = document.createElement('div');
-        configEl.className = 'llm-config';
+        configEl.className = 'llm-config accordion';
+        const modelName = config.model || `LLM ${index + 1}`;
         configEl.innerHTML = `
-            <button type="button" class="btn-danger btn-sm remove-btn" data-index="${index}">Remove</button>
-            <div class="form-group">
-                <label>Model</label>
-                <input type="text" class="llm-model" value="${escapeHtml(config.model || '')}" placeholder="gpt-4o">
+            <div class="accordion-header">
+                <span>🧠 ${escapeHtml(modelName)}</span>
+                <span class="accordion-icon">▼</span>
             </div>
-            <div class="form-group">
-                <label>API Key</label>
-                <input type="password" class="llm-apikey" value="${escapeHtml(config.apiKey || '')}" placeholder="sk-...">
-            </div>
-            <div class="form-group">
-                <label>Endpoint (optional, for Azure)</label>
-                <input type="text" class="llm-endpoint" value="${escapeHtml(config.endpoint || '')}" placeholder="https://...">
-            </div>
-            <div class="form-group">
-                <label>Context Length</label>
-                <input type="number" class="llm-context-length" value="${config.contextLength || 128000}" min="1000" step="1000" placeholder="128000">
+            <div class="accordion-content">
+                <div class="form-group">
+                    <label>Model</label>
+                    <input type="text" class="llm-model" value="${escapeHtml(config.model || '')}" placeholder="gpt-4o">
+                </div>
+                <div class="form-group">
+                    <label>API Key</label>
+                    <input type="password" class="llm-apikey" value="${escapeHtml(config.apiKey || '')}" placeholder="sk-...">
+                </div>
+                <div class="form-group">
+                    <label>Endpoint (optional, for Azure/custom)</label>
+                    <input type="text" class="llm-endpoint" value="${escapeHtml(config.endpoint || '')}" placeholder="https://...">
+                </div>
+                <div class="form-group">
+                    <label>Context Length</label>
+                    <input type="number" class="llm-context-length" value="${config.contextLength || 128000}" min="1000" step="1000" placeholder="128000">
+                </div>
+                <button type="button" class="btn-danger btn-sm" data-index="${index}" style="width: 100%;">Remove This LLM</button>
             </div>
         `;
 
-        configEl.querySelector('.remove-btn').addEventListener('click', () => removeLLMConfig(index));
+        configEl.querySelector('.btn-danger').addEventListener('click', () => removeLLMConfig(index));
+        configEl.querySelector('.accordion-header').addEventListener('click', toggleAccordion);
         container.appendChild(configEl);
     });
 }
@@ -783,15 +808,22 @@ function collectLLMConfigs() {
 }
 
 async function handleSaveSettings(e) {
-    e.preventDefault();
+    if (e) {
+        e.preventDefault();
+    }
+    await saveSettings();
+}
 
+async function saveSettings() {
     const updatedSettings = {
         llmConfigs: collectLLMConfigs(),
         gitConfig: {
             repositoryUrl: document.getElementById('gitUrl').value,
             username: document.getElementById('gitUsername').value,
             email: document.getElementById('gitEmail').value,
-            sshKey: document.getElementById('gitSshKey').value || null
+            sshKey: document.getElementById('gitSshKey').value || null,
+            apiToken: document.getElementById('gitApiToken').value || null,
+            password: document.getElementById('gitPassword').value || null
         },
         managerCompaction: {
             type: document.getElementById('managerCompactionType').value,
@@ -822,6 +854,9 @@ async function handleSaveSettings(e) {
         alert('Error saving settings. Please check the console for details.');
     }
 }
+
+// Make saveSettings available globally for onclick
+window.saveSettings = saveSettings;
 
 // Utility functions
 function escapeHtml(text) {
