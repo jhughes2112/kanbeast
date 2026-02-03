@@ -107,6 +107,8 @@ public class GitService : IGitService
     {
         try
         {
+            Console.WriteLine($"SSH key from settings: {sshKeyContent.Length} chars");
+
             // Create .ssh directory if needed
             string sshDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
             if (!Directory.Exists(sshDir))
@@ -123,14 +125,31 @@ public class GitService : IGitService
             // Write the key to a file
             string keyPath = Path.Combine(sshDir, "id_rsa");
 
-            // Normalize line endings and ensure proper format
-            string normalizedKey = sshKeyContent.Replace("\\n", "\n").Trim();
+            // Normalize line endings to Unix (LF only) and ensure proper format
+            string normalizedKey = sshKeyContent
+                .Replace("\\n", "\n")
+                .Replace("\r\n", "\n")
+                .Replace("\r", "\n")
+                .Trim();
             if (!normalizedKey.EndsWith("\n"))
             {
                 normalizedKey += "\n";
             }
 
-            File.WriteAllText(keyPath, normalizedKey);
+            Console.WriteLine($"SSH key after normalization: {normalizedKey.Length} chars");
+            Console.WriteLine($"SSH key starts with: {normalizedKey.Substring(0, Math.Min(50, normalizedKey.Length))}...");
+            Console.WriteLine($"SSH key ends with: ...{normalizedKey.Substring(Math.Max(0, normalizedKey.Length - 50))}");
+
+            // Write with explicit Unix line endings
+            using (StreamWriter writer = new StreamWriter(keyPath, false, new System.Text.UTF8Encoding(false)))
+            {
+                writer.NewLine = "\n";
+                writer.Write(normalizedKey);
+            }
+
+            // Verify what was written
+            string written = File.ReadAllText(keyPath);
+            Console.WriteLine($"Written to file: {written.Length} chars");
 
             // Set permissions to 600 on Linux
             if (!OperatingSystem.IsWindows())
@@ -141,7 +160,13 @@ public class GitService : IGitService
             // Create SSH config to disable host key checking globally
             string configPath = Path.Combine(sshDir, "config");
             string sshConfig = "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_rsa\n";
-            File.WriteAllText(configPath, sshConfig);
+
+            // Write config with explicit Unix line endings
+            using (StreamWriter writer = new StreamWriter(configPath, false, new System.Text.UTF8Encoding(false)))
+            {
+                writer.NewLine = "\n";
+                writer.Write(sshConfig);
+            }
 
             if (!OperatingSystem.IsWindows())
             {
