@@ -34,35 +34,41 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
     public async Task<string> StartWorkerAsync(string ticketId)
     {
+        _logger.LogInformation("StartWorkerAsync called for ticket #{TicketId}", ticketId);
+
         Ticket? ticket = await _ticketService.GetTicketAsync(ticketId);
         if (ticket == null)
         {
+            _logger.LogError("Ticket #{TicketId} not found", ticketId);
             throw new InvalidOperationException($"Ticket {ticketId} not found");
         }
 
         if (!_containerContext.IsRunningInDocker)
         {
+            _logger.LogError("Cannot start workers - not running in Docker");
             throw new InvalidOperationException("Cannot start workers when not running in Docker");
         }
 
         if (_containerContext.Image == null)
         {
+            _logger.LogError("Cannot start workers - container image not determined");
             throw new InvalidOperationException("Container image could not be determined");
         }
 
         string workerId = $"ticket-{ticketId}";
+        string containerName = $"kanbeast-worker-{ticketId}";
+
+        _logger.LogInformation("Creating worker container: {ContainerName} from image {Image}", containerName, _containerContext.Image);
 
         await EnsureDockerNetworkAsync();
 
-        string containerName = $"kanbeast-worker-{ticketId}";
         Dictionary<string, string> envVars = BuildWorkerEnvironment(ticketId);
-
-        _logger.LogInformation("Starting worker {WorkerId} for ticket {TicketId}", workerId, ticketId);
 
         List<string> envList = new List<string>();
         foreach ((string key, string value) in envVars)
         {
             envList.Add($"{key}={value}");
+            _logger.LogInformation("  ENV: {Key}={Value}", key, value);
         }
 
         CreateContainerParameters createParams = new CreateContainerParameters
@@ -79,10 +85,14 @@ public class WorkerOrchestrator : IWorkerOrchestrator
             }
         };
 
+        _logger.LogInformation("Creating container...");
         CreateContainerResponse response = await _dockerClient.Containers.CreateContainerAsync(createParams);
         string containerId = response.ID;
+        _logger.LogInformation("Container created: {ContainerId}", containerId);
 
+        _logger.LogInformation("Starting container...");
         await _dockerClient.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
+        _logger.LogInformation("Container started successfully");
 
         // Update ticket with worker ID
         ticket.WorkerId = workerId;

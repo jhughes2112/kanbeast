@@ -24,6 +24,8 @@ catch (Exception ex)
 {
     Console.WriteLine($"Configuration error: {ex.Message}");
     Console.WriteLine("Usage: KanBeast.Worker --ticket-id <id> --server-url <url> [options]");
+    Console.WriteLine("Sleeping 100 seconds before exit to allow log inspection...");
+    await Task.Delay(TimeSpan.FromSeconds(100));
     return 1;
 }
 
@@ -143,6 +145,8 @@ catch (Exception ex)
 {
     Console.WriteLine($"Worker failed: {ex.Message}");
     Console.WriteLine(ex.StackTrace);
+    Console.WriteLine("Sleeping 100 seconds before exit to allow log inspection...");
+    await Task.Delay(TimeSpan.FromSeconds(100));
     return 1;
 }
 
