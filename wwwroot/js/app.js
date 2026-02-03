@@ -209,7 +209,10 @@ function createTicketElement(ticket) {
 
     ticketEl.innerHTML = `
         <div class="ticket-status-indicator"></div>
-        <div class="ticket-title">${escapeHtml(ticket.title)}</div>
+        <div class="ticket-header">
+            <div class="ticket-title">${escapeHtml(ticket.title)}</div>
+            <div class="ticket-id">#${ticket.id}</div>
+        </div>
         <div class="ticket-description">${escapeHtml(ticket.description || '')}</div>
         <div class="ticket-footer">
             <div class="ticket-meta">
@@ -366,6 +369,7 @@ async function showTicketDetails(ticketId) {
 
     detailDiv.innerHTML = `
         <div class="ticket-detail-header">
+            <span class="ticket-detail-id">#${ticket.id}</span>
             <span class="status-badge ${status.toLowerCase()}">${status}</span>
             ${ticket.branchName ? `<span style="color: var(--gray-500); font-size: 0.875rem;">🌿 ${escapeHtml(ticket.branchName)}</span>` : ''}
         </div>

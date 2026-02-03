@@ -50,11 +50,11 @@ public class WorkerOrchestrator : IWorkerOrchestrator
             throw new InvalidOperationException("Container image could not be determined");
         }
 
-        string workerId = Guid.NewGuid().ToString();
+        string workerId = $"ticket-{ticketId}";
 
         await EnsureDockerNetworkAsync();
 
-        string containerName = $"kanbeast-worker-{workerId}";
+        string containerName = $"kanbeast-worker-{ticketId}";
         Dictionary<string, string> envVars = BuildWorkerEnvironment(ticketId);
 
         _logger.LogInformation("Starting worker {WorkerId} for ticket {TicketId}", workerId, ticketId);
@@ -70,11 +70,12 @@ public class WorkerOrchestrator : IWorkerOrchestrator
             Image = _containerContext.Image,
             Name = containerName,
             Env = envList,
-            Cmd = new List<string> { "dotnet", "/app/worker/KanBeast.Worker.dll" },
+            Entrypoint = new List<string> { "dotnet", "/app/worker/KanBeast.Worker.dll" },
             HostConfig = new HostConfig
             {
                 NetworkMode = _containerContext.Network,
-                Mounts = _containerContext.Mounts
+                Mounts = _containerContext.Mounts,
+                AutoRemove = true
             }
         };
 
@@ -102,8 +103,14 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
         _logger.LogInformation("Stopping worker {WorkerId}", workerId);
 
-        await _dockerClient.Containers.StopContainerAsync(containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 10 });
-        await _dockerClient.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true });
+        try
+        {
+            await _dockerClient.Containers.StopContainerAsync(containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 10 });
+        }
+        catch (DockerContainerNotFoundException)
+        {
+            _logger.LogInformation("Worker container {WorkerId} already removed", workerId);
+        }
 
         _activeWorkers.Remove(workerId);
         return true;
