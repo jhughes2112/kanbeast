@@ -34,8 +34,17 @@ public class ContainerContext
 
         logger.LogInformation("Detected container ID: {ContainerId}", ContainerId);
 
-        using DockerClient client = new DockerClientConfiguration().CreateClient();
-        ContainerInspectResponse inspection = await client.Containers.InspectContainerAsync(ContainerId);
+        ContainerInspectResponse? inspection = null;
+        try
+        {
+            using DockerClient client = new DockerClientConfiguration().CreateClient();
+            inspection = await client.Containers.InspectContainerAsync(ContainerId);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Unable to inspect container (Docker socket may not be mounted): {Message}", ex.Message);
+            return;
+        }
 
         // Extract container name (remove leading slash)
         ContainerName = inspection.Name;

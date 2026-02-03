@@ -21,4 +21,5 @@ docker run --rm -it ^
   -e ASPNETCORE_ENVIRONMENT=Production ^
   -e ASPNETCORE_URLS=http://+:8080 ^
   -v "%cd%"/env:/app/env ^
+  -v //var/run/docker.sock:/var/run/docker.sock ^
   %IMAGE_NAME%

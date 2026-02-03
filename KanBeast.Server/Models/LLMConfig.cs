@@ -36,8 +36,8 @@ public class SettingsFile
 {
     public List<LLMConfig> LLMConfigs { get; set; } = new();
     public GitConfig GitConfig { get; set; } = new();
-    public int LlmRetryCount { get; set; }
-    public int LlmRetryDelaySeconds { get; set; }
+    public int LlmRetryCount { get; set; } = 3;
+    public int LlmRetryDelaySeconds { get; set; } = 5;
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
 }
@@ -45,9 +45,9 @@ public class SettingsFile
 // Configures compaction behavior for agent context handling.
 public class CompactionSettings
 {
-    public string Type { get; set; } = string.Empty;
-    public int ContextSizeThreshold { get; set; }
-    public int SummarizerConfigIndex { get; set; }
+    public string Type { get; set; } = "summarize";
+    public int ContextSizeThreshold { get; set; } = 100000;
+    public int SummarizerConfigIndex { get; set; } = 0;
 }
 
 // Aggregates runtime settings for the API and UI.
@@ -55,8 +55,8 @@ public class Settings
 {
     public List<LLMConfig> LLMConfigs { get; set; } = new();
     public GitConfig GitConfig { get; set; } = new();
-    public int LlmRetryCount { get; set; }
-    public int LlmRetryDelaySeconds { get; set; }
+    public int LlmRetryCount { get; set; } = 3;
+    public int LlmRetryDelaySeconds { get; set; } = 5;
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
     public List<PromptTemplate> SystemPrompts { get; set; } = new();

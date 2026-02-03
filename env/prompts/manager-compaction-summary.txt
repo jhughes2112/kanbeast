@@ -1,0 +1,10 @@
+Write a continuation summary for the manager agent.
+
+Include:
+1) Task overview and success criteria.
+2) Completed work and verified outcomes.
+3) Open issues, risks, or blockers.
+4) Next steps in priority order.
+5) Key context that must be preserved.
+
+Keep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags.
