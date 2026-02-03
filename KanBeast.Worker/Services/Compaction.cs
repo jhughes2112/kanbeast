@@ -27,18 +27,15 @@ public class CompactionSummarizer : ICompaction
 
     private readonly LlmService _summarizerService;
     private readonly Kernel _kernel;
-    private readonly string _summaryPrompt;
-    private readonly string _summarySystemPrompt;
+    private readonly string _compactionPrompt;
     private readonly int _effectiveThreshold;
 
-    public CompactionSummarizer(LlmService summarizerService, Kernel kernel, string summaryPrompt, string summarySystemPrompt, int contextSizeThreshold, int llmContextLength)
+    public CompactionSummarizer(LlmService summarizerService, Kernel kernel, string compactionPrompt, int contextSizeThreshold, int llmContextLength)
     {
         _summarizerService = summarizerService;
         _kernel = kernel;
-        _summaryPrompt = summaryPrompt;
-        _summarySystemPrompt = summarySystemPrompt;
+        _compactionPrompt = compactionPrompt;
 
-        // Compute effective threshold as lower of 90% of LLM context or configured threshold
         int llmLimit = (int)(llmContextLength * 0.9);
         if (contextSizeThreshold > 0)
         {
@@ -58,8 +55,8 @@ public class CompactionSummarizer : ICompaction
 
         if (contextSize > _effectiveThreshold)
         {
-            string userPrompt = $"{_summaryPrompt}\n\nContext:\n{contextBlock}";
-            string summary = await _summarizerService.RunAsync(_kernel, _summarySystemPrompt, userPrompt, cancellationToken);
+            string userPrompt = $"{_compactionPrompt}\n\nContext:\n{contextBlock}";
+            string summary = await _summarizerService.RunAsync(_kernel, string.Empty, userPrompt, cancellationToken);
             List<string> summaryList = new List<string>();
             summaryList.Add(summary);
             compactedStatements = summaryList;

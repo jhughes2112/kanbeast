@@ -46,13 +46,11 @@ try
     ICompaction managerCompaction = BuildCompaction(
         config.ManagerCompaction,
         config.LLMConfigs,
-        config.GetPrompt("manager-compaction-summary"),
-        config.GetPrompt("manager-compaction-system"));
+        config.GetPrompt("manager-compaction"));
     ICompaction developerCompaction = BuildCompaction(
         config.DeveloperCompaction,
         config.LLMConfigs,
-        config.GetPrompt("developer-compaction-summary"),
-        config.GetPrompt("developer-compaction-system"));
+        config.GetPrompt("developer-compaction"));
     ILlmService managerLlmService = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, managerCompaction);
     ILlmService developerLlmService = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, developerCompaction);
 
@@ -141,10 +139,8 @@ static WorkerConfig BuildConfiguration(WorkerOptions options)
         ["developer-implementation"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-implementation"),
         ["developer-testing"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-testing"),
         ["developer-write-tests"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-write-tests"),
-        ["manager-compaction-summary"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-compaction-summary"),
-        ["manager-compaction-system"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-compaction-system"),
-        ["developer-compaction-summary"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-compaction-summary"),
-        ["developer-compaction-system"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-compaction-system")
+        ["manager-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-compaction-summary"),
+        ["developer-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-compaction-summary")
     };
 
     WorkerConfig config = new WorkerConfig
@@ -220,7 +216,7 @@ static string ResolvePromptDirectory(string promptDirectory)
     return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, promptDirectory));
 }
 
-static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> llmConfigs, string summaryPrompt, string summarySystemPrompt)
+static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> llmConfigs, string compactionPrompt)
 {
     ICompaction compaction = new CompactionNone();
 
@@ -232,8 +228,7 @@ static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> 
         compaction = new CompactionSummarizer(
             summarizerService,
             summarizerKernel,
-            summaryPrompt,
-            summarySystemPrompt,
+            compactionPrompt,
             settings.ContextSizeThreshold,
             currentLlm.ContextLength);
     }

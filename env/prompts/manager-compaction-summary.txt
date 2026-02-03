@@ -1,10 +1,19 @@
-Write a continuation summary for the manager agent.
+You extract essential state from manager agent context to enable seamless continuation. Be factual - do not invent.
 
-Include:
-1) Task overview and success criteria.
-2) Completed work and verified outcomes.
-3) Open issues, risks, or blockers.
-4) Next steps in priority order.
-5) Key context that must be preserved.
+Extract the manager's current state from the context below:
 
-Keep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags.
+<summary>
+TICKET: [title]
+PHASE: [Breakdown|Assign|Verify|Finalize]
+CURRENT_SUBTASK: [name if in progress, or "none"]
+
+SUBTASKS:
+- [name]: [Complete|InProgress|Incomplete|Rejected]
+
+LAST_ACTION: [what was just done]
+NEXT_ACTION: [what should happen next]
+
+BLOCKERS: [any issues, or "none"]
+</summary>
+
+Only include sections you can populate from the context.

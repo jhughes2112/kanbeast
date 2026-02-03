@@ -7,8 +7,11 @@ using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Services.Tools;
 
+// Tools for fetching web pages and searching the web.
 public class WebTools
 {
+    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+
     private readonly HttpClient _httpClient;
     private readonly string _searchProvider;
     private readonly string? _googleApiKey;
@@ -23,40 +26,65 @@ public class WebTools
     }
 
     [KernelFunction("get_web_page")]
-    [Description("Fetch the contents of a web page at the specified URL. Returns the text content with HTML tags stripped. Useful for reading documentation, references, or any publicly accessible web page.")]
+    [Description("Fetch the contents of a web page at the specified URL. Returns the text content with HTML tags stripped.")]
     public async Task<string> GetWebPageAsync(string url)
     {
         if (string.IsNullOrWhiteSpace(url))
         {
-            throw new ArgumentException("URL cannot be empty.");
+            return "Error: URL cannot be empty.";
         }
 
         if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
         {
-            throw new ArgumentException($"Invalid URL: {url}");
+            return $"Error: Invalid URL format: {url}";
         }
 
-        HttpResponseMessage response = await _httpClient.GetAsync(uri);
-        response.EnsureSuccessStatusCode();
-
-        string html = await response.Content.ReadAsStringAsync();
-        string text = StripHtmlTags(html);
-
-        if (text.Length > 50000)
+        try
         {
-            text = text.Substring(0, 50000) + "\n\n[Content truncated at 50000 characters]";
-        }
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            HttpResponseMessage response = await _httpClient.GetAsync(uri, cts.Token);
 
-        return text;
+            if (!response.IsSuccessStatusCode)
+            {
+                return $"Error: HTTP {(int)response.StatusCode} {response.ReasonPhrase} for URL: {url}";
+            }
+
+            string html = await response.Content.ReadAsStringAsync(cts.Token);
+            string text = StripHtmlTags(html);
+
+            if (text.Length > 50000)
+            {
+                text = text.Substring(0, 50000) + "\n\n[Content truncated at 50000 characters]";
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return $"Error: No readable text content found at URL: {url}";
+            }
+
+            return text;
+        }
+        catch (TaskCanceledException)
+        {
+            return $"Error: Request timed out after {DefaultTimeout.TotalSeconds} seconds for URL: {url}";
+        }
+        catch (HttpRequestException ex)
+        {
+            return $"Error: Network error fetching URL {url}: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to fetch URL {url}: {ex.Message}";
+        }
     }
 
     [KernelFunction("search_web")]
-    [Description("Search the web for information. Returns a list of search results with titles, URLs, and snippets. Uses DuckDuckGo by default (no API key required) or Google if configured.")]
+    [Description("Search the web for information. Returns a list of search results with titles, URLs, and snippets.")]
     public async Task<string> SearchWebAsync(string query, int maxResults)
     {
         if (string.IsNullOrWhiteSpace(query))
         {
-            throw new ArgumentException("Search query cannot be empty.");
+            return "Error: Search query cannot be empty.";
         }
 
         if (maxResults <= 0)
@@ -69,15 +97,30 @@ public class WebTools
             maxResults = 20;
         }
 
-        if (string.Equals(_searchProvider, "google", StringComparison.OrdinalIgnoreCase) &&
-            !string.IsNullOrEmpty(_googleApiKey) &&
-            !string.IsNullOrEmpty(_googleSearchEngineId))
+        try
         {
-            return await SearchGoogleAsync(query, maxResults);
+            if (string.Equals(_searchProvider, "google", StringComparison.OrdinalIgnoreCase) &&
+                !string.IsNullOrEmpty(_googleApiKey) &&
+                !string.IsNullOrEmpty(_googleSearchEngineId))
+            {
+                return await SearchGoogleAsync(query, maxResults);
+            }
+            else
+            {
+                return await SearchDuckDuckGoAsync(query, maxResults);
+            }
         }
-        else
+        catch (TaskCanceledException)
         {
-            return await SearchDuckDuckGoAsync(query, maxResults);
+            return $"Error: Search request timed out after {DefaultTimeout.TotalSeconds} seconds for query: {query}";
+        }
+        catch (HttpRequestException ex)
+        {
+            return $"Error: Network error during search: {ex.Message}";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Search failed: {ex.Message}";
         }
     }
 
@@ -89,12 +132,22 @@ public class WebTools
         HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-        HttpResponseMessage response = await _httpClient.SendAsync(request);
-        response.EnsureSuccessStatusCode();
+        using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+        HttpResponseMessage response = await _httpClient.SendAsync(request, cts.Token);
 
-        string html = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            return $"Error: DuckDuckGo returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
+        }
 
+        string html = await response.Content.ReadAsStringAsync(cts.Token);
         List<SearchResult> results = ParseDuckDuckGoResults(html, maxResults);
+
+        if (results.Count == 0)
+        {
+            return $"No search results found for: {query}";
+        }
+
         return FormatSearchResults(results);
     }
 
@@ -103,11 +156,22 @@ public class WebTools
         string encodedQuery = WebUtility.UrlEncode(query);
         string url = $"https://www.googleapis.com/customsearch/v1?key={_googleApiKey}&cx={_googleSearchEngineId}&q={encodedQuery}&num={maxResults}";
 
-        HttpResponseMessage response = await _httpClient.GetAsync(url);
-        response.EnsureSuccessStatusCode();
+        using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+        HttpResponseMessage response = await _httpClient.GetAsync(url, cts.Token);
 
-        string json = await response.Content.ReadAsStringAsync();
+        if (!response.IsSuccessStatusCode)
+        {
+            return $"Error: Google API returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
+        }
+
+        string json = await response.Content.ReadAsStringAsync(cts.Token);
         List<SearchResult> results = ParseGoogleResults(json, maxResults);
+
+        if (results.Count == 0)
+        {
+            return $"No search results found for: {query}";
+        }
+
         return FormatSearchResults(results);
     }
 

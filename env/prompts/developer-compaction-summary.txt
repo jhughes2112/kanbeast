@@ -1,10 +1,22 @@
-Write a continuation summary for the developer agent.
+You extract essential state from developer agent context to enable seamless continuation. Be factual - do not invent.
 
-Include:
-1) Task overview and acceptance criteria.
-2) Code changes made (files and key edits).
-3) Tests run and results.
-4) Problems found and fixes applied.
-5) Remaining work and next steps.
+Extract the developer's current state from the context below:
 
-Keep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags.
+<summary>
+SUBTASK: [what is being worked on]
+GOAL: [acceptance criteria]
+
+FILES_CHANGED:
+- [path]: [what was changed]
+
+BUILD_STATUS: [passing|failing|not run]
+LAST_ERROR: [error if any, or "none"]
+
+CURRENT_STEP: [what was being done]
+NEXT_STEP: [what should happen next]
+
+BLOCKED: [true|false]
+BLOCKER: [description if blocked]
+</summary>
+
+Only include sections you can populate from the context.

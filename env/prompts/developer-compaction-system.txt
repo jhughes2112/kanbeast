@@ -1,1 +1,0 @@
-You summarize developer context so work can continue after compaction. Keep output concise, structured, and factual. Do not invent details.
