@@ -1,0 +1,26 @@
+{
+  "LLMConfigs": [
+    {
+      "ApiKey": "YOUR_API_KEY_HERE",
+      "Model": "gpt-4o",
+      "Endpoint": null
+    }
+  ],
+  "GitConfig": {
+    "RepositoryUrl": "",
+    "Username": "",
+    "Email": ""
+  },
+  "LlmRetryCount": 3,
+  "LlmRetryDelaySeconds": 5,
+  "ManagerCompaction": {
+    "Type": "none",
+    "ContextSizeThreshold": 0,
+    "SummarizerConfigIndex": 0
+  },
+  "DeveloperCompaction": {
+    "Type": "none",
+    "ContextSizeThreshold": 0,
+    "SummarizerConfigIndex": 0
+  }
+}

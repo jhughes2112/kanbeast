@@ -1,6 +1,4 @@
 <Solution>
-  <Folder Name="/src/">
-    <Project Path="src/KanBeast.Server/KanBeast.Server.csproj" />
-    <Project Path="src/KanBeast.Worker/KanBeast.Worker.csproj" />
-  </Folder>
+  <Project Path="KanBeast.Server/KanBeast.Server.csproj" />
+  <Project Path="KanBeast.Worker/KanBeast.Worker.csproj" />
 </Solution>

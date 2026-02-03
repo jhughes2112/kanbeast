@@ -63,7 +63,7 @@ try
     await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work");
 
     // Setup working directory
-    string workDir = Path.Combine(Path.GetTempPath(), $"kanbeast-{ticket.Id}");
+    string workDir = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "repo"));
     if (Directory.Exists(workDir))
     {
         Directory.Delete(workDir, true);
@@ -77,24 +77,21 @@ try
     {
         Console.WriteLine("Cloning repository...");
         await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Cloning repository");
-        
+
         try
         {
-            string repoDir = Path.Combine(workDir, "repo");
-            await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, repoDir);
-            await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, repoDir);
+            await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, workDir);
+            await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, workDir);
 
             // Create or checkout branch
             string branchName = ticket.BranchName ?? $"feature/ticket-{ticket.Id}";
             Console.WriteLine($"Branch: {branchName}");
-            await gitService.CreateOrCheckoutBranchAsync(branchName, repoDir);
-            
+            await gitService.CreateOrCheckoutBranchAsync(branchName, workDir);
+
             if (string.IsNullOrEmpty(ticket.BranchName))
             {
                 await apiClient.SetBranchNameAsync(ticket.Id, branchName);
             }
-
-            workDir = repoDir; // Update work directory to the repo
         }
         catch (Exception ex)
         {
@@ -151,14 +148,8 @@ catch (Exception ex)
 
 static WorkerConfig BuildConfiguration(WorkerOptions options)
 {
-    string? ticketId = options.TicketId ?? GetEnvValue("TICKET_ID");
-    string? serverUrl = options.ServerUrl ?? GetEnvValue("SERVER_URL") ?? "http://localhost:5000";
-
-    if (string.IsNullOrEmpty(ticketId))
-    {
-        Console.WriteLine("Error: Ticket ID is required. Provide via --ticket-id or TICKET_ID environment variable.");
-        throw new InvalidOperationException("Ticket ID is required.");
-    }
+    string ticketId = options.TicketId;
+    string serverUrl = options.ServerUrl;
 
     WorkerSettings settings = LoadWorkerSettings();
 
@@ -247,23 +238,14 @@ static WorkerSettings LoadWorkerSettings()
 static string ResolveSettingsPath()
 {
     string configFile = "env/settings.json";
-    string resolvedPath = Path.IsPathRooted(configFile)
-        ? configFile
-        : Path.Combine(AppContext.BaseDirectory, configFile);
+    string resolvedPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, configFile));
 
     return resolvedPath;
 }
 
-static string? GetEnvValue(string key)
-{
-    return Environment.GetEnvironmentVariable(key);
-}
-
 static string ResolvePromptDirectory(string promptDirectory)
 {
-    return Path.IsPathRooted(promptDirectory)
-        ? promptDirectory
-        : Path.Combine(AppContext.BaseDirectory, promptDirectory);
+    return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, promptDirectory));
 }
 
 static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> llmConfigs, string summaryPrompt, string summarySystemPrompt)
@@ -544,10 +526,9 @@ static List<PromptTemplate> GetDefaultPromptTemplates()
 // Captures supported command-line options for the worker process.
 class WorkerOptions
 {
-    [Option("ticket-id", HelpText = "Ticket id for the worker.")]
-    public string? TicketId { get; set; }
+    [Option("ticket-id", Required = true, HelpText = "Ticket id for the worker.")]
+    public required string TicketId { get; set; }
 
-    [Option("server-url", HelpText = "Server URL for the worker.")]
-    public string? ServerUrl { get; set; }
-
+    [Option("server-url", Required = true, HelpText = "Server URL for the worker.")]
+    public required string ServerUrl { get; set; }
 }
