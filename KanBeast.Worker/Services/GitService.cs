@@ -15,10 +15,210 @@ public interface IGitService
 
 public class GitService : IGitService
 {
+    private readonly string? _sshKeyPath;
+    private readonly string? _gitSshCommand;
+    private readonly GitConfig? _gitConfig;
+
+    public GitService()
+    {
+        _gitConfig = null;
+        _sshKeyPath = null;
+        _gitSshCommand = null;
+    }
+
+    public GitService(GitConfig gitConfig)
+    {
+        _gitConfig = gitConfig;
+
+        // If SSH key is provided in settings, write it to ~/.ssh and configure
+        if (!string.IsNullOrWhiteSpace(gitConfig.SshKey))
+        {
+            _sshKeyPath = SetupSshKey(gitConfig.SshKey);
+            if (_sshKeyPath != null)
+            {
+                _gitSshCommand = $"ssh -i {_sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null";
+                Console.WriteLine($"SSH key configured from settings");
+            }
+        }
+
+        // For HTTPS with credentials, configure git credential helper
+        if (!string.IsNullOrWhiteSpace(gitConfig.RepositoryUrl) &&
+            gitConfig.RepositoryUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            SetupHttpsCredentials(gitConfig);
+        }
+    }
+
+    private static void SetupHttpsCredentials(GitConfig gitConfig)
+    {
+        try
+        {
+            // Configure git to store credentials
+            ExecuteCommand("git", "config --global credential.helper store");
+
+            // Determine the credential to use
+            string? credential = null;
+            string? username = null;
+
+            if (!string.IsNullOrWhiteSpace(gitConfig.ApiToken))
+            {
+                username = "oauth2";
+                credential = gitConfig.ApiToken;
+                Console.WriteLine("Configuring git credentials with API token");
+            }
+            else if (!string.IsNullOrWhiteSpace(gitConfig.Password))
+            {
+                username = gitConfig.Username;
+                credential = gitConfig.Password;
+                Console.WriteLine("Configuring git credentials with username/password");
+            }
+
+            if (credential != null && username != null)
+            {
+                // Extract host from repo URL
+                Uri uri = new Uri(gitConfig.RepositoryUrl);
+                string host = uri.Host;
+
+                // Write credentials to ~/.git-credentials
+                string credentialsPath = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    ".git-credentials");
+
+                string credentialLine = $"https://{Uri.EscapeDataString(username)}:{Uri.EscapeDataString(credential)}@{host}\n";
+
+                // Append if file exists, otherwise create
+                File.AppendAllText(credentialsPath, credentialLine);
+
+                if (!OperatingSystem.IsWindows())
+                {
+                    ExecuteCommand("chmod", $"600 {credentialsPath}");
+                }
+
+                Console.WriteLine($"Git credentials stored for {host}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to setup HTTPS credentials: {ex.Message}");
+        }
+    }
+
+    private static string? SetupSshKey(string sshKeyContent)
+    {
+        try
+        {
+            // Create .ssh directory if needed
+            string sshDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".ssh");
+            if (!Directory.Exists(sshDir))
+            {
+                Directory.CreateDirectory(sshDir);
+
+                // Set permissions on .ssh directory
+                if (!OperatingSystem.IsWindows())
+                {
+                    ExecuteCommand("chmod", $"700 {sshDir}");
+                }
+            }
+
+            // Write the key to a file
+            string keyPath = Path.Combine(sshDir, "id_rsa");
+
+            // Normalize line endings and ensure proper format
+            string normalizedKey = sshKeyContent.Replace("\\n", "\n").Trim();
+            if (!normalizedKey.EndsWith("\n"))
+            {
+                normalizedKey += "\n";
+            }
+
+            File.WriteAllText(keyPath, normalizedKey);
+
+            // Set permissions to 600 on Linux
+            if (!OperatingSystem.IsWindows())
+            {
+                ExecuteCommand("chmod", $"600 {keyPath}");
+            }
+
+            // Create SSH config to disable host key checking globally
+            string configPath = Path.Combine(sshDir, "config");
+            string sshConfig = "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_rsa\n";
+            File.WriteAllText(configPath, sshConfig);
+
+            if (!OperatingSystem.IsWindows())
+            {
+                ExecuteCommand("chmod", $"600 {configPath}");
+            }
+
+            Console.WriteLine($"SSH key written to {keyPath}");
+            Console.WriteLine($"SSH config written to {configPath}");
+
+            return keyPath;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to setup SSH key: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static void ExecuteCommand(string command, string arguments)
+    {
+        Process process = new Process
+        {
+            StartInfo = new ProcessStartInfo
+            {
+                FileName = command,
+                Arguments = arguments,
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                RedirectStandardOutput = true,
+                RedirectStandardError = true
+            }
+        };
+        process.Start();
+        process.WaitForExit();
+    }
+
     public async Task<string> CloneRepositoryAsync(string repoUrl, string workDir)
     {
-        var result = await ExecuteGitCommandAsync($"clone {repoUrl} {workDir}", Directory.GetCurrentDirectory());
+        // For HTTPS URLs, inject credentials if available
+        string effectiveUrl = GetEffectiveUrl(repoUrl);
+        string result = await ExecuteGitCommandAsync($"clone {effectiveUrl} {workDir}", Directory.GetCurrentDirectory());
         return result;
+    }
+
+    private string GetEffectiveUrl(string repoUrl)
+    {
+        if (_gitConfig == null)
+        {
+            return repoUrl;
+        }
+
+        // Only modify HTTPS URLs
+        if (!repoUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+        {
+            return repoUrl;
+        }
+
+        // Try API token first (works with GitHub, GitLab, etc.)
+        if (!string.IsNullOrWhiteSpace(_gitConfig.ApiToken))
+        {
+            // Format: https://oauth2:TOKEN@github.com/user/repo.git
+            Uri uri = new Uri(repoUrl);
+            string authUrl = $"https://oauth2:{_gitConfig.ApiToken}@{uri.Host}{uri.PathAndQuery}";
+            Console.WriteLine($"Using API token for authentication");
+            return authUrl;
+        }
+
+        // Try username/password
+        if (!string.IsNullOrWhiteSpace(_gitConfig.Username) && !string.IsNullOrWhiteSpace(_gitConfig.Password))
+        {
+            Uri uri = new Uri(repoUrl);
+            string authUrl = $"https://{Uri.EscapeDataString(_gitConfig.Username)}:{Uri.EscapeDataString(_gitConfig.Password)}@{uri.Host}{uri.PathAndQuery}";
+            Console.WriteLine($"Using username/password for authentication");
+            return authUrl;
+        }
+
+        return repoUrl;
     }
 
     public async Task<string> CreateOrCheckoutBranchAsync(string branchName, string workDir)
@@ -76,7 +276,7 @@ public class GitService : IGitService
 
     private async Task<string> ExecuteGitCommandAsync(string command, string workDir)
     {
-        var process = new Process
+        Process process = new Process
         {
             StartInfo = new ProcessStartInfo
             {
@@ -90,9 +290,15 @@ public class GitService : IGitService
             }
         };
 
+        // Set GIT_SSH_COMMAND if we have an SSH key
+        if (_gitSshCommand != null)
+        {
+            process.StartInfo.EnvironmentVariables["GIT_SSH_COMMAND"] = _gitSshCommand;
+        }
+
         process.Start();
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var error = await process.StandardError.ReadToEndAsync();
+        string output = await process.StandardOutput.ReadToEndAsync();
+        string error = await process.StandardError.ReadToEndAsync();
         await process.WaitForExitAsync();
 
         if (process.ExitCode != 0)

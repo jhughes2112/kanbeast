@@ -35,7 +35,7 @@ try
 {
     // Initialize services
     KanbanApiClient apiClient = new KanbanApiClient(config.ServerUrl);
-    GitService gitService = new GitService();
+    GitService gitService = new GitService(config.GitConfig);
     ToolExecutor toolExecutor = new ToolExecutor();
     HashSet<int> downedLlmIndices = new HashSet<int>();
     ICompaction managerCompaction = BuildCompaction(

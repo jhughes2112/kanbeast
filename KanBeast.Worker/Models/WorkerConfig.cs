@@ -38,6 +38,8 @@ public class GitConfig
 {
     public required string RepositoryUrl { get; set; }
     public string? SshKey { get; set; }
+    public string? Password { get; set; }
+    public string? ApiToken { get; set; }
     public required string Username { get; set; }
     public required string Email { get; set; }
 }
