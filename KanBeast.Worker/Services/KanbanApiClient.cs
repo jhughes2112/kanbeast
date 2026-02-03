@@ -6,11 +6,12 @@ namespace KanBeast.Worker.Services;
 public interface IKanbanApiClient
 {
     Task<TicketDto?> GetTicketAsync(string ticketId);
-    Task UpdateTicketStatusAsync(string ticketId, string status);
-    Task AddTaskAsync(string ticketId, KanbanTaskDto task);
-    Task UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
+    Task<TicketDto?> UpdateTicketStatusAsync(string ticketId, string status);
+    Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task);
+    Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
+    Task<TicketDto?> UpdateSubtaskRejectionAsync(string ticketId, string taskId, string subtaskId, string reason);
     Task AddActivityLogAsync(string ticketId, string message);
-    Task SetBranchNameAsync(string ticketId, string branchName);
+    Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName);
 }
 
 public class KanbanApiClient : IKanbanApiClient
@@ -27,19 +28,44 @@ public class KanbanApiClient : IKanbanApiClient
         return await _httpClient.GetFromJsonAsync<TicketDto>($"/api/tickets/{ticketId}");
     }
 
-    public async Task UpdateTicketStatusAsync(string ticketId, string status)
+    public async Task<TicketDto?> UpdateTicketStatusAsync(string ticketId, string status)
     {
-        await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/status", new { status });
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/status", new { status });
+        if (response.IsSuccessStatusCode)
+        {
+            return await response.Content.ReadFromJsonAsync<TicketDto>();
+        }
+        return null;
     }
 
-    public async Task AddTaskAsync(string ticketId, KanbanTaskDto task)
+    public async Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task)
     {
-        await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks", task);
+        HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks", task);
+        if (response.IsSuccessStatusCode)
+        {
+            return await response.Content.ReadFromJsonAsync<TicketDto>();
+        }
+        return null;
     }
 
-    public async Task UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
+    public async Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
     {
-        await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{taskId}/subtasks/{subtaskId}", new { status });
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{taskId}/subtasks/{subtaskId}", new { status });
+        if (response.IsSuccessStatusCode)
+        {
+            return await response.Content.ReadFromJsonAsync<TicketDto>();
+        }
+        return null;
+    }
+
+    public async Task<TicketDto?> UpdateSubtaskRejectionAsync(string ticketId, string taskId, string subtaskId, string reason)
+    {
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{taskId}/subtasks/{subtaskId}/rejection", new { reason });
+        if (response.IsSuccessStatusCode)
+        {
+            return await response.Content.ReadFromJsonAsync<TicketDto>();
+        }
+        return null;
     }
 
     public async Task AddActivityLogAsync(string ticketId, string message)
@@ -47,8 +73,13 @@ public class KanbanApiClient : IKanbanApiClient
         await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/activity", new { message });
     }
 
-    public async Task SetBranchNameAsync(string ticketId, string branchName)
+    public async Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName)
     {
-        await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/branch", new { branchName });
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/branch", new { branchName });
+        if (response.IsSuccessStatusCode)
+        {
+            return await response.Content.ReadFromJsonAsync<TicketDto>();
+        }
+        return null;
     }
 }

@@ -34,6 +34,21 @@ public class KanbanSubtaskDto
     public List<string> Constraints { get; set; } = new List<string>();
 }
 
+// For creating new tasks/subtasks (without server-assigned fields)
+public class KanbanTask
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public List<KanbanSubtask> Subtasks { get; set; } = new List<KanbanSubtask>();
+}
+
+public class KanbanSubtask
+{
+    public string Id { get; set; } = string.Empty;
+    public string Name { get; set; } = string.Empty;
+    public SubtaskStatus Status { get; set; } = SubtaskStatus.Incomplete;
+}
+
 public enum SubtaskStatus
 {
     Incomplete,

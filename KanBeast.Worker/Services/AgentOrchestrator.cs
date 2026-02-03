@@ -1,413 +1,134 @@
-using System.Text;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services.Tools;
+using Microsoft.Extensions.Logging;
 using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Services;
 
-// Orchestrates the manager-developer agent loop
+// Phases the orchestrator transitions through when processing a ticket.
+public enum OrchestratorPhase
+{
+    Breakdown,
+    Assign,
+    Develop,
+    Verify,
+    Finalize,
+    Complete,
+    Blocked
+}
+
+// Orchestrates the manager and developer LLMs to complete a ticket.
 public interface IAgentOrchestrator
 {
     Task RunAsync(TicketDto ticket, string workDir, CancellationToken cancellationToken);
 }
 
+// Coordinates LLM-driven phases: breakdown, assign, develop, verify, finalize.
 public class AgentOrchestrator : IAgentOrchestrator
 {
+    private readonly ILogger<AgentOrchestrator> _logger;
     private readonly IKanbanApiClient _apiClient;
     private readonly ILlmService _managerLlmService;
     private readonly ILlmService _developerLlmService;
     private readonly IToolExecutor _toolExecutor;
-    private readonly IGitService _gitService;
     private readonly string _managerPrompt;
     private readonly string _developerImplementationPrompt;
-    private readonly string _developerTestingPrompt;
-    private readonly string _developerWriteTestsPrompt;
-    private readonly OrchestratorState _state;
     private readonly int _maxIterationsPerSubtask;
 
+    private OrchestratorPhase _phase;
+    private string? _currentTaskId;
+    private string? _currentSubtaskId;
+
     public AgentOrchestrator(
+        ILogger<AgentOrchestrator> logger,
         IKanbanApiClient apiClient,
         ILlmService managerLlmService,
         ILlmService developerLlmService,
         IToolExecutor toolExecutor,
-        IGitService gitService,
         string managerPrompt,
         string developerImplementationPrompt,
-        string developerTestingPrompt,
-        string developerWriteTestsPrompt,
         int maxIterationsPerSubtask)
     {
+        _logger = logger;
         _apiClient = apiClient;
         _managerLlmService = managerLlmService;
         _developerLlmService = developerLlmService;
         _toolExecutor = toolExecutor;
-        _gitService = gitService;
         _managerPrompt = managerPrompt;
         _developerImplementationPrompt = developerImplementationPrompt;
-        _developerTestingPrompt = developerTestingPrompt;
-        _developerWriteTestsPrompt = developerWriteTestsPrompt;
-        _state = new OrchestratorState();
         _maxIterationsPerSubtask = maxIterationsPerSubtask;
+        _phase = OrchestratorPhase.Breakdown;
     }
 
+    // Main entry point that runs the orchestrator loop until complete or blocked.
     public async Task RunAsync(TicketDto ticket, string workDir, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_managerPrompt))
-        {
-            Console.WriteLine("Error: Manager prompt is empty or null");
-            throw new InvalidOperationException("Manager prompt is required but was empty or null.");
-        }
+        _logger.LogInformation("Orchestrator starting for ticket: {Title}", ticket.Title);
+        await _apiClient.AddActivityLogAsync(ticket.Id, "Orchestrator: Starting work");
 
-        if (string.IsNullOrWhiteSpace(_developerImplementationPrompt))
-        {
-            Console.WriteLine("Error: Developer implementation prompt is empty or null");
-            throw new InvalidOperationException("Developer implementation prompt is required but was empty or null.");
-        }
+        TicketHolder ticketHolder = new TicketHolder(ticket);
+        TicketTools ticketTools = new TicketTools(_apiClient, ticketHolder);
 
-        ManagerTools managerTools = new ManagerTools(_apiClient, _state, ticket.Id);
-        DeveloperTaskTools developerTools = new DeveloperTaskTools(_apiClient, _state, ticket.Id);
+        _phase = DetermineInitialPhase(ticketHolder.Ticket);
+        _logger.LogInformation("Initial phase: {Phase}", _phase);
 
-        Kernel managerKernel = _managerLlmService.CreateKernel(new object[]
-        {
-            new ShellTools(_toolExecutor),
-            new FileTools(_toolExecutor),
-            new KanbanTools(_apiClient),
-            managerTools
-        });
-
-        Kernel developerKernel = _developerLlmService.CreateKernel(new object[]
-        {
-            new ShellTools(_toolExecutor),
-            new FileTools(_toolExecutor),
-            developerTools
-        });
-
-        bool isComplete = false;
         int totalIterations = 0;
-        int maxTotalIterations = 1000;
+        int maxTotalIterations = 500;
 
-        while (!isComplete && totalIterations < maxTotalIterations)
+        while (_phase != OrchestratorPhase.Complete && _phase != OrchestratorPhase.Blocked && totalIterations < maxTotalIterations)
         {
             cancellationToken.ThrowIfCancellationRequested();
             totalIterations++;
 
-            if (_state.CurrentAgent == AgentRole.Manager)
-            {
-                isComplete = await RunManagerIterationAsync(ticket, workDir, managerKernel, managerTools, cancellationToken);
-            }
-            else
-            {
-                await RunDeveloperIterationAsync(ticket, workDir, developerKernel, developerTools, cancellationToken);
-            }
+            _logger.LogDebug("Phase: {Phase} (iteration {Iteration})", _phase, totalIterations);
 
-            // Refresh ticket state
-            TicketDto? refreshed = await _apiClient.GetTicketAsync(ticket.Id);
-
-            if (refreshed == null)
+            switch (_phase)
             {
-                string errorMessage = $"Failed to refresh ticket {ticket.Id} - ticket may have been deleted";
-                Console.WriteLine($"Error: {errorMessage}");
-                await _apiClient.AddActivityLogAsync(ticket.Id, $"Orchestrator: {errorMessage}");
-                throw new InvalidOperationException(errorMessage);
-            }
+                case OrchestratorPhase.Breakdown:
+                    await RunBreakdownPhaseAsync(ticketHolder, ticketTools, workDir, cancellationToken);
+                    break;
 
-            ticket = refreshed;
+                case OrchestratorPhase.Assign:
+                    await RunAssignPhaseAsync(ticketHolder, ticketTools, workDir, cancellationToken);
+                    break;
+
+                case OrchestratorPhase.Develop:
+                    await RunDevelopPhaseAsync(ticketHolder, ticketTools, workDir, cancellationToken);
+                    break;
+
+                case OrchestratorPhase.Verify:
+                    await RunVerifyPhaseAsync(ticketHolder, ticketTools, workDir, cancellationToken);
+                    break;
+
+                case OrchestratorPhase.Finalize:
+                    await RunFinalizePhaseAsync(ticketHolder, ticketTools, workDir, cancellationToken);
+                    break;
+            }
         }
 
-        if (totalIterations >= maxTotalIterations)
+        if (_phase == OrchestratorPhase.Complete)
         {
-            string errorMessage = $"Maximum iterations ({maxTotalIterations}) reached without completion";
-            Console.WriteLine($"Error: {errorMessage}");
-            await _apiClient.AddActivityLogAsync(ticket.Id, $"Orchestrator: {errorMessage}");
-            throw new InvalidOperationException(errorMessage);
+            _logger.LogInformation("Orchestrator completed successfully");
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Completed successfully");
+        }
+        else if (_phase == OrchestratorPhase.Blocked)
+        {
+            _logger.LogWarning("Orchestrator blocked - requires human intervention");
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Blocked - requires human intervention");
+        }
+        else
+        {
+            _logger.LogWarning("Orchestrator exceeded max iterations ({Max})", maxTotalIterations);
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Orchestrator: Exceeded max iterations ({maxTotalIterations})");
         }
     }
 
-    private async Task<bool> RunManagerIterationAsync(
-        TicketDto ticket,
-        string workDir,
-        Kernel kernel,
-        ManagerTools managerTools,
-        CancellationToken cancellationToken)
+    // Inspects ticket state to determine which phase to start in.
+    private OrchestratorPhase DetermineInitialPhase(TicketDto ticket)
     {
-        managerTools.ClearLastToolResult();
-
-        string context = BuildManagerContext(ticket, workDir);
-        await _managerLlmService.ClearContextStatementsAsync(cancellationToken);
-        await _managerLlmService.AddContextStatementAsync(context, cancellationToken);
-
-        string userPrompt = DetermineManagerUserPrompt(ticket);
-        Console.WriteLine($"Manager iteration - {userPrompt}");
-
-        string response = await _managerLlmService.RunAsync(kernel, _managerPrompt, userPrompt, cancellationToken);
-        Console.WriteLine($"Manager response: {response}");
-
-        AgentToolResult? toolResult = managerTools.GetLastToolResult();
-
-        if (toolResult != null)
-        {
-            if (toolResult.IsTerminal)
-            {
-                return true;
-            }
-
-            if (toolResult.ShouldTransition && toolResult.NextAgent == AgentRole.Developer)
-            {
-                _state.CurrentAgent = AgentRole.Developer;
-                _state.CurrentDeveloperMode = toolResult.NextDeveloperMode;
-            }
-        }
-
-        return false;
-    }
-
-    private async Task RunDeveloperIterationAsync(
-        TicketDto ticket,
-        string workDir,
-        Kernel kernel,
-        DeveloperTaskTools developerTools,
-        CancellationToken cancellationToken)
-    {
-        developerTools.ClearLastToolResult();
-
-        string developerPrompt = GetDeveloperPrompt(_state.CurrentDeveloperMode);
-        string context = BuildDeveloperContext(workDir);
-
-        await _developerLlmService.ClearContextStatementsAsync(cancellationToken);
-        await _developerLlmService.AddContextStatementAsync(context, cancellationToken);
-
-        string userPrompt = "Complete the assigned work using available tools. When finished, call subtask_complete.";
-        Console.WriteLine($"Developer iteration ({_state.CurrentDeveloperMode}) - working on subtask");
-
-        int developerIterations = 0;
-        int maxDeveloperIterations = 50;
-        AgentToolResult? toolResult = null;
-
-        while (developerIterations < maxDeveloperIterations)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            developerIterations++;
-
-            string response = await _developerLlmService.RunAsync(kernel, developerPrompt, userPrompt, cancellationToken);
-            Console.WriteLine($"Developer response: {response}");
-
-            toolResult = developerTools.GetLastToolResult();
-
-            if (toolResult != null && toolResult.ShouldTransition)
-            {
-                break;
-            }
-
-            // If no transition tool called, continue with follow-up
-            userPrompt = "Continue working. If you are done, call subtask_complete.";
-        }
-
-        if (toolResult != null && toolResult.ShouldTransition && toolResult.NextAgent == AgentRole.Manager)
-        {
-            _state.CurrentAgent = AgentRole.Manager;
-        }
-        else if (developerIterations >= maxDeveloperIterations)
-        {
-            string errorMessage = $"Developer agent exceeded maximum iterations ({maxDeveloperIterations}) without calling subtask_complete";
-            Console.WriteLine($"Error: {errorMessage}");
-            await _apiClient.AddActivityLogAsync(ticket.Id, $"Developer: {errorMessage}");
-            throw new InvalidOperationException(errorMessage);
-        }
-    }
-
-    private string BuildManagerContext(TicketDto ticket, string workDir)
-    {
-        StringBuilder builder = new StringBuilder();
-
-        builder.AppendLine($"Ticket ID: {ticket.Id}");
-        builder.AppendLine($"Title: {ticket.Title}");
-        builder.AppendLine($"Description: {ticket.Description}");
-        builder.AppendLine($"Status: {ticket.Status}");
-        builder.AppendLine($"Working Directory: {workDir}");
-        builder.AppendLine();
-
-        if (ticket.Tasks.Count > 0)
-        {
-            builder.AppendLine("## Tasks and Subtasks");
-
-            foreach (KanbanTaskDto task in ticket.Tasks)
-            {
-                builder.AppendLine($"### Task: {task.Name}");
-
-                foreach (KanbanSubtaskDto subtask in task.Subtasks)
-                {
-                    string statusIcon = subtask.Status switch
-                    {
-                        SubtaskStatus.Complete => "[x]",
-                        SubtaskStatus.InProgress => "[>]",
-                        SubtaskStatus.AwaitingReview => "[?]",
-                        SubtaskStatus.Blocked => "[!]",
-                        SubtaskStatus.Rejected => "[-]",
-                        _ => "[ ]"
-                    };
-
-                    builder.AppendLine($"- {statusIcon} {subtask.Name} (ID: {subtask.Id}, Status: {subtask.Status})");
-
-                    if (subtask.RejectionCount > 0)
-                    {
-                        builder.AppendLine($"  Rejection count: {subtask.RejectionCount}");
-                    }
-
-                    if (!string.IsNullOrEmpty(subtask.LastRejectionNotes))
-                    {
-                        builder.AppendLine($"  Last rejection: {subtask.LastRejectionNotes}");
-                    }
-                }
-            }
-
-            builder.AppendLine();
-        }
-
-        // Find current subtask for context
-        FindCurrentSubtask(ticket);
-
-        if (_state.LastDeveloperResult != null)
-        {
-            builder.AppendLine("## Developer Completion Report");
-            builder.AppendLine($"Status: {_state.LastDeveloperResult.Status}");
-            builder.AppendLine($"Build: {_state.LastDeveloperResult.BuildStatus}");
-            builder.AppendLine($"Message: {_state.LastDeveloperResult.Message}");
-
-            if (_state.LastDeveloperResult.FilesChanged.Count > 0)
-            {
-                builder.AppendLine("Files Changed:");
-                foreach (FileChangeInfo file in _state.LastDeveloperResult.FilesChanged)
-                {
-                    builder.AppendLine($"- {file.Path}: {file.Summary}");
-                }
-            }
-
-            if (_state.LastDeveloperResult.TestResults != null)
-            {
-                TestResultInfo tests = _state.LastDeveloperResult.TestResults;
-                builder.AppendLine($"Tests: {tests.Passed}/{tests.Total} passed, {tests.Failed} failed, {tests.Skipped} skipped");
-            }
-
-            if (_state.LastDeveloperResult.BlockerDetails != null)
-            {
-                BlockerInfo blocker = _state.LastDeveloperResult.BlockerDetails;
-                builder.AppendLine($"Blocker: {blocker.Issue}");
-                builder.AppendLine($"Needed: {blocker.Needed}");
-            }
-
-            builder.AppendLine();
-        }
-
-        return builder.ToString();
-    }
-
-    private string BuildDeveloperContext(string workDir)
-    {
-        StringBuilder builder = new StringBuilder();
-
-        builder.AppendLine($"Working Directory: {workDir}");
-        builder.AppendLine();
-
-        if (_state.LastManagerAssignment != null)
-        {
-            AssignToDeveloperParams assignment = _state.LastManagerAssignment;
-
-            builder.AppendLine("## Current Assignment");
-            builder.AppendLine($"Mode: {assignment.Mode}");
-            builder.AppendLine($"Goal: {assignment.Goal}");
-            builder.AppendLine();
-
-            if (assignment.FilesToInspect.Count > 0)
-            {
-                builder.AppendLine("### Files to Inspect");
-                foreach (string file in assignment.FilesToInspect)
-                {
-                    builder.AppendLine($"- {file}");
-                }
-                builder.AppendLine();
-            }
-
-            if (assignment.FilesToModify.Count > 0)
-            {
-                builder.AppendLine("### Files to Modify");
-                foreach (string file in assignment.FilesToModify)
-                {
-                    builder.AppendLine($"- {file}");
-                }
-                builder.AppendLine();
-            }
-
-            if (assignment.AcceptanceCriteria.Count > 0)
-            {
-                builder.AppendLine("### Acceptance Criteria");
-                foreach (string criterion in assignment.AcceptanceCriteria)
-                {
-                    builder.AppendLine($"- [ ] {criterion}");
-                }
-                builder.AppendLine();
-            }
-
-            if (assignment.Constraints.Count > 0)
-            {
-                builder.AppendLine("### Constraints");
-                foreach (string constraint in assignment.Constraints)
-                {
-                    builder.AppendLine($"- {constraint}");
-                }
-                builder.AppendLine();
-            }
-
-            if (!string.IsNullOrEmpty(assignment.PriorContext))
-            {
-                builder.AppendLine("### Prior Context");
-                builder.AppendLine(assignment.PriorContext);
-                builder.AppendLine();
-            }
-        }
-
-        return builder.ToString();
-    }
-
-    private void FindCurrentSubtask(TicketDto ticket)
-    {
-        // Find the first incomplete or in-progress subtask
-        foreach (KanbanTaskDto task in ticket.Tasks)
-        {
-            foreach (KanbanSubtaskDto subtask in task.Subtasks)
-            {
-                if (subtask.Status == SubtaskStatus.InProgress ||
-                    subtask.Status == SubtaskStatus.AwaitingReview ||
-                    subtask.Status == SubtaskStatus.Incomplete ||
-                    subtask.Status == SubtaskStatus.Rejected)
-                {
-                    _state.CurrentTaskId = task.Id;
-                    _state.CurrentSubtaskId = subtask.Id;
-                    return;
-                }
-            }
-        }
-
-        _state.CurrentTaskId = null;
-        _state.CurrentSubtaskId = null;
-    }
-
-    private string DetermineManagerUserPrompt(TicketDto ticket)
-    {
-        // Check if developer just returned
-        if (_state.LastDeveloperResult != null)
-        {
-            if (_state.LastDeveloperResult.Status == SubtaskCompleteStatus.Blocked)
-            {
-                return "Developer reported blocked. Determine how to proceed.";
-            }
-
-            return "Developer work complete. Verify the work and determine next steps.";
-        }
-
-        // Check ticket state
         bool hasSubtasks = false;
         bool hasIncomplete = false;
-        bool allComplete = true;
+        bool hasAwaitingReview = false;
 
         foreach (KanbanTaskDto task in ticket.Tasks)
         {
@@ -415,9 +136,14 @@ public class AgentOrchestrator : IAgentOrchestrator
             {
                 hasSubtasks = true;
 
-                if (subtask.Status != SubtaskStatus.Complete)
+                if (subtask.Status == SubtaskStatus.AwaitingReview)
                 {
-                    allComplete = false;
+                    hasAwaitingReview = true;
+                    _currentTaskId = task.Id;
+                    _currentSubtaskId = subtask.Id;
+                }
+                else if (subtask.Status != SubtaskStatus.Complete)
+                {
                     hasIncomplete = true;
                 }
             }
@@ -425,31 +151,290 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         if (!hasSubtasks)
         {
-            return "Break down the ticket into subtasks.";
+            return OrchestratorPhase.Breakdown;
         }
 
-        if (allComplete)
+        if (hasAwaitingReview)
         {
-            return "All subtasks complete. Run tests and finalize.";
+            return OrchestratorPhase.Verify;
         }
 
         if (hasIncomplete)
         {
-            return "Assign the next incomplete subtask to the developer.";
+            return OrchestratorPhase.Assign;
         }
 
-        return "Determine the current state and next action.";
+        return OrchestratorPhase.Finalize;
     }
 
-    private string GetDeveloperPrompt(string? mode)
+    // Manager breaks ticket into subtasks.
+    private async Task RunBreakdownPhaseAsync(TicketHolder ticketHolder, TicketTools ticketTools, string workDir, CancellationToken cancellationToken)
     {
-        string prompt = mode switch
-        {
-            DeveloperMode.Testing => _developerTestingPrompt,
-            DeveloperMode.WriteTests => _developerWriteTestsPrompt,
-            _ => _developerImplementationPrompt
-        };
+        _logger.LogInformation("Manager: Breaking down ticket into subtasks");
+        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Breaking down ticket");
 
-        return prompt;
+        ticketTools.ClearResults();
+
+        Kernel kernel = _managerLlmService.CreateKernel(new object[]
+        {
+            new ShellTools(_toolExecutor),
+            new FileTools(_toolExecutor),
+            ticketTools
+        });
+
+        string userPrompt = $"Break down this ticket into subtasks:\n\nTicket: {ticketHolder.Ticket.Title}\nDescription: {ticketHolder.Ticket.Description}\nWorking Directory: {workDir}\n\nCall create_subtasks when ready.";
+
+        await _managerLlmService.ClearContextStatementsAsync(cancellationToken);
+        string response = await _managerLlmService.RunAsync(kernel, _managerPrompt, userPrompt, cancellationToken);
+        _logger.LogDebug("Manager breakdown response: {Response}", response);
+
+        if (ticketTools.SubtasksCreated)
+        {
+            _logger.LogInformation("Breakdown complete: {Count} subtasks created", ticketTools.SubtaskCount);
+            _phase = OrchestratorPhase.Assign;
+        }
+        else
+        {
+            _logger.LogWarning("Breakdown failed - no subtasks created");
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Failed to break down ticket");
+            _phase = OrchestratorPhase.Blocked;
+        }
+    }
+
+    // Manager assigns the next incomplete subtask to the developer.
+    private async Task RunAssignPhaseAsync(TicketHolder ticketHolder, TicketTools ticketTools, string workDir, CancellationToken cancellationToken)
+    {
+        (string? taskId, string? subtaskId, KanbanSubtaskDto? subtask) = FindNextIncompleteSubtask(ticketHolder.Ticket);
+
+        if (subtask == null)
+        {
+            _logger.LogInformation("No incomplete subtasks - moving to finalize");
+            _phase = OrchestratorPhase.Finalize;
+            return;
+        }
+
+        _currentTaskId = taskId;
+        _currentSubtaskId = subtaskId;
+        ticketTools.SetCurrentSubtask(taskId!, subtaskId!);
+        ticketTools.ClearResults();
+
+        _logger.LogInformation("Manager: Assigning subtask '{Name}'", subtask.Name);
+        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Assigning subtask '{subtask.Name}'");
+
+        Kernel kernel = _managerLlmService.CreateKernel(new object[]
+        {
+            new ShellTools(_toolExecutor),
+            new FileTools(_toolExecutor),
+            ticketTools
+        });
+
+        string userPrompt = $"Assign this subtask to the developer:\n\nSubtask: {subtask.Name}\nWorking Directory: {workDir}\n\nCall assign_to_developer with mode and goal.";
+
+        await _managerLlmService.ClearContextStatementsAsync(cancellationToken);
+        string response = await _managerLlmService.RunAsync(kernel, _managerPrompt, userPrompt, cancellationToken);
+        _logger.LogDebug("Manager assign response: {Response}", response);
+
+        if (ticketTools.Assigned)
+        {
+            _logger.LogInformation("Assignment ready: mode={Mode}", ticketTools.AssignedMode);
+            _phase = OrchestratorPhase.Develop;
+        }
+        else
+        {
+            _logger.LogWarning("Assignment failed");
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Failed to assign subtask");
+            _phase = OrchestratorPhase.Blocked;
+        }
+    }
+
+    // Developer implements the assigned subtask.
+    private async Task RunDevelopPhaseAsync(TicketHolder ticketHolder, TicketTools ticketTools, string workDir, CancellationToken cancellationToken)
+    {
+        KanbanSubtaskDto? subtask = FindSubtask(ticketHolder.Ticket, _currentTaskId, _currentSubtaskId);
+        if (subtask == null)
+        {
+            _logger.LogWarning("Current subtask not found");
+            _phase = OrchestratorPhase.Assign;
+            return;
+        }
+
+        _logger.LogInformation("Developer: Working on '{Name}'", subtask.Name);
+        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Developer: Starting work on '{subtask.Name}'");
+
+        TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(ticketHolder.Ticket.Id, _currentTaskId!, _currentSubtaskId!, SubtaskStatus.InProgress);
+        ticketHolder.Update(updated);
+
+        ticketTools.ClearResults();
+
+        Kernel kernel = _developerLlmService.CreateKernel(new object[]
+        {
+            new ShellTools(_toolExecutor),
+            new FileTools(_toolExecutor),
+            ticketTools
+        });
+
+        string userPrompt = $"Complete this subtask:\n\nSubtask: {subtask.Name}\nWorking Directory: {workDir}\n\nCall subtask_complete when done or blocked.";
+
+        await _developerLlmService.ClearContextStatementsAsync(cancellationToken);
+
+        int iterations = 0;
+
+        while (!ticketTools.DeveloperComplete && iterations < _maxIterationsPerSubtask)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            iterations++;
+
+            string response = await _developerLlmService.RunAsync(kernel, _developerImplementationPrompt, userPrompt, cancellationToken);
+            _logger.LogDebug("Developer response ({Iteration}): {Response}", iterations, response.Substring(0, Math.Min(200, response.Length)));
+
+            if (!ticketTools.DeveloperComplete)
+            {
+                userPrompt = "Continue working. When done or blocked, call subtask_complete.";
+            }
+        }
+
+        if (ticketTools.DeveloperComplete)
+        {
+            updated = await _apiClient.UpdateSubtaskStatusAsync(ticketHolder.Ticket.Id, _currentTaskId!, _currentSubtaskId!, SubtaskStatus.AwaitingReview);
+            ticketHolder.Update(updated);
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Developer: Completed work on '{subtask.Name}'");
+            _phase = OrchestratorPhase.Verify;
+        }
+        else
+        {
+            _logger.LogWarning("Developer exceeded max iterations ({Max})", _maxIterationsPerSubtask);
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Developer: Exceeded max iterations");
+            _phase = OrchestratorPhase.Blocked;
+        }
+    }
+
+    // Manager verifies the developer's work and approves or rejects.
+    private async Task RunVerifyPhaseAsync(TicketHolder ticketHolder, TicketTools ticketTools, string workDir, CancellationToken cancellationToken)
+    {
+        KanbanSubtaskDto? subtask = FindSubtask(ticketHolder.Ticket, _currentTaskId, _currentSubtaskId);
+        if (subtask == null)
+        {
+            _logger.LogWarning("Subtask to verify not found");
+            _phase = OrchestratorPhase.Assign;
+            return;
+        }
+
+        _logger.LogInformation("Manager: Verifying '{Name}'", subtask.Name);
+        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Verifying '{subtask.Name}'");
+
+        ticketTools.SetCurrentSubtask(_currentTaskId!, _currentSubtaskId!);
+        ticketTools.ClearResults();
+
+        Kernel kernel = _managerLlmService.CreateKernel(new object[]
+        {
+            new ShellTools(_toolExecutor),
+            new FileTools(_toolExecutor),
+            ticketTools
+        });
+
+        string userPrompt = $"Verify this completed subtask:\n\nSubtask: {subtask.Name}\nWorking Directory: {workDir}\n\nCall approve_subtask or reject_subtask.";
+
+        await _managerLlmService.ClearContextStatementsAsync(cancellationToken);
+        string response = await _managerLlmService.RunAsync(kernel, _managerPrompt, userPrompt, cancellationToken);
+        _logger.LogDebug("Manager verify response: {Response}", response);
+
+        if (ticketTools.SubtaskApproved == true)
+        {
+            _logger.LogInformation("Subtask approved");
+            _phase = OrchestratorPhase.Assign;
+        }
+        else if (ticketTools.SubtaskApproved == false)
+        {
+            _logger.LogInformation("Subtask rejected: {Reason}", ticketTools.RejectionReason);
+            _phase = OrchestratorPhase.Assign;
+        }
+        else
+        {
+            _logger.LogWarning("Verification failed - no decision made");
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Failed to verify '{subtask.Name}'");
+            _phase = OrchestratorPhase.Blocked;
+        }
+    }
+
+    // Manager commits, pushes, and marks ticket complete or blocked.
+    private async Task RunFinalizePhaseAsync(TicketHolder ticketHolder, TicketTools ticketTools, string workDir, CancellationToken cancellationToken)
+    {
+        _logger.LogInformation("Manager: Finalizing ticket");
+        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Running final verification and git operations");
+
+        ticketTools.ClearResults();
+
+        Kernel kernel = _managerLlmService.CreateKernel(new object[]
+        {
+            new ShellTools(_toolExecutor),
+            new FileTools(_toolExecutor),
+            ticketTools
+        });
+
+        string userPrompt = $"All subtasks complete. Finalize this ticket:\n\nTicket: {ticketHolder.Ticket.Title}\nWorking Directory: {workDir}\n\n1. Use shell to commit any uncommitted changes with git\n2. Use shell to push to the remote branch with git\n3. Call mark_complete or mark_blocked";
+
+        await _managerLlmService.ClearContextStatementsAsync(cancellationToken);
+        string response = await _managerLlmService.RunAsync(kernel, _managerPrompt, userPrompt, cancellationToken);
+        _logger.LogDebug("Manager finalize response: {Response}", response);
+
+        if (ticketTools.TicketComplete == true)
+        {
+            _phase = OrchestratorPhase.Complete;
+        }
+        else if (ticketTools.TicketComplete == false)
+        {
+            _logger.LogWarning("Finalization failed: {Reason}", ticketTools.BlockedReason);
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Finalization failed - {ticketTools.BlockedReason}");
+            _phase = OrchestratorPhase.Blocked;
+        }
+        else
+        {
+            _logger.LogWarning("Finalization failed - no decision made");
+            _phase = OrchestratorPhase.Blocked;
+        }
+    }
+
+    // Finds the next subtask that needs work.
+    private (string?, string?, KanbanSubtaskDto?) FindNextIncompleteSubtask(TicketDto ticket)
+    {
+        foreach (KanbanTaskDto task in ticket.Tasks)
+        {
+            foreach (KanbanSubtaskDto subtask in task.Subtasks)
+            {
+                if (subtask.Status == SubtaskStatus.Incomplete ||
+                    subtask.Status == SubtaskStatus.Rejected ||
+                    subtask.Status == SubtaskStatus.InProgress)
+                {
+                    return (task.Id, subtask.Id, subtask);
+                }
+            }
+        }
+
+        return (null, null, null);
+    }
+
+    // Looks up a subtask by task and subtask ID.
+    private KanbanSubtaskDto? FindSubtask(TicketDto ticket, string? taskId, string? subtaskId)
+    {
+        if (taskId == null || subtaskId == null)
+        {
+            return null;
+        }
+
+        foreach (KanbanTaskDto task in ticket.Tasks)
+        {
+            if (task.Id == taskId)
+            {
+                foreach (KanbanSubtaskDto subtask in task.Subtasks)
+                {
+                    if (subtask.Id == subtaskId)
+                    {
+                        return subtask;
+                    }
+                }
+            }
+        }
+
+        return null;
     }
 }

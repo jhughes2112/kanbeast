@@ -9,13 +9,11 @@
 
   <ItemGroup>
     <PackageReference Include="CommandLineParser" Version="2.9.1" />
+    <PackageReference Include="Microsoft.Extensions.Logging" Version="9.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Console" Version="9.0.0" />
     <PackageReference Include="Microsoft.SemanticKernel" Version="1.26.0" />
     <PackageReference Include="Microsoft.SemanticKernel.Connectors.OpenAI" Version="1.26.0" />
     <PackageReference Include="Azure.AI.OpenAI" Version="2.1.0-beta.1" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Folder Include="Agents\" />
   </ItemGroup>
 
 </Project>

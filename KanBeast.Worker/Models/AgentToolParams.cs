@@ -15,18 +15,18 @@ public class AssignToDeveloperParams
 // Parameters for the subtask_complete tool
 public class SubtaskCompleteParams
 {
-    public required string Status { get; set; }
+    public string Status { get; set; } = SubtaskCompleteStatus.Complete;
     public List<FileChangeInfo> FilesChanged { get; set; } = new List<FileChangeInfo>();
-    public required string BuildStatus { get; set; }
+    public string BuildStatus { get; set; } = "not-run";
     public TestResultInfo? TestResults { get; set; }
-    public required string Message { get; set; }
+    public string Message { get; set; } = string.Empty;
     public BlockerInfo? BlockerDetails { get; set; }
 }
 
 public class FileChangeInfo
 {
-    public required string Path { get; set; }
-    public required string Summary { get; set; }
+    public string Path { get; set; } = string.Empty;
+    public string Summary { get; set; } = string.Empty;
 }
 
 public class TestResultInfo
@@ -69,7 +69,9 @@ public static class DeveloperMode
 public static class SubtaskCompleteStatus
 {
     public const string Complete = "complete";
+    public const string Done = "done";
     public const string Blocked = "blocked";
+    public const string Partial = "partial";
 }
 
 // Update subtask status values for manager
