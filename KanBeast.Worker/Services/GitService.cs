@@ -36,7 +36,7 @@ public class GitService : IGitService
             _sshKeyPath = SetupSshKey(gitConfig.SshKey);
             if (_sshKeyPath != null)
             {
-                _gitSshCommand = $"ssh -i {_sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null";
+                _gitSshCommand = $"ssh -i \"{_sshKeyPath}\" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null";
                 Console.WriteLine($"SSH key configured from settings");
             }
         }

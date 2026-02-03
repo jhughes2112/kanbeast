@@ -54,34 +54,26 @@ try
     // Fetch ticket details
     Console.WriteLine("Fetching ticket details...");
     TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);
-    
-    if (ticket == null)
+
+    if (ticket != null)
     {
-        Console.WriteLine($"Error: Ticket {config.TicketId} not found");
-        return 1;
-    }
+        Console.WriteLine($"Ticket: {ticket.Title}");
+        await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work");
 
-    Console.WriteLine($"Ticket: {ticket.Title}");
-    await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work");
-
-    // Setup working directory
-    string workDir = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "repo"));
-    if (Directory.Exists(workDir))
-    {
-        Directory.Delete(workDir, true);
-    }
-    Directory.CreateDirectory(workDir);
-
-    Console.WriteLine($"Working directory: {workDir}");
-
-    // Clone repository
-    if (!string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
-    {
-        Console.WriteLine("Cloning repository...");
-        await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Cloning repository");
-
-        try
+        // Setup working directory
+        string workDir = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "repo"));
+        if (Directory.Exists(workDir))
         {
+            Directory.Delete(workDir, true);
+        }
+        Directory.CreateDirectory(workDir);
+        Console.WriteLine($"Working directory: {workDir}");
+
+        // Clone repository
+        if (!string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
+        {
+            Console.WriteLine("Cloning repository...");
+            await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Cloning repository");
             await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, workDir);
             await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, workDir);
 
@@ -94,35 +86,24 @@ try
             {
                 await apiClient.SetBranchNameAsync(ticket.Id, branchName);
             }
-        }
-        catch (Exception ex)
-        {
-            Console.WriteLine($"Git operations failed: {ex.Message}");
-            await apiClient.AddActivityLogAsync(ticket.Id, $"Worker: Git error - {ex.Message}");
-        }
-    }
 
-    // Initialize and run the agent orchestrator
-    AgentOrchestrator orchestrator = new AgentOrchestrator(
-        apiClient,
-        managerLlmService,
-        developerLlmService,
-        toolExecutor,
-        gitService,
-        config.ManagerPrompt,
-        config.DeveloperImplementationPrompt,
-        config.DeveloperTestingPrompt,
-        config.DeveloperWriteTestsPrompt,
-        config.MaxIterationsPerSubtask);
+            // Initialize and run the agent orchestrator
+            AgentOrchestrator orchestrator = new AgentOrchestrator(
+                apiClient,
+                managerLlmService,
+                developerLlmService,
+                toolExecutor,
+                gitService,
+                config.ManagerPrompt,
+                config.DeveloperImplementationPrompt,
+                config.DeveloperTestingPrompt,
+                config.DeveloperWriteTestsPrompt,
+                config.MaxIterationsPerSubtask);
 
-    Console.WriteLine("Starting agent orchestrator...");
-    await orchestrator.RunAsync(ticket, workDir, CancellationToken.None);
+            Console.WriteLine("Starting agent orchestrator...");
+            await orchestrator.RunAsync(ticket, workDir, CancellationToken.None);
 
-    // Commit and push changes after completion
-    if (!string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
-    {
-        try
-        {
+            // Commit and push changes after completion
             TicketDto? finalTicket = await apiClient.GetTicketAsync(config.TicketId);
             if (finalTicket != null && finalTicket.Status == "Done")
             {
@@ -130,16 +111,23 @@ try
                 await gitService.PushChangesAsync(workDir);
                 await apiClient.AddActivityLogAsync(finalTicket.Id, "Worker: Changes committed and pushed");
             }
+
+            Console.WriteLine("Worker completed successfully!");
+            return 0;
         }
-        catch (Exception ex)
+        else
         {
-            Console.WriteLine($"Git commit/push failed: {ex.Message}");
-            await apiClient.AddActivityLogAsync(ticket.Id, $"Worker: Git error - {ex.Message}");
+            string errorMessage = "Worker: No repository URL configured";
+            Console.WriteLine(errorMessage);
+            await apiClient.AddActivityLogAsync(ticket.Id, errorMessage);
+            return 1;
         }
     }
-
-    Console.WriteLine("Worker completed successfully!");
-    return 0;
+    else
+    {
+        Console.WriteLine($"Error: Ticket {config.TicketId} not found");
+        return 1;
+    }
 }
 catch (Exception ex)
 {

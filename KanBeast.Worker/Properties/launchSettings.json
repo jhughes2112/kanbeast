@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "KanBeast.Worker": {
+      "commandName": "Project",
+      "commandLineArgs": "--ticket-id 2\r\n--server-url http://localhost:8080/",
+      "workingDirectory": "D:\\kanbeast\\"
+    }
+  }
+}
