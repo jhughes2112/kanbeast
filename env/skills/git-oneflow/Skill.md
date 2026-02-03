@@ -1,27 +1,33 @@
 ---
 name: Git OneFlow
-description: High-throughput git workflow with feature branches, rebasing onto main, and fast-forward merges. No PRs or reviews required.
+description: High throughput git workflow with feature branches, squash then rebase onto main, and fast forward merges. Linear history. No PRs or reviews.
 dependencies: git
 ---
 
 ## Overview
-This skill implements a simplified OneFlow branching strategy optimized for autonomous agent work. Feature branches are rebased onto the latest main and fast-forward merged to maintain a linear history.
+
+This skill defines a strict OneFlow style workflow optimized for autonomous agents. All work happens on short lived feature branches. Before integration, feature branch commits are squashed into a single logical commit, rebased onto the latest main, tested, then fast forward merged to maintain a strictly linear history.
 
 ## When to Use
-- Starting work on a new ticket (create feature branch)
-- Completing work on a ticket (rebase, test, merge)
-- Syncing a feature branch with latest main (rebase)
+
+* Starting work on a new ticket
+* Completing work on a ticket
+* Syncing a feature branch with main
 
 ## Branch Naming
+
 ```
 feature/<ticket-id>-<short-description>
 ```
+
 Example: `feature/TKT-123-add-user-api`
 
 ## Workflow Commands
 
 ### 1. Start Feature Branch
-Create a new feature branch from latest main:
+
+Create a feature branch from the latest main:
+
 ```bash
 git fetch origin
 git checkout main
@@ -30,46 +36,75 @@ git checkout -b feature/<ticket-id>-<short-description>
 ```
 
 ### 2. Commit Changes
-Make atomic commits with descriptive messages:
+
+Commits may be granular during development. They will be squashed before integration.
+
 ```bash
 git add <files>
-git commit -m "<ticket-id>: <brief description of change>"
+git commit -m "<ticket-id>: <brief description>"
 ```
 
-Commit message format:
-- Start with ticket ID
-- Present tense ("Add" not "Added")
-- Brief but descriptive (50 char limit for subject)
+Commit message rules:
 
-Example: `TKT-123: Add GetUserById method to UserRepository`
+* Start with ticket ID
+* Present tense
+* Subject line only, <= 50 chars
 
-### 3. Sync with Main (Rebase)
-Before merging, rebase onto latest main:
+Example:
+`TKT-123: Add GetUserById to UserRepository`
+
+### 3. Squash Feature Branch
+
+Before rebasing, squash all feature branch commits into a single commit.
+
 ```bash
 git fetch origin
+git rebase -i origin/main
+```
+
+In the interactive rebase:
+
+* Keep the first commit as pick
+* Mark all subsequent commits as squash
+* Edit the final commit message to a single clean ticket level message
+
+Result must be exactly one commit on the feature branch.
+
+### 4. Rebase onto Main
+
+After squashing, rebase the feature branch onto the latest main:
+
+```bash
 git rebase origin/main
 ```
 
 If conflicts occur:
-1. Resolve conflicts in each file
-2. `git add <resolved-files>`
-3. `git rebase --continue`
-4. If unresolvable, `git rebase --abort` and report blocker
 
-### 4. Re-test After Rebase
-After rebasing, always run tests to ensure nothing broke:
+* Resolve conflicts
+* `git add <resolved-files>`
+* `git rebase --continue`
+* If blocked, `git rebase --abort` and stop
+
+### 5. Re-test After Rebase
+
+Tests are mandatory after the squash and rebase.
+
 ```bash
 dotnet build
 dotnet test
 ```
 
-If tests fail after rebase:
-1. Fix the issues
-2. Amend or add commits
-3. Do NOT proceed to merge
+If tests fail:
 
-### 5. Fast-Forward Merge to Main
-Once tests pass, merge the feature branch:
+* Fix issues
+* Amend the single commit
+* Re-run tests
+* Do not merge until green
+
+### 6. Fast Forward Merge to Main
+
+Merge using fast forward only:
+
 ```bash
 git checkout main
 git pull origin main
@@ -77,72 +112,71 @@ git merge --ff-only feature/<ticket-id>-<short-description>
 git push origin main
 ```
 
-If `--ff-only` fails (main has advanced):
-1. Return to feature branch
-2. Rebase again (step 3)
-3. Re-test (step 4)
-4. Retry merge
+If fast forward fails, main moved:
 
-### 6. Cleanup
-After successful merge:
+* Checkout feature branch
+* Rebase again
+* Re-test
+* Retry merge
+
+### 7. Cleanup
+
 ```bash
 git branch -d feature/<ticket-id>-<short-description>
 git push origin --delete feature/<ticket-id>-<short-description>
 ```
 
 ## Complete Merge Sequence
-One-shot command sequence for completing a ticket:
+
 ```bash
-# Ensure we're on the feature branch
 git checkout feature/<ticket-id>-<short-description>
 
-# Rebase onto latest main
 git fetch origin
+git rebase -i origin/main
 git rebase origin/main
 
-# Run tests
 dotnet build
 dotnet test
 
-# If tests pass, merge
 git checkout main
 git pull origin main
 git merge --ff-only feature/<ticket-id>-<short-description>
 git push origin main
 
-# Cleanup
 git branch -d feature/<ticket-id>-<short-description>
 ```
 
 ## Error Handling
 
 ### Rebase Conflicts
+
 ```
-## Conflict Report
+Conflicting Files:
+- <file>
 
-**Conflicting Files:**
-- `<file1>`
-- `<file2>`
+Resolution:
+<what changed>
 
-**Resolution:**
-<Describe how conflicts were resolved>
-
-**Status:** Resolved | Blocked (need human input)
+Status: Resolved | Blocked
 ```
 
-### Merge Fails (Not Fast-Forward)
-Main has diverged. Re-run the rebase sequence.
+### Merge Not Fast Forward
+
+Main advanced. Repeat squash, rebase, test.
 
 ### Push Rejected
-Another process pushed to main. Pull and retry:
+
 ```bash
 git pull origin main --rebase
 git push origin main
 ```
 
 ## Rules
-- NEVER force push to main
-- NEVER merge without rebasing first
-- NEVER merge without passing tests
-- Keep feature branches short-lived (merge within hours, not days)
-- One ticket = one feature branch
+
+* Exactly one commit per ticket on main
+* Squash before rebasing, always
+* Never force push to main
+* Never merge without rebasing
+* Never merge without passing tests
+* Feature branches are disposable
+* One ticket, one branch

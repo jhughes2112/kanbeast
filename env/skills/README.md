@@ -6,9 +6,9 @@ Each subfolder here is a different skill that can be utilized to perform some ac
 
 ```
 <Skill-Name>/
-??? Skill.md
-??? resources/ (optional)
-??? scripts/ (optional)
+    Skill.md
+    resources/ (optional)
+    scripts/ (optional)
 ```
 
 The folder name should match the Skill name. The root file must be `Skill.md`.
@@ -21,7 +21,7 @@ The folder name should match the Skill name. The root file must be `Skill.md`.
 ---
 name: Build Project
 description: Build .NET solutions and projects with structured error parsing.
-dependencies: dotnet
+dependencies: dotnet (optional)
 ---
 ```
 

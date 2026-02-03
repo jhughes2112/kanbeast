@@ -1,120 +1,163 @@
 ---
-name: Run Tests
-description: Execute .NET test suites with structured output parsing. Supports full suite, project-specific, and filtered test runs.
+name: run-tests
+description: This is how we structure testing to determine if a feature is working or not.
 dependencies: dotnet
 ---
 
 ## Overview
-This skill provides standardized test execution and result parsing for .NET projects. Use it to run tests and get structured pass/fail information.
 
-## When to Use
-- Verifying implementation work is complete
-- Running tests after rebasing
-- Diagnosing test failures
-- Checking for regressions
+This skill defines a single testing system with one authoritative entrypoint and two execution contexts:
+
+* automatic execution at program startup
+* external execution via dotnet test for agents, CI, and diagnostics
+
+All tests ultimately run through the same code path and produce a binary result: success or failure.
+
+## Single Test Entrypoint
+
+There is exactly one public test entrypoint:
+
+Program_Test.Test
+
+This function orchestrates the entire test suite and is the only place tests are invoked.
+
+It is called from:
+
+* Program.Main, unconditionally on startup
+* a dotnet test adapter that invokes the same function
+
+There must be no other test execution paths.
+
+## Startup Execution
+
+Program.Main calls Program_Test.Test before any application logic.
+
+If any test throws:
+
+* startup halts immediately
+* process exits non zero
+* no application logic runs
+
+A clean startup implies all tests passed.
+
+## External Execution via dotnet test
+
+dotnet test must invoke Program_Test.Test through a minimal adapter test project.
+
+dotnet test success implies startup tests will pass.
+
+dotnet test failure blocks merge regardless of whether startup execution was attempted.
+
+## When to Use External Test Runs
+
+* verifying implementation work is complete
+* running tests after rebasing
+* diagnosing failures
+* checking for regressions
 
 ## Commands
 
 ### Run All Tests
+
+Runs the full suite through the single entrypoint.
+
 ```bash
 dotnet test --verbosity normal
 ```
 
 ### Run Specific Test Project
+
 ```bash
 dotnet test <path/to/TestProject.csproj> --verbosity normal
 ```
 
-### Run Filtered Tests
-By test name:
+### Filtered Runs for Diagnosis Only
+
+Filtered runs are allowed only for debugging and do not count as validation.
+
+By test class:
+
 ```bash
 dotnet test --filter "FullyQualifiedName~TestClassName"
 ```
 
 By test method:
+
 ```bash
 dotnet test --filter "FullyQualifiedName~TestClassName.TestMethodName"
 ```
 
-By trait/category:
+By category:
+
 ```bash
 dotnet test --filter "Category=Unit"
 ```
 
-### Run with Detailed Output
-For debugging failures:
+### Detailed Output
+
 ```bash
 dotnet test --verbosity detailed --logger "console;verbosity=detailed"
 ```
 
-## Output Parsing
+## Test Structure
 
-### Success Output Pattern
+* One test class per production class
+* Separate file, _Test suffix
+* One public static Test method
+* Private static methods contain assertions
+* Tests throw on failure
+* No logging, retries, or recovery
+
+Untested functions must be listed in a comment with justification.
+
+## Output Interpretation
+
+The agent reduces all output to a single bit:
+
+* pass if zero failures
+* fail if any failure
+
+Typical patterns:
+
+Success:
+
 ```
-Passed!  - Failed:     0, Passed:    42, Skipped:     0, Total:    42
+Passed!  - Failed: 0
 ```
 
-### Failure Output Pattern
+Failure:
+
 ```
-Failed!  - Failed:     2, Passed:    40, Skipped:     0, Total:    42
+Failed!  - Failed: 1
 ```
 
-Look for failure details:
-```
-Failed TestClassName.TestMethodName [42 ms]
-  Error Message:
-   Assert.Equal() Failure
-   Expected: 5
-   Actual:   3
-  Stack Trace:
-   at TestClassName.TestMethodName() in /path/to/Test.cs:line 25
-```
-
-## Structured Result Format
-After running tests, report results in this format:
-```
-## Test Results
-
-### Summary
-- **Status:** ✅ Passed | ❌ Failed
-- **Total:** <N>
-- **Passed:** <N>
-- **Failed:** <N>
-- **Skipped:** <N>
-- **Duration:** <time>
-
-### Failures (if any)
-| Test | Error | Location |
-|------|-------|----------|
-| `<ClassName.Method>` | <Error message> | `<File>:line <N>` |
-
-### Skipped (if any)
-| Test | Reason |
-|------|--------|
-| `<ClassName.Method>` | <Skip reason> |
-```
+Failure details are used only to locate and fix the defect.
 
 ## Common Issues
 
-### Tests Won't Run
-1. Ensure solution builds: `dotnet build`
-2. Check test project references
-3. Verify test framework packages are installed
+Tests will not run:
 
-### Flaky Tests
-If a test passes sometimes and fails others:
-1. Run it in isolation: `--filter "FullyQualifiedName~TestName"`
-2. Look for shared state, timing issues, or external dependencies
-3. Report as a potential issue
+* ensure solution builds
+* verify test project references
+* confirm test framework packages
 
-### Slow Tests
-Use the `--blame-hang-timeout 60s` flag to identify hanging tests:
+Flaky tests:
+
+* isolate with filters
+* remove shared state or timing dependencies
+* treat as defects
+
+Slow or hanging tests:
+
 ```bash
 dotnet test --blame-hang-timeout 60s
 ```
 
 ## Rules
-- Always run a full test suite before merging (not just filtered tests)
-- Report exact failure messages, not summaries
-- If tests were skipped, note why
-- Never mark tests as passing if any failed
+
+Exactly one test entrypoint.
+Tests always run on startup.
+dotnet test invokes the same entrypoint.
+Full suite required before merge.
+Filtered runs never count as validation.
+Any failure aborts execution and blocks merge.
