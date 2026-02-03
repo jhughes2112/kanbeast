@@ -50,8 +50,17 @@ try
         config.DeveloperCompaction,
         config.LLMConfigs,
         config.GetPrompt("developer-compaction"));
-    ILlmService managerLlmService = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, managerCompaction);
-    ILlmService developerLlmService = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, developerCompaction);
+
+    LlmProxy managerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, managerCompaction);
+    managerProxy.LogDirectory = Path.Combine(Environment.CurrentDirectory, "env", "logs");
+    managerProxy.LogPrefix = $"tik-{config.TicketId}-mgr";
+
+    LlmProxy developerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, developerCompaction);
+    developerProxy.LogDirectory = Path.Combine(Environment.CurrentDirectory, "env", "logs");
+    developerProxy.LogPrefix = $"tik-{config.TicketId}-dev";
+
+    ILlmService managerLlmService = managerProxy;
+    ILlmService developerLlmService = developerProxy;
 
     logger.LogInformation("Fetching ticket details...");
     TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);

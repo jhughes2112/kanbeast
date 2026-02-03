@@ -175,10 +175,25 @@ public class TicketService : ITicketService
             return Task.FromResult<Ticket?>(null);
         }
 
+        // Server assigns incrementing IDs
+        int nextTaskId = 1;
+        foreach (KanbanTask existingTask in ticket.Tasks)
+        {
+            if (int.TryParse(existingTask.Id, out int existingId) && existingId >= nextTaskId)
+            {
+                nextTaskId = existingId + 1;
+            }
+        }
+
+        task.Id = nextTaskId.ToString();
         task.LastUpdatedAt = DateTime.UtcNow;
+
+        int subtaskId = 1;
         foreach (KanbanSubtask subtask in task.Subtasks)
         {
+            subtask.Id = subtaskId.ToString();
             subtask.LastUpdatedAt = DateTime.UtcNow;
+            subtaskId++;
         }
 
         ticket.Tasks.Add(task);

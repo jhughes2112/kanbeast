@@ -13,6 +13,8 @@ public interface ILlmService
     Task AddContextStatementAsync(string statement, CancellationToken cancellationToken);
     Task ClearContextStatementsAsync(CancellationToken cancellationToken);
     IReadOnlyList<string> GetContextStatements();
+    string LogDirectory { get; set; }
+    string LogPrefix { get; set; }
 }
 
 // Wraps a single LLM endpoint and executes chat completions.
@@ -20,6 +22,9 @@ public class LlmService : ILlmService
 {
     private readonly LLMConfig _config;
     private readonly List<string> _contextStatements;
+
+    public string LogDirectory { get; set; } = string.Empty;
+    public string LogPrefix { get; set; } = string.Empty;
 
     public LlmService(LLMConfig config)
     {
@@ -65,8 +70,44 @@ public class LlmService : ILlmService
             ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions
         };
 
+        string logPath = string.Empty;
+        if (!string.IsNullOrEmpty(LogDirectory))
+        {
+            Directory.CreateDirectory(LogDirectory);
+            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss");
+            string filename = !string.IsNullOrEmpty(LogPrefix)
+                ? $"{LogPrefix}-{timestamp}.txt"
+                : $"request-{timestamp}.txt";
+            logPath = Path.Combine(LogDirectory, filename);
+
+            System.Text.StringBuilder requestLog = new System.Text.StringBuilder();
+            requestLog.AppendLine("=== LLM REQUEST ===");
+            requestLog.AppendLine($"Timestamp: {DateTime.UtcNow:O}");
+            requestLog.AppendLine($"Model: {_config.Model}");
+            requestLog.AppendLine();
+            requestLog.AppendLine("=== SYSTEM PROMPT ===");
+            requestLog.AppendLine(systemPrompt);
+            requestLog.AppendLine();
+            requestLog.AppendLine("=== USER PROMPT ===");
+            requestLog.AppendLine(userPrompt);
+            requestLog.AppendLine();
+
+            await File.WriteAllTextAsync(logPath, requestLog.ToString(), cancellationToken);
+        }
+
         ChatMessageContent response = await chat.GetChatMessageContentAsync(history, settings, kernel, cancellationToken);
         string content = response.Content ?? string.Empty;
+
+        if (!string.IsNullOrEmpty(logPath))
+        {
+            System.Text.StringBuilder responseLog = new System.Text.StringBuilder();
+            responseLog.AppendLine("=== LLM RESPONSE ===");
+            responseLog.AppendLine($"Timestamp: {DateTime.UtcNow:O}");
+            responseLog.AppendLine();
+            responseLog.AppendLine(content);
+
+            await File.AppendAllTextAsync(logPath, responseLog.ToString(), cancellationToken);
+        }
 
         return content;
     }

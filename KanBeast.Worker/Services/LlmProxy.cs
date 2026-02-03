@@ -14,6 +14,20 @@ public class LlmProxy : ILlmService
     private readonly Dictionary<Kernel, KernelSet> _kernelSets;
     private readonly List<string> _contextStatements;
     private readonly ICompaction _compaction;
+    private string _logDirectory = string.Empty;
+    private string _logPrefix = string.Empty;
+
+    public string LogDirectory
+    {
+        get => _logDirectory;
+        set => _logDirectory = value;
+    }
+
+    public string LogPrefix
+    {
+        get => _logPrefix;
+        set => _logPrefix = value;
+    }
 
     public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds, HashSet<int> downedIndices, ICompaction compaction)
     {
@@ -162,6 +176,8 @@ public class LlmProxy : ILlmService
         foreach (LLMConfig config in _configs)
         {
             LlmService service = new LlmService(config);
+            service.LogDirectory = _logDirectory;
+            service.LogPrefix = _logPrefix;
             Kernel kernel = service.CreateKernel(tools);
 
             KernelEntry entry = new KernelEntry(index, kernel, service);

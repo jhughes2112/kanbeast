@@ -136,7 +136,8 @@ public class TicketTools
             SubtasksCreated = true;
             SubtaskCount = task.Subtasks.Count;
 
-            return $"Created {task.Subtasks.Count} subtasks under '{taskName}'";
+            // Return ticket summary so the manager knows the current state
+            return FormatTicketSummary(updated, taskName);
         }
         catch (TaskCanceledException)
         {
@@ -146,6 +147,27 @@ public class TicketTools
         {
             return $"Error: Failed to create subtasks: {ex.Message}";
         }
+    }
+
+    // Formats ticket state for LLM context (excludes activity log to save tokens).
+    private static string FormatTicketSummary(TicketDto ticket, string createdTaskName)
+    {
+        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        sb.AppendLine($"SUCCESS: Created task '{createdTaskName}'");
+        sb.AppendLine();
+        sb.AppendLine($"Ticket: {ticket.Title} (Status: {ticket.Status})");
+        sb.AppendLine("Tasks:");
+
+        foreach (KanbanTaskDto task in ticket.Tasks)
+        {
+            sb.AppendLine($"  - {task.Name} (ID: {task.Id})");
+            foreach (KanbanSubtaskDto subtask in task.Subtasks)
+            {
+                sb.AppendLine($"      [{subtask.Status}] {subtask.Name} (ID: {subtask.Id})");
+            }
+        }
+
+        return sb.ToString();
     }
 
     [KernelFunction("assign_to_developer")]
