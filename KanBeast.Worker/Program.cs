@@ -131,6 +131,12 @@ static WorkerConfig BuildConfiguration(WorkerOptions options)
     string promptDirectory = "env/prompts";
     string resolvedPromptDirectory = ResolvePromptDirectory(promptDirectory);
 
+    if (!Directory.Exists(resolvedPromptDirectory))
+    {
+        Console.WriteLine($"Error: Prompt directory not found: {resolvedPromptDirectory}");
+        throw new DirectoryNotFoundException($"Prompt directory not found: {resolvedPromptDirectory}");
+    }
+
     Dictionary<string, string> prompts = new Dictionary<string, string>
     {
         ["manager-system"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-system"),
@@ -161,11 +167,13 @@ static WorkerConfig BuildConfiguration(WorkerOptions options)
 static string LoadPromptFromDisk(string promptDirectory, string promptName)
 {
     string filePath = Path.Combine(promptDirectory, $"{promptName}.txt");
-    if (File.Exists(filePath))
+    if (!File.Exists(filePath))
     {
-        return File.ReadAllText(filePath);
+        Console.WriteLine($"Error: Required prompt file not found: {filePath}");
+        throw new FileNotFoundException($"Required prompt file not found: {filePath}", filePath);
     }
-    return string.Empty;
+
+    return File.ReadAllText(filePath);
 }
 
 static WorkerSettings LoadWorkerSettings()

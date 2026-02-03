@@ -24,7 +24,11 @@ public class SettingsService : ISettingsService
         string basePath = Directory.Exists("/app/env") ? "/app" : environment.ContentRootPath;
         _promptDirectory = Path.Combine(basePath, "env", "prompts");
         _settingsPath = Path.Combine(basePath, "env", "settings.json");
-        Directory.CreateDirectory(_promptDirectory);
+
+        if (!File.Exists(_settingsPath))
+        {
+            throw new FileNotFoundException($"Settings file not found: {_settingsPath}. Create this file with valid configuration.", _settingsPath);
+        }
     }
 
     public Task<Settings> GetSettingsAsync()
@@ -124,21 +128,41 @@ public class SettingsService : ISettingsService
 
     private List<PromptTemplate> LoadPromptTemplates()
     {
-        List<PromptTemplate> prompts = GetDefaultPrompts();
-        foreach (PromptTemplate prompt in prompts)
+        if (!Directory.Exists(_promptDirectory))
         {
-            string path = Path.Combine(_promptDirectory, prompt.FileName);
-            if (!File.Exists(path))
-            {
-                File.WriteAllText(path, prompt.Content);
-            }
-            else
-            {
-                prompt.Content = File.ReadAllText(path);
-            }
+            throw new DirectoryNotFoundException($"Prompt directory not found: {_promptDirectory}");
         }
 
+        List<PromptTemplate> prompts = new List<PromptTemplate>
+        {
+            LoadPromptTemplate("manager-system", "Manager: System Prompt"),
+            LoadPromptTemplate("developer-implementation", "Developer: Implement Features"),
+            LoadPromptTemplate("developer-testing", "Developer: Test Changes"),
+            LoadPromptTemplate("developer-write-tests", "Developer: Write Tests"),
+            LoadPromptTemplate("manager-compaction-summary", "Manager: Compaction Summary Prompt"),
+            LoadPromptTemplate("developer-compaction-summary", "Developer: Compaction Summary Prompt")
+        };
+
         return prompts;
+    }
+
+    private PromptTemplate LoadPromptTemplate(string key, string displayName)
+    {
+        string fileName = $"{key}.txt";
+        string filePath = Path.Combine(_promptDirectory, fileName);
+
+        if (!File.Exists(filePath))
+        {
+            throw new FileNotFoundException($"Required prompt file not found: {filePath}", filePath);
+        }
+
+        return new PromptTemplate
+        {
+            Key = key,
+            DisplayName = displayName,
+            FileName = fileName,
+            Content = File.ReadAllText(filePath)
+        };
     }
 
     private List<PromptTemplate> UpdatePromptFiles(IEnumerable<PromptTemplate> prompts)
@@ -164,155 +188,67 @@ public class SettingsService : ISettingsService
         return updatedPrompts;
     }
 
-    private static List<PromptTemplate> GetDefaultPrompts()
-    {
-        List<PromptTemplate> templates = new List<PromptTemplate>
-        {
-            new()
-            {
-                Key = "manager-master",
-                DisplayName = "Manager: Mode Selection",
-                FileName = "manager-master.txt",
-                Content = "Role: Manager agent for KanBeast.\n\nPurpose:\n- Decide the current workflow mode from ticket status, tasks, activity log, and test results.\n- Choose one mode: Breakdown, Assign, Verify, Accept, Testing.\n\nProcess:\n1) State the chosen mode and why.\n2) Follow the matching mode prompt.\n3) If evidence is insufficient, ask for clarification and stop.\n\nTone: concise, direct, and outcome-focused."
-            },
-            new()
-            {
-                Key = "manager-breakdown",
-                DisplayName = "Manager: Break Down Ticket",
-                FileName = "manager-breakdown.txt",
-                Content = "Role: Manager agent in Breakdown mode.\n\nOutput:\n- Provide an ordered list of small, testable subtasks.\n- Each task includes acceptance criteria and any key constraints.\n\nRules:\n- Keep tasks independent and measurable.\n- Avoid vague phrasing.\n- Ask for missing details instead of guessing."
-            },
-            new()
-            {
-                Key = "manager-assign",
-                DisplayName = "Manager: Assign Task",
-                FileName = "manager-assign.txt",
-                Content = "Role: Manager agent in Assign mode.\n\nOutput:\n- Select the next incomplete task.\n- Restate the goal and acceptance criteria.\n- List constraints and relevant files to inspect.\n\nProcess:\n- Confirm readiness before work starts.\n- Do not assign multiple tasks at once."
-            },
-            new()
-            {
-                Key = "manager-verify",
-                DisplayName = "Manager: Verify Task",
-                FileName = "manager-verify.txt",
-                Content = "Role: Manager agent in Verify mode.\n\nProcess:\n- Verify work against acceptance criteria.\n- Use tools when needed to check files, outputs, and tests.\n\nOutput:\n- Respond with APPROVED or REJECTED: <reason>.\n- If rejected, provide precise, actionable fixes."
-            },
-            new()
-            {
-                Key = "manager-accept",
-                DisplayName = "Manager: Accept Task",
-                FileName = "manager-accept.txt",
-                Content = "Role: Manager agent in Accept mode.\n\nProcess:\n- Mark the verified task complete and update the ticket.\n- Move to the next task or transition to Testing if all tasks are complete.\n\nOutput:\n- Provide a short completion summary and next step."
-            },
-            new()
-            {
-                Key = "manager-testing",
-                DisplayName = "Manager: Testing Phase",
-                FileName = "manager-testing.txt",
-                Content = "Role: Manager agent in Testing mode.\n\nProcess:\n- Ensure relevant tests are present and executed.\n- If tests fail, return to Active with remediation steps.\n- Only mark Done after all tests pass and changes are ready to commit."
-            },
-            new()
-            {
-                Key = "developer-implementation",
-                DisplayName = "Developer: Implement Features",
-                FileName = "developer-implementation.txt",
-                Content = "Role: Developer agent implementing tasks in a codebase.\n\nProcess:\n- Read relevant files before editing.\n- Follow repository conventions and minimize changes.\n- Use available tools for file edits and commands.\n\nOutput:\n- Summarize changes and test results.\n- If blocked, explain what is missing."
-            },
-            new()
-            {
-                Key = "developer-testing",
-                DisplayName = "Developer: Test Changes",
-                FileName = "developer-testing.txt",
-                Content = "Role: Developer agent in testing mode.\n\nProcess:\n- Add or update tests as needed.\n- Run relevant test suites and analyze failures.\n- Fix issues and re-run until green.\n\nOutput:\n- Report test commands and results."
-            },
-            new()
-            {
-                Key = "manager-compaction-summary",
-                DisplayName = "Manager: Compaction Summary Prompt",
-                FileName = "manager-compaction-summary.txt",
-                Content = "Write a continuation summary for the manager agent.\n\nInclude:\n1) Task overview and success criteria.\n2) Completed work and verified outcomes.\n3) Open issues, risks, or blockers.\n4) Next steps in priority order.\n5) Key context that must be preserved.\n\nKeep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags."
-            },
-            new()
-            {
-                Key = "manager-compaction-system",
-                DisplayName = "Manager: Compaction System Prompt",
-                FileName = "manager-compaction-system.txt",
-                Content = "You summarize manager context so work can continue after compaction. Keep output concise, structured, and factual. Do not invent details."
-            },
-            new()
-            {
-                Key = "developer-compaction-summary",
-                DisplayName = "Developer: Compaction Summary Prompt",
-                FileName = "developer-compaction-summary.txt",
-                Content = "Write a continuation summary for the developer agent.\n\nInclude:\n1) Task overview and acceptance criteria.\n2) Code changes made (files and key edits).\n3) Tests run and results.\n4) Problems found and fixes applied.\n5) Remaining work and next steps.\n\nKeep it concise, factual, and actionable. Wrap the summary in <summary></summary> tags."
-            },
-            new()
-            {
-                Key = "developer-compaction-system",
-                DisplayName = "Developer: Compaction System Prompt",
-                FileName = "developer-compaction-system.txt",
-                Content = "You summarize developer context so work can continue after compaction. Keep output concise, structured, and factual. Do not invent details."
-            }
-        };
-
-        return templates;
-    }
-
     private SettingsFile LoadSettingsFile()
     {
-        SettingsFile settingsFile = new SettingsFile();
-
-        if (File.Exists(_settingsPath))
+        string json = File.ReadAllText(_settingsPath);
+        JsonSerializerOptions options = new JsonSerializerOptions
         {
-            string json = File.ReadAllText(_settingsPath);
-            JsonSerializerOptions options = new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true
-            };
+            PropertyNameCaseInsensitive = true
+        };
 
-            SettingsFile? parsedSettings = JsonSerializer.Deserialize<SettingsFile>(json, options);
-            if (parsedSettings != null)
-            {
-                settingsFile = parsedSettings;
-            }
+        SettingsFile? settingsFile = JsonSerializer.Deserialize<SettingsFile>(json, options);
+        if (settingsFile == null)
+        {
+            throw new InvalidOperationException($"Failed to parse settings file: {_settingsPath}. File contains invalid JSON.");
         }
 
-        // Apply sensible defaults for missing values
-        if (settingsFile.LlmRetryCount <= 0)
-        {
-            settingsFile.LlmRetryCount = 3;
-        }
-
-        if (settingsFile.LlmRetryDelaySeconds <= 0)
-        {
-            settingsFile.LlmRetryDelaySeconds = 5;
-        }
-
-        if (string.IsNullOrEmpty(settingsFile.ManagerCompaction.Type))
-        {
-            settingsFile.ManagerCompaction.Type = "summarize";
-        }
-
-        if (settingsFile.ManagerCompaction.ContextSizeThreshold <= 0)
-        {
-            settingsFile.ManagerCompaction.ContextSizeThreshold = 100000;
-        }
-
-        if (string.IsNullOrEmpty(settingsFile.DeveloperCompaction.Type))
-        {
-            settingsFile.DeveloperCompaction.Type = "summarize";
-        }
-
-        if (settingsFile.DeveloperCompaction.ContextSizeThreshold <= 0)
-        {
-            settingsFile.DeveloperCompaction.ContextSizeThreshold = 100000;
-        }
-
-        if (string.IsNullOrEmpty(settingsFile.WebSearch.Provider))
-        {
-            settingsFile.WebSearch.Provider = "duckduckgo";
-        }
-
+        ValidateSettingsFile(settingsFile);
         return settingsFile;
+    }
+
+    private void ValidateSettingsFile(SettingsFile settings)
+    {
+        List<string> errors = new List<string>();
+
+        if (settings.LlmRetryCount <= 0)
+        {
+            errors.Add("LlmRetryCount must be greater than 0");
+        }
+
+        if (settings.LlmRetryDelaySeconds <= 0)
+        {
+            errors.Add("LlmRetryDelaySeconds must be greater than 0");
+        }
+
+        if (string.IsNullOrEmpty(settings.ManagerCompaction.Type))
+        {
+            errors.Add("ManagerCompaction.Type is required");
+        }
+
+        if (settings.ManagerCompaction.ContextSizeThreshold <= 0)
+        {
+            errors.Add("ManagerCompaction.ContextSizeThreshold must be greater than 0");
+        }
+
+        if (string.IsNullOrEmpty(settings.DeveloperCompaction.Type))
+        {
+            errors.Add("DeveloperCompaction.Type is required");
+        }
+
+        if (settings.DeveloperCompaction.ContextSizeThreshold <= 0)
+        {
+            errors.Add("DeveloperCompaction.ContextSizeThreshold must be greater than 0");
+        }
+
+        if (string.IsNullOrEmpty(settings.WebSearch.Provider))
+        {
+            errors.Add("WebSearch.Provider is required");
+        }
+
+        if (errors.Count > 0)
+        {
+            throw new InvalidOperationException($"Invalid settings in {_settingsPath}: {string.Join("; ", errors)}");
+        }
     }
 
     private void SaveSettingsFile(SettingsFile settings)
