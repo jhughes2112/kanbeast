@@ -69,28 +69,24 @@ nav {
 }
 
 #connectionStatus {
-    padding: 0.375rem 0.75rem;
-    border-radius: var(--radius);
     font-size: 0.75rem;
     font-weight: 500;
     display: flex;
     align-items: center;
     gap: 0.375rem;
+    color: var(--gray-500);
 }
 
 #connectionStatus.connected {
-    background: #14532d;
-    color: #86efac;
+    color: var(--primary-light);
 }
 
 #connectionStatus.disconnected {
-    background: #7f1d1d;
-    color: #fca5a5;
+    color: var(--danger);
 }
 
 #connectionStatus.connecting {
-    background: #78350f;
-    color: #fcd34d;
+    color: var(--primary);
 }
 
 .status-dot {
@@ -183,7 +179,7 @@ nav {
 .column-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.5rem;
     margin-bottom: 1rem;
     padding-bottom: 0.75rem;
     border-bottom: 2px solid var(--gray-200);
@@ -196,6 +192,7 @@ nav {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    flex: 1;
 }
 
 .column-header .count {
@@ -300,6 +297,28 @@ nav {
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+}
+
+.ticket-current-task {
+    font-size: 0.8125rem;
+    color: var(--primary-light);
+    padding-left: 0.5rem;
+    margin-bottom: 0.25rem;
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ticket-last-log {
+    font-size: 0.75rem;
+    color: var(--gray-400);
+    padding-left: 0.5rem;
+    margin-bottom: 0.5rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-style: italic;
 }
 
 .ticket-footer {
@@ -559,8 +578,66 @@ nav {
     background: #14532d;
 }
 
-.task-item .task-checkbox {
+.task-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    font-size: 0.875rem;
     margin-top: 2px;
+}
+
+.task-icon-incomplete {
+    color: var(--gray-400);
+}
+
+.task-icon-complete {
+    color: var(--gray-500);
+}
+
+.subtask-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    height: 14px;
+    font-size: 0.75rem;
+}
+
+.subtask-icon-incomplete {
+    color: var(--gray-400);
+}
+
+.subtask-icon-complete {
+    color: var(--gray-500);
+}
+
+.task-icon-inprogress,
+.subtask-icon-inprogress {
+    color: var(--primary);
+}
+
+.spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--gray-300);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+.spinner-sm {
+    width: 12px;
+    height: 12px;
+    border: 2px solid var(--gray-300);
+    border-top-color: var(--primary);
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
 }
 
 .task-item .task-content {
@@ -596,12 +673,41 @@ nav {
     color: var(--gray-400);
 }
 
-.activity-log {
-    max-height: 300px;
-    overflow-y: auto;
+.activity-log-container {
     background: var(--gray-100);
     border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.activity-log-toggle {
+    width: 100%;
+    padding: 0.75rem;
+    background: var(--gray-200);
+    border: none;
+    color: var(--gray-600);
+    font-size: 0.875rem;
+    font-weight: 500;
+    cursor: pointer;
+    text-align: left;
+    transition: background 0.2s ease;
+}
+
+.activity-log-toggle:hover {
+    background: var(--gray-300);
+}
+
+.activity-log {
+    max-height: 400px;
+    overflow-y: auto;
+    background: var(--gray-100);
     padding: 0.5rem;
+    transition: max-height 0.3s ease;
+}
+
+.activity-log.collapsed {
+    max-height: 0;
+    padding: 0 0.5rem;
+    overflow: hidden;
 }
 
 .activity-item {

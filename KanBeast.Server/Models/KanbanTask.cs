@@ -21,5 +21,6 @@ public class KanbanSubtask
 public enum SubtaskStatus
 {
     Incomplete,
+    InProgress,
     Complete
 }

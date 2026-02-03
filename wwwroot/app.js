@@ -101,6 +101,21 @@ async function refreshAllTickets() {
     renderAllTickets();
 }
 
+// Toggle activity log visibility
+function toggleActivityLog(button) {
+    const container = button.parentElement;
+    const log = container.querySelector('.activity-log');
+    const isCollapsed = log.classList.contains('collapsed');
+
+    if (isCollapsed) {
+        log.classList.remove('collapsed');
+        button.textContent = button.textContent.replace('▼', '▲');
+    } else {
+        log.classList.add('collapsed');
+        button.textContent = button.textContent.replace('▲', '▼');
+    }
+}
+
 // Data loading
 async function loadTickets() {
     const response = await fetch(`${API_BASE}/tickets`);
@@ -195,9 +210,27 @@ function createTicketElement(ticket) {
     const isDraggable = canMoveFrom(status);
 
     const subtasks = (ticket.tasks || []).flatMap(task => task.subtasks || []);
-    const completedCount = subtasks.filter(s => s.status === 'Complete' || s.status === 1).length;
+    const completedCount = subtasks.filter(s => s.status === 'Complete' || s.status === 2).length;
     const totalCount = subtasks.length;
     const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
+    // Find current task (first task with an incomplete or in-progress subtask)
+    let currentTaskName = '';
+    for (const task of (ticket.tasks || [])) {
+        const hasIncomplete = (task.subtasks || []).some(s => 
+            s.status === 'Incomplete' || s.status === 0 ||
+            s.status === 'InProgress' || s.status === 1
+        );
+        if (hasIncomplete) {
+            currentTaskName = task.name || '';
+            break;
+        }
+    }
+
+    // Get last activity log entry
+    const lastLog = (ticket.activityLog && ticket.activityLog.length > 0) 
+        ? ticket.activityLog[ticket.activityLog.length - 1] 
+        : '';
 
     const ticketEl = document.createElement('div');
     ticketEl.className = `ticket${isDraggable ? ' draggable' : ''}`;
@@ -214,7 +247,8 @@ function createTicketElement(ticket) {
             <div class="ticket-title">${escapeHtml(ticket.title)}</div>
             <div class="ticket-id">#${ticket.id}</div>
         </div>
-        <div class="ticket-description">${escapeHtml(ticket.description || '')}</div>
+        ${currentTaskName ? `<div class="ticket-current-task">📌 ${escapeHtml(currentTaskName)}</div>` : ''}
+        ${lastLog ? `<div class="ticket-last-log">${escapeHtml(lastLog)}</div>` : ''}
         <div class="ticket-footer">
             <div class="ticket-meta">
                 <span>📅 ${formatDate(ticket.createdAt)}</span>
@@ -296,7 +330,8 @@ async function showTicketDetails(ticketId) {
 
     titleEl.textContent = ticket.title;
 
-    // Build task/subtask HTML
+    // Build task/subtask HTML with status icons
+    // Statuses: Incomplete=0, InProgress=1, Complete=2
     let tasksHtml = '<div class="empty-state">No tasks yet</div>';
 
     if (ticket.tasks && ticket.tasks.length > 0) {
@@ -304,21 +339,39 @@ async function showTicketDetails(ticketId) {
 
         ticket.tasks.forEach(task => {
             const subtasks = task.subtasks || [];
-            const completedSubtasks = subtasks.filter(s => s.status === 'Complete' || s.status === 1).length;
+            const completedSubtasks = subtasks.filter(s => s.status === 'Complete' || s.status === 2).length;
+            const inProgressSubtasks = subtasks.filter(s => s.status === 'InProgress' || s.status === 1).length;
             const isComplete = subtasks.length > 0 && completedSubtasks === subtasks.length;
+            const isInProgress = inProgressSubtasks > 0;
+
+            let taskIcon = '<span class="task-icon task-icon-incomplete">☐</span>';
+            if (isComplete) {
+                taskIcon = '<span class="task-icon task-icon-complete">✓</span>';
+            } else if (isInProgress) {
+                taskIcon = '<span class="task-icon task-icon-inprogress"><span class="spinner"></span></span>';
+            }
 
             tasksHtml += `
                 <li class="task-item${isComplete ? ' completed' : ''}">
-                    <input type="checkbox" class="task-checkbox" ${isComplete ? 'checked' : ''} disabled>
+                    ${taskIcon}
                     <div class="task-content">
                         <div class="task-name">${escapeHtml(task.name || task.description || 'Task')}</div>
                         ${subtasks.length > 0 ? `
                             <div class="subtask-list">
-                                ${subtasks.map(st => `
-                                    <div class="subtask-item${(st.status === 'Complete' || st.status === 1) ? ' completed' : ''}">
-                                        ${(st.status === 'Complete' || st.status === 1) ? '✓' : '○'} ${escapeHtml(st.name || '')}
-                                    </div>
-                                `).join('')}
+                                ${subtasks.map(st => {
+                                    const stStatus = st.status;
+                                    let subtaskIcon = '<span class="subtask-icon subtask-icon-incomplete">☐</span>';
+                                    if (stStatus === 'Complete' || stStatus === 2) {
+                                        subtaskIcon = '<span class="subtask-icon subtask-icon-complete">✓</span>';
+                                    } else if (stStatus === 'InProgress' || stStatus === 1) {
+                                        subtaskIcon = '<span class="subtask-icon subtask-icon-inprogress"><span class="spinner-sm"></span></span>';
+                                    }
+                                    return `
+                                        <div class="subtask-item${(stStatus === 'Complete' || stStatus === 2) ? ' completed' : ''}">
+                                            ${subtaskIcon} ${escapeHtml(st.name || '')}
+                                        </div>
+                                    `;
+                                }).join('')}
                             </div>
                         ` : ''}
                     </div>
@@ -329,11 +382,18 @@ async function showTicketDetails(ticketId) {
         tasksHtml += '</ul>';
     }
 
-    // Build activity log HTML
+    // Build activity log HTML as expandable
     let activityHtml = '<div class="empty-state">No activity yet</div>';
 
     if (ticket.activityLog && ticket.activityLog.length > 0) {
-        activityHtml = '<div class="activity-log">';
+        const logCount = ticket.activityLog.length;
+        activityHtml = `
+            <div class="activity-log-container">
+                <button class="activity-log-toggle" onclick="toggleActivityLog(this)">
+                    Show Activity Log (${logCount} entries) ▼
+                </button>
+                <div class="activity-log collapsed">
+        `;
         // Show newest first
         const reversedLogs = [...ticket.activityLog].reverse();
 
@@ -351,7 +411,7 @@ async function showTicketDetails(ticketId) {
             activityHtml += `<div class="activity-item ${logClass}">${escapeHtml(log)}</div>`;
         });
 
-        activityHtml += '</div>';
+        activityHtml += '</div></div>';
     }
 
     // Build action buttons based on allowed transitions

@@ -53,8 +53,5 @@ public enum SubtaskStatus
 {
     Incomplete,
     InProgress,
-    AwaitingReview,
-    Complete,
-    Rejected,
-    Blocked
+    Complete
 }

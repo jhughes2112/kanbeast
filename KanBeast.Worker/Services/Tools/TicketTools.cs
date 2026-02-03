@@ -164,6 +164,11 @@ public class TicketTools
             return "Error: Goal cannot be empty";
         }
 
+        if (_currentTaskId == null || _currentSubtaskId == null)
+        {
+            return "Error: No subtask selected for assignment";
+        }
+
         try
         {
             AssignedMode = mode.ToLowerInvariant() switch
@@ -174,6 +179,13 @@ public class TicketTools
             };
 
             using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+
+            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.InProgress);
+            if (updated != null)
+            {
+                _ticketHolder.Update(updated);
+            }
+
             await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Assigned to developer: {goal}");
             Assigned = true;
 
