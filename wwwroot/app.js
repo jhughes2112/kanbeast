@@ -209,17 +209,17 @@ function createTicketElement(ticket) {
     const status = ticket.status || 'Backlog';
     const isDraggable = canMoveFrom(status);
 
+    // Statuses: Incomplete=0, InProgress=1, AwaitingReview=2, Complete=3, Rejected=4
     const subtasks = (ticket.tasks || []).flatMap(task => task.subtasks || []);
-    const completedCount = subtasks.filter(s => s.status === 'Complete' || s.status === 2).length;
+    const completedCount = subtasks.filter(s => s.status === 'Complete' || s.status === 3).length;
     const totalCount = subtasks.length;
     const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
-    // Find current task (first task with an incomplete or in-progress subtask)
+    // Find current task (first task with a non-complete subtask)
     let currentTaskName = '';
     for (const task of (ticket.tasks || [])) {
         const hasIncomplete = (task.subtasks || []).some(s => 
-            s.status === 'Incomplete' || s.status === 0 ||
-            s.status === 'InProgress' || s.status === 1
+            s.status !== 'Complete' && s.status !== 3
         );
         if (hasIncomplete) {
             currentTaskName = task.name || '';
@@ -331,7 +331,7 @@ async function showTicketDetails(ticketId) {
     titleEl.textContent = ticket.title;
 
     // Build task/subtask HTML with status icons
-    // Statuses: Incomplete=0, InProgress=1, Complete=2
+    // Statuses: Incomplete=0, InProgress=1, AwaitingReview=2, Complete=3, Rejected=4
     let tasksHtml = '<div class="empty-state">No tasks yet</div>';
 
     if (ticket.tasks && ticket.tasks.length > 0) {
@@ -339,8 +339,11 @@ async function showTicketDetails(ticketId) {
 
         ticket.tasks.forEach(task => {
             const subtasks = task.subtasks || [];
-            const completedSubtasks = subtasks.filter(s => s.status === 'Complete' || s.status === 2).length;
-            const inProgressSubtasks = subtasks.filter(s => s.status === 'InProgress' || s.status === 1).length;
+            const completedSubtasks = subtasks.filter(s => s.status === 'Complete' || s.status === 3).length;
+            const inProgressSubtasks = subtasks.filter(s => 
+                s.status === 'InProgress' || s.status === 1 ||
+                s.status === 'AwaitingReview' || s.status === 2
+            ).length;
             const isComplete = subtasks.length > 0 && completedSubtasks === subtasks.length;
             const isInProgress = inProgressSubtasks > 0;
 
@@ -361,13 +364,21 @@ async function showTicketDetails(ticketId) {
                                 ${subtasks.map(st => {
                                     const stStatus = st.status;
                                     let subtaskIcon = '<span class="subtask-icon subtask-icon-incomplete">☐</span>';
-                                    if (stStatus === 'Complete' || stStatus === 2) {
+                                    let subtaskClass = '';
+
+                                    if (stStatus === 'Complete' || stStatus === 3) {
                                         subtaskIcon = '<span class="subtask-icon subtask-icon-complete">✓</span>';
+                                        subtaskClass = ' completed';
                                     } else if (stStatus === 'InProgress' || stStatus === 1) {
                                         subtaskIcon = '<span class="subtask-icon subtask-icon-inprogress"><span class="spinner-sm"></span></span>';
+                                    } else if (stStatus === 'AwaitingReview' || stStatus === 2) {
+                                        subtaskIcon = '<span class="subtask-icon subtask-icon-review">👁</span>';
+                                    } else if (stStatus === 'Rejected' || stStatus === 4) {
+                                        subtaskIcon = '<span class="subtask-icon subtask-icon-rejected">✗</span>';
                                     }
+
                                     return `
-                                        <div class="subtask-item${(stStatus === 'Complete' || stStatus === 2) ? ' completed' : ''}">
+                                        <div class="subtask-item${subtaskClass}">
                                             ${subtaskIcon} ${escapeHtml(st.name || '')}
                                         </div>
                                     `;

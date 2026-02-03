@@ -618,6 +618,14 @@ nav {
     color: var(--primary);
 }
 
+.subtask-icon-review {
+    color: var(--warning);
+}
+
+.subtask-icon-rejected {
+    color: var(--danger);
+}
+
 .spinner {
     width: 16px;
     height: 16px;

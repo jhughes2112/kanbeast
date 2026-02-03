@@ -1,4 +1,9 @@
 <Solution>
+  <Folder Name="/env/">
+    <Project Path="env/KanBeast.Environment.csproj">
+      <Build Solution="Debug|*" Project="false" />
+    </Project>
+  </Folder>
   <Project Path="KanBeast.Server/KanBeast.Server.csproj" />
   <Project Path="KanBeast.Worker/KanBeast.Worker.csproj" />
 </Solution>
