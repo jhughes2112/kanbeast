@@ -1,104 +1,128 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>KanBeast - AI-Driven Kanban Board</title>
-    <link rel="stylesheet" href="/css/styles.css">
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>KanBeast - AI-Driven Kanban Board</title>
+	<link rel="stylesheet" href="/css/styles.css">
 </head>
 <body>
-    <header>
-        <h1>🦁 KanBeast</h1>
-        <nav>
-            <button id="newTicketBtn" class="btn-primary">+ New Ticket</button>
-            <button id="settingsBtn" class="btn-secondary">⚙️ Settings</button>
-        </nav>
-    </header>
+	<header>
+		<h1>🦁 KanBeast</h1>
+		<nav>
+			<div id="connectionStatus" class="connecting">
+				<span class="status-dot"></span>
+				<span id="connectionText">Connecting...</span>
+			</div>
+			<button id="newTicketBtn" class="btn-primary">+ New Ticket</button>
+			<button id="settingsBtn" class="btn-secondary">⚙️ Settings</button>
+		</nav>
+	</header>
 
-    <main id="kanbanBoard">
-        <div class="column" data-status="Backlog">
-            <h2>📋 Backlog</h2>
-            <div class="ticket-container" id="backlog-container"></div>
-        </div>
-        <div class="column" data-status="Active">
-            <h2>🚀 Active</h2>
-            <div class="ticket-container" id="active-container"></div>
-        </div>
-        <div class="column" data-status="Testing">
-            <h2>🧪 Testing</h2>
-            <div class="ticket-container" id="testing-container"></div>
-        </div>
-        <div class="column" data-status="Done">
-            <h2>✅ Done</h2>
-            <div class="ticket-container" id="done-container"></div>
-        </div>
-    </main>
+	<main id="kanbanBoard">
+		<div class="column" data-status="Backlog">
+			<div class="column-header">
+				<h2>📋 Backlog</h2>
+				<span class="count" id="backlog-count">0</span>
+			</div>
+			<div class="ticket-container" id="backlog-container"></div>
+		</div>
+		<div class="column" data-status="Active">
+			<div class="column-header">
+				<h2>🚀 Active</h2>
+				<span class="count" id="active-count">0</span>
+			</div>
+			<div class="ticket-container" id="active-container"></div>
+		</div>
+		<div class="column" data-status="Testing">
+			<div class="column-header">
+				<h2>🧪 Testing</h2>
+				<span class="count" id="testing-count">0</span>
+			</div>
+			<div class="ticket-container" id="testing-container"></div>
+		</div>
+		<div class="column" data-status="Done">
+			<div class="column-header">
+				<h2>✅ Done</h2>
+				<span class="count" id="done-count">0</span>
+			</div>
+			<div class="ticket-container" id="done-container"></div>
+		</div>
+	</main>
 
-    <!-- New Ticket Modal -->
-    <div id="newTicketModal" class="modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <h2>Create New Ticket</h2>
-            <form id="newTicketForm">
-                <div class="form-group">
-                    <label for="ticketTitle">Title:</label>
-                    <input type="text" id="ticketTitle" required>
-                </div>
-                <div class="form-group">
-                    <label for="ticketDescription">Description:</label>
-                    <textarea id="ticketDescription" rows="4" required></textarea>
-                </div>
-                <button type="submit" class="btn-primary">Create Ticket</button>
-            </form>
-        </div>
-    </div>
+	<!-- New Ticket Modal -->
+	<div id="newTicketModal" class="modal">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h2>Create New Ticket</h2>
+				<button class="close" aria-label="Close">&times;</button>
+			</div>
+			<form id="newTicketForm">
+				<div class="form-group">
+					<label for="ticketTitle">Title</label>
+					<input type="text" id="ticketTitle" placeholder="Enter a descriptive title..." required>
+				</div>
+				<div class="form-group">
+					<label for="ticketDescription">Description</label>
+					<textarea id="ticketDescription" rows="4" placeholder="Describe what needs to be done..." required></textarea>
+				</div>
+				<button type="submit" class="btn-primary" style="width: 100%;">Create Ticket</button>
+			</form>
+		</div>
+	</div>
 
-    <!-- Ticket Detail Modal -->
-    <div id="ticketDetailModal" class="modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <div id="ticketDetail"></div>
-        </div>
-    </div>
+	<!-- Ticket Detail Modal -->
+	<div id="ticketDetailModal" class="modal">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h2 id="detailTitle">Ticket Details</h2>
+				<button class="close" aria-label="Close">&times;</button>
+			</div>
+			<div id="ticketDetail"></div>
+		</div>
+	</div>
 
-    <!-- Settings Modal -->
-    <div id="settingsModal" class="modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <h2>Settings</h2>
-            <div id="settingsContent">
-                <h3>LLM Configurations</h3>
-                <div id="llmConfigs"></div>
-                <button id="addLLMBtn" class="btn-secondary">+ Add LLM</button>
+	<!-- Settings Modal -->
+	<div id="settingsModal" class="modal">
+		<div class="modal-content">
+			<div class="modal-header">
+				<h2>Settings</h2>
+				<button class="close" aria-label="Close">&times;</button>
+			</div>
+			<div id="settingsContent">
+				<div class="settings-section">
+					<h3>LLM Configurations</h3>
+					<div id="llmConfigs"></div>
+					<button id="addLLMBtn" class="btn-secondary" type="button">+ Add LLM Configuration</button>
+				</div>
 
-                <h3>System Prompts</h3>
-                <div id="systemPrompts"></div>
-                
-                <h3>Git Configuration</h3>
-                <form id="gitConfigForm">
-                    <div class="form-group">
-                        <label for="gitUrl">Repository URL:</label>
-                        <input type="text" id="gitUrl">
-                    </div>
-                    <div class="form-group">
-                        <label for="gitUsername">Username:</label>
-                        <input type="text" id="gitUsername">
-                    </div>
-                    <div class="form-group">
-                        <label for="gitEmail">Email:</label>
-                        <input type="email" id="gitEmail">
-                    </div>
-                    <div class="form-group">
-                        <label for="gitSshKey">SSH Key:</label>
-                        <textarea id="gitSshKey" rows="4"></textarea>
-                    </div>
-                    <button type="submit" class="btn-primary">Save Settings</button>
-                </form>
-            </div>
-        </div>
-    </div>
+				<div class="settings-section">
+					<h3>Git Configuration</h3>
+					<form id="gitConfigForm">
+						<div class="form-group">
+							<label for="gitUrl">Repository URL</label>
+							<input type="text" id="gitUrl" placeholder="https://github.com/user/repo.git">
+						</div>
+						<div class="form-group">
+							<label for="gitUsername">Username</label>
+							<input type="text" id="gitUsername" placeholder="git username">
+						</div>
+						<div class="form-group">
+							<label for="gitEmail">Email</label>
+							<input type="email" id="gitEmail" placeholder="user@example.com">
+						</div>
+						<div class="form-group">
+							<label for="gitSshKey">SSH Key (optional)</label>
+							<textarea id="gitSshKey" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----"></textarea>
+						</div>
+						<button type="submit" class="btn-primary" style="width: 100%;">Save Settings</button>
+					</form>
+				</div>
+			</div>
+		</div>
+	</div>
 
-    <script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@latest/dist/browser/signalr.min.js"></script>
-    <script src="/js/app.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@latest/dist/browser/signalr.min.js"></script>
+	<script src="/js/app.js"></script>
 </body>
 </html>

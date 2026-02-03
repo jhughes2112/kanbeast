@@ -17,7 +17,11 @@ public class WorkerConfig
     public required string DeveloperCompactionSystemPrompt { get; set; }
     public required string ManagerPrompt { get; set; }
     public required string DeveloperPrompt { get; set; }
+    public required string DeveloperImplementationPrompt { get; set; }
+    public required string DeveloperTestingPrompt { get; set; }
+    public required string DeveloperWriteTestsPrompt { get; set; }
     public required string PromptDirectory { get; set; }
+    public int MaxIterationsPerSubtask { get; set; } = 50;
 }
 
 // Describes a single LLM endpoint used by the worker.

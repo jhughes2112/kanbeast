@@ -1,377 +1,768 @@
-// API Base URL
+// KanBeast Client Application
+// Idempotent, declarative UI updates with full state refresh
+
 const API_BASE = '/api';
 
-// SignalR connection
-let connection = null;
-
-// State
+// Application state
 let tickets = [];
 let settings = null;
+let connection = null;
+let currentDetailTicketId = null;
 
-// Initialize the application
+// Allowed status transitions
+// Backlog -> Active (start work)
+// Active/Testing/Done -> Backlog (cancel/reset)
+const ALLOWED_TRANSITIONS = {
+    'Backlog': ['Active'],
+    'Active': ['Backlog'],
+    'Testing': ['Backlog'],
+    'Done': ['Backlog']
+};
+
+// Initialize application
 async function init() {
-    await loadTickets();
-    await loadSettings();
-    setupSignalR();
-    setupEventListeners();
-    setupDragAndDrop();
-}
-
-// Setup SignalR for real-time updates
-function setupSignalR() {
-    connection = new signalR.HubConnectionBuilder()
-        .withUrl("/hubs/kanban")
-        .withAutomaticReconnect()
-        .build();
-
-    connection.on("TicketUpdated", (ticket) => {
-        updateTicketInUI(ticket);
-    });
-
-    connection.on("TicketCreated", (ticket) => {
-        tickets.push(ticket);
-        renderTicket(ticket);
-    });
-
-    connection.on("TicketDeleted", (ticketId) => {
-        tickets = tickets.filter(t => t.id !== ticketId);
-        document.querySelector(`[data-ticket-id="${ticketId}"]`)?.remove();
-    });
-
-    connection.start().catch(err => console.error('SignalR connection error:', err));
-}
-
-// Load all tickets
-async function loadTickets() {
     try {
-        const response = await fetch(`${API_BASE}/tickets`);
-        tickets = await response.json();
-        renderAllTickets();
+        await loadTickets();
+        await loadSettings();
+        setupSignalR();
+        setupEventListeners();
+        setupDragAndDrop();
     } catch (error) {
-        console.error('Error loading tickets:', error);
+        console.error('Initialization error:', error);
+        updateConnectionStatus('disconnected', 'Error');
     }
 }
 
-// Load settings
+// SignalR connection management
+function setupSignalR() {
+    updateConnectionStatus('connecting', 'Connecting...');
+
+    connection = new signalR.HubConnectionBuilder()
+        .withUrl('/hubs/kanban')
+        .withAutomaticReconnect([0, 2000, 5000, 10000, 30000])
+        .configureLogging(signalR.LogLevel.Warning)
+        .build();
+
+    // All events trigger full state refresh for idempotency
+    connection.on('TicketUpdated', handleTicketEvent);
+    connection.on('TicketCreated', handleTicketEvent);
+    connection.on('TicketDeleted', handleTicketEvent);
+
+    connection.onreconnecting(() => {
+        updateConnectionStatus('connecting', 'Reconnecting...');
+    });
+
+    connection.onreconnected(() => {
+        updateConnectionStatus('connected', 'Connected');
+        refreshAllTickets();
+    });
+
+    connection.onclose(() => {
+        updateConnectionStatus('disconnected', 'Disconnected');
+    });
+
+    startConnection();
+}
+
+async function startConnection() {
+    try {
+        await connection.start();
+        updateConnectionStatus('connected', 'Connected');
+    } catch (error) {
+        console.error('SignalR connection failed:', error);
+        updateConnectionStatus('disconnected', 'Connection Failed');
+        setTimeout(startConnection, 5000);
+    }
+}
+
+function updateConnectionStatus(status, text) {
+    const statusEl = document.getElementById('connectionStatus');
+    const textEl = document.getElementById('connectionText');
+
+    if (statusEl && textEl) {
+        statusEl.className = status;
+        textEl.textContent = text;
+    }
+}
+
+// Event handlers - always refresh full state
+async function handleTicketEvent() {
+    await refreshAllTickets();
+
+    // If viewing a ticket detail, refresh it too
+    if (currentDetailTicketId) {
+        await showTicketDetails(currentDetailTicketId);
+    }
+}
+
+async function refreshAllTickets() {
+    await loadTickets();
+    renderAllTickets();
+}
+
+// Data loading
+async function loadTickets() {
+    const response = await fetch(`${API_BASE}/tickets`);
+
+    if (!response.ok) {
+        throw new Error(`Failed to load tickets: ${response.status}`);
+    }
+
+    tickets = await response.json();
+}
+
 async function loadSettings() {
     try {
         const response = await fetch(`${API_BASE}/settings`);
-        settings = await response.json();
+
+        if (response.ok) {
+            settings = await response.json();
+        }
     } catch (error) {
-        console.error('Error loading settings:', error);
+        console.warn('Could not load settings:', error);
+        settings = null;
     }
 }
 
-// Render all tickets
+// Rendering - full declarative render
 function renderAllTickets() {
+    const containers = {
+        'Backlog': document.getElementById('backlog-container'),
+        'Active': document.getElementById('active-container'),
+        'Testing': document.getElementById('testing-container'),
+        'Done': document.getElementById('done-container')
+    };
+
+    const counts = {
+        'Backlog': 0,
+        'Active': 0,
+        'Testing': 0,
+        'Done': 0
+    };
+
     // Clear all containers
-    document.querySelectorAll('.ticket-container').forEach(container => {
-        container.innerHTML = '';
+    Object.values(containers).forEach(container => {
+        if (container) {
+            container.innerHTML = '';
+        }
     });
 
-    // Render each ticket in the appropriate column
-    tickets.forEach(ticket => renderTicket(ticket));
+    // Sort tickets by creation date (newest first for backlog, oldest first for others)
+    const sortedTickets = [...tickets].sort((a, b) => {
+        if (a.status === 'Backlog') {
+            return new Date(b.createdAt) - new Date(a.createdAt);
+        }
+
+        return new Date(a.createdAt) - new Date(b.createdAt);
+    });
+
+    // Render each ticket
+    sortedTickets.forEach(ticket => {
+        const status = ticket.status || 'Backlog';
+        const container = containers[status];
+
+        if (container) {
+            container.appendChild(createTicketElement(ticket));
+            counts[status]++;
+        }
+    });
+
+    // Update counts
+    Object.keys(counts).forEach(status => {
+        const countEl = document.getElementById(`${status.toLowerCase()}-count`);
+
+        if (countEl) {
+            countEl.textContent = counts[status];
+        }
+    });
+
+    // Show empty states
+    Object.entries(containers).forEach(([status, container]) => {
+        if (container && container.children.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <div class="empty-state-icon">${getStatusIcon(status)}</div>
+                    <div>No tickets</div>
+                </div>
+            `;
+        }
+    });
 }
 
-// Render a single ticket
-function renderTicket(ticket) {
-    const container = document.getElementById(`${ticket.status.toLowerCase()}-container`);
-    if (!container) return;
+function createTicketElement(ticket) {
+    const status = ticket.status || 'Backlog';
+    const isDraggable = canMoveFrom(status);
 
-    // Remove existing ticket if it exists
-    const existingTicket = document.querySelector(`[data-ticket-id="${ticket.id}"]`);
-    if (existingTicket) {
-        existingTicket.remove();
+    const subtasks = (ticket.tasks || []).flatMap(task => task.subtasks || []);
+    const completedCount = subtasks.filter(s => s.status === 'Complete' || s.status === 1).length;
+    const totalCount = subtasks.length;
+    const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
+    const ticketEl = document.createElement('div');
+    ticketEl.className = `ticket${isDraggable ? ' draggable' : ''}`;
+    ticketEl.dataset.ticketId = ticket.id;
+    ticketEl.dataset.status = status;
+
+    if (isDraggable) {
+        ticketEl.draggable = true;
     }
 
-    const subtasks = ticket.tasks.flatMap(task => task.subtasks || []);
-    const completedTasks = subtasks.filter(subtask => subtask.status === 'Complete').length;
-    const totalTasks = subtasks.length;
-
-    const ticketElement = document.createElement('div');
-    ticketElement.className = 'ticket';
-    ticketElement.draggable = true;
-    ticketElement.dataset.ticketId = ticket.id;
-    ticketElement.innerHTML = `
+    ticketEl.innerHTML = `
+        <div class="ticket-status-indicator"></div>
         <div class="ticket-title">${escapeHtml(ticket.title)}</div>
-        <div class="ticket-description">${escapeHtml(ticket.description)}</div>
-        ${totalTasks > 0 ? `
-            <div class="ticket-tasks">
-                <span class="ticket-tasks-summary">Subtasks: ${completedTasks}/${totalTasks}</span>
+        <div class="ticket-description">${escapeHtml(ticket.description || '')}</div>
+        <div class="ticket-footer">
+            <div class="ticket-meta">
+                <span>📅 ${formatDate(ticket.createdAt)}</span>
+                ${ticket.workerId ? '<span class="worker-badge">🤖 AI Working</span>' : ''}
             </div>
-        ` : ''}
-        <div class="ticket-meta">
-            <span>${new Date(ticket.createdAt).toLocaleDateString()}</span>
-            ${ticket.workerId ? `<span>👷 Worker Active</span>` : ''}
+            ${totalCount > 0 ? `
+                <div class="ticket-progress">
+                    <div class="progress-bar">
+                        <div class="progress-bar-fill${progressPercent === 100 ? ' complete' : ''}" 
+                             style="width: ${progressPercent}%"></div>
+                    </div>
+                    <span class="progress-text">${completedCount}/${totalCount}</span>
+                </div>
+            ` : ''}
         </div>
     `;
 
-    ticketElement.addEventListener('click', () => showTicketDetails(ticket.id));
-    container.appendChild(ticketElement);
+    ticketEl.addEventListener('click', (e) => {
+        if (!ticketEl.classList.contains('dragging')) {
+            showTicketDetails(ticket.id);
+        }
+    });
+
+    return ticketEl;
 }
 
-// Update ticket in UI
-function updateTicketInUI(ticket) {
-    const index = tickets.findIndex(t => t.id === ticket.id);
-    if (index !== -1) {
-        tickets[index] = ticket;
+function getStatusIcon(status) {
+    const icons = {
+        'Backlog': '📋',
+        'Active': '🚀',
+        'Testing': '🧪',
+        'Done': '✅'
+    };
+
+    return icons[status] || '📋';
+}
+
+function formatDate(dateStr) {
+    if (!dateStr) {
+        return '';
     }
-    renderTicket(ticket);
+
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+
+    if (diffDays === 0) {
+        return 'Today';
+    }
+
+    if (diffDays === 1) {
+        return 'Yesterday';
+    }
+
+    if (diffDays < 7) {
+        return `${diffDays} days ago`;
+    }
+
+    return date.toLocaleDateString();
 }
 
-// Show ticket details
+// Ticket details modal
 async function showTicketDetails(ticketId) {
-    try {
-        const response = await fetch(`${API_BASE}/tickets/${ticketId}`);
-        const ticket = await response.json();
+    currentDetailTicketId = ticketId;
 
-        const modal = document.getElementById('ticketDetailModal');
-        const detailDiv = document.getElementById('ticketDetail');
+    const response = await fetch(`${API_BASE}/tickets/${ticketId}`);
 
-        detailDiv.innerHTML = `
-            <h2>${escapeHtml(ticket.title)}</h2>
-            <p><strong>Status:</strong> ${ticket.status}</p>
-            <p><strong>Description:</strong> ${escapeHtml(ticket.description)}</p>
-            ${ticket.branchName ? `<p><strong>Branch:</strong> ${escapeHtml(ticket.branchName)}</p>` : ''}
-            
+    if (!response.ok) {
+        console.error('Failed to load ticket details');
+        return;
+    }
+
+    const ticket = await response.json();
+    const modal = document.getElementById('ticketDetailModal');
+    const titleEl = document.getElementById('detailTitle');
+    const detailDiv = document.getElementById('ticketDetail');
+    const status = ticket.status || 'Backlog';
+
+    titleEl.textContent = ticket.title;
+
+    // Build task/subtask HTML
+    let tasksHtml = '<div class="empty-state">No tasks yet</div>';
+
+    if (ticket.tasks && ticket.tasks.length > 0) {
+        tasksHtml = '<ul class="task-list">';
+
+        ticket.tasks.forEach(task => {
+            const subtasks = task.subtasks || [];
+            const completedSubtasks = subtasks.filter(s => s.status === 'Complete' || s.status === 1).length;
+            const isComplete = subtasks.length > 0 && completedSubtasks === subtasks.length;
+
+            tasksHtml += `
+                <li class="task-item${isComplete ? ' completed' : ''}">
+                    <input type="checkbox" class="task-checkbox" ${isComplete ? 'checked' : ''} disabled>
+                    <div class="task-content">
+                        <div class="task-name">${escapeHtml(task.name || task.description || 'Task')}</div>
+                        ${subtasks.length > 0 ? `
+                            <div class="subtask-list">
+                                ${subtasks.map(st => `
+                                    <div class="subtask-item${(st.status === 'Complete' || st.status === 1) ? ' completed' : ''}">
+                                        ${(st.status === 'Complete' || st.status === 1) ? '✓' : '○'} ${escapeHtml(st.name || '')}
+                                    </div>
+                                `).join('')}
+                            </div>
+                        ` : ''}
+                    </div>
+                </li>
+            `;
+        });
+
+        tasksHtml += '</ul>';
+    }
+
+    // Build activity log HTML
+    let activityHtml = '<div class="empty-state">No activity yet</div>';
+
+    if (ticket.activityLog && ticket.activityLog.length > 0) {
+        activityHtml = '<div class="activity-log">';
+        // Show newest first
+        const reversedLogs = [...ticket.activityLog].reverse();
+
+        reversedLogs.forEach(log => {
+            let logClass = '';
+
+            if (log.includes('Manager:')) {
+                logClass = 'manager';
+            } else if (log.includes('Developer:')) {
+                logClass = 'developer';
+            } else if (log.includes('Worker:')) {
+                logClass = 'worker';
+            }
+
+            activityHtml += `<div class="activity-item ${logClass}">${escapeHtml(log)}</div>`;
+        });
+
+        activityHtml += '</div>';
+    }
+
+    // Build action buttons based on allowed transitions
+    let actionsHtml = '<div class="ticket-actions">';
+    const allowedTargets = ALLOWED_TRANSITIONS[status] || [];
+
+    if (status === 'Backlog') {
+        actionsHtml += `<button class="btn-primary" onclick="moveTicket('${ticketId}', 'Active')">🚀 Start Work</button>`;
+    } else if (status !== 'Done') {
+        actionsHtml += `<button class="btn-danger" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Cancel & Return to Backlog</button>`;
+    } else {
+        actionsHtml += `<button class="btn-secondary" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Reopen</button>`;
+    }
+
+    actionsHtml += '</div>';
+
+    detailDiv.innerHTML = `
+        <div class="ticket-detail-header">
+            <span class="status-badge ${status.toLowerCase()}">${status}</span>
+            ${ticket.branchName ? `<span style="color: var(--gray-500); font-size: 0.875rem;">🌿 ${escapeHtml(ticket.branchName)}</span>` : ''}
+        </div>
+
+        <div class="detail-section">
+            <h3>Description</h3>
+            <p>${escapeHtml(ticket.description || 'No description provided.')}</p>
+        </div>
+
+        <div class="detail-section">
             <h3>Tasks</h3>
-            ${ticket.tasks.length > 0 ? `
-                <ul class="task-list">
-                    ${ticket.tasks.map(task => `
-                        <li class="task-item ${task.isCompleted ? 'completed' : ''}">
-                            <input type="checkbox" ${task.isCompleted ? 'checked' : ''} disabled>
-                            ${escapeHtml(task.description)}
-                        </li>
-                    `).join('')}
-                </ul>
-            ` : '<p>No tasks yet</p>'}
-            
+            ${tasksHtml}
+        </div>
+
+        <div class="detail-section">
             <h3>Activity Log</h3>
-            ${ticket.activityLog.length > 0 ? `
-                <div class="activity-log">
-                    ${ticket.activityLog.map(log => `
-                        <div class="activity-item">${escapeHtml(log)}</div>
-                    `).join('')}
-                </div>
-            ` : '<p>No activity yet</p>'}
-        `;
+            ${activityHtml}
+        </div>
 
-        modal.classList.add('active');
+        ${actionsHtml}
+    `;
 
-        // Subscribe to updates for this ticket
-        if (connection) {
-            connection.invoke("SubscribeToTicket", ticketId);
+    modal.classList.add('active');
+
+    // Subscribe to updates for this ticket
+    if (connection && connection.state === signalR.HubConnectionState.Connected) {
+        try {
+            await connection.invoke('SubscribeToTicket', ticketId);
+        } catch (error) {
+            console.warn('Could not subscribe to ticket updates:', error);
+        }
+    }
+}
+
+// Move ticket to new status
+async function moveTicket(ticketId, newStatus) {
+    try {
+        const response = await fetch(`${API_BASE}/tickets/${ticketId}/status`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ status: newStatus })
+        });
+
+        if (response.ok) {
+            await refreshAllTickets();
+
+            // Close detail modal if open
+            if (currentDetailTicketId === ticketId) {
+                document.getElementById('ticketDetailModal').classList.remove('active');
+                currentDetailTicketId = null;
+            }
+        } else {
+            console.error('Failed to move ticket');
         }
     } catch (error) {
-        console.error('Error loading ticket details:', error);
+        console.error('Error moving ticket:', error);
     }
 }
 
-// Setup drag and drop
+// Make moveTicket available globally for onclick handlers
+window.moveTicket = moveTicket;
+
+// Drag and drop
+function canMoveFrom(status) {
+    return ALLOWED_TRANSITIONS[status] && ALLOWED_TRANSITIONS[status].length > 0;
+}
+
+function canMoveTo(fromStatus, toStatus) {
+    const allowed = ALLOWED_TRANSITIONS[fromStatus] || [];
+
+    return allowed.includes(toStatus);
+}
+
 function setupDragAndDrop() {
-    document.querySelectorAll('.ticket-container').forEach(container => {
-        container.addEventListener('dragover', handleDragOver);
-        container.addEventListener('drop', handleDrop);
+    document.querySelectorAll('.column').forEach(column => {
+        column.addEventListener('dragover', handleDragOver);
+        column.addEventListener('dragenter', handleDragEnter);
+        column.addEventListener('dragleave', handleDragLeave);
+        column.addEventListener('drop', handleDrop);
     });
 
     document.addEventListener('dragstart', handleDragStart);
     document.addEventListener('dragend', handleDragEnd);
 }
 
+let draggedTicketId = null;
+let draggedFromStatus = null;
+
 function handleDragStart(e) {
-    if (e.target.classList.contains('ticket')) {
-        e.target.classList.add('dragging');
-        e.dataTransfer.effectAllowed = 'move';
-        e.dataTransfer.setData('text/plain', e.target.dataset.ticketId);
+    if (!e.target.classList.contains('ticket') || !e.target.classList.contains('draggable')) {
+        return;
     }
+
+    draggedTicketId = e.target.dataset.ticketId;
+    draggedFromStatus = e.target.dataset.status;
+
+    e.target.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', draggedTicketId);
+
+    // Highlight valid drop targets
+    document.querySelectorAll('.column').forEach(column => {
+        const targetStatus = column.dataset.status;
+
+        if (!canMoveTo(draggedFromStatus, targetStatus)) {
+            column.classList.add('drop-disabled');
+        }
+    });
 }
 
 function handleDragEnd(e) {
     if (e.target.classList.contains('ticket')) {
         e.target.classList.remove('dragging');
     }
+
+    document.querySelectorAll('.column').forEach(column => {
+        column.classList.remove('drag-over', 'drop-disabled');
+    });
+
+    draggedTicketId = null;
+    draggedFromStatus = null;
+}
+
+function handleDragEnter(e) {
+    e.preventDefault();
+    const column = e.currentTarget;
+    const targetStatus = column.dataset.status;
+
+    if (draggedFromStatus && canMoveTo(draggedFromStatus, targetStatus)) {
+        column.classList.add('drag-over');
+    }
+}
+
+function handleDragLeave(e) {
+    const column = e.currentTarget;
+
+    if (!column.contains(e.relatedTarget)) {
+        column.classList.remove('drag-over');
+    }
 }
 
 function handleDragOver(e) {
-    if (e.preventDefault) {
-        e.preventDefault();
+    e.preventDefault();
+    const column = e.currentTarget;
+    const targetStatus = column.dataset.status;
+
+    if (draggedFromStatus && canMoveTo(draggedFromStatus, targetStatus)) {
+        e.dataTransfer.dropEffect = 'move';
+    } else {
+        e.dataTransfer.dropEffect = 'none';
     }
-    e.dataTransfer.dropEffect = 'move';
-    return false;
 }
 
 async function handleDrop(e) {
-    if (e.stopPropagation) {
-        e.stopPropagation();
-    }
     e.preventDefault();
+    e.stopPropagation();
+
+    const column = e.currentTarget;
+    column.classList.remove('drag-over');
 
     const ticketId = e.dataTransfer.getData('text/plain');
-    const column = e.currentTarget.closest('.column');
-    const newStatus = column.dataset.status;
+    const targetStatus = column.dataset.status;
 
-    try {
-        const response = await fetch(`${API_BASE}/tickets/${ticketId}/status`, {
-            method: 'PATCH',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ status: newStatus })
-        });
-
-        if (response.ok) {
-            const updatedTicket = await response.json();
-            updateTicketInUI(updatedTicket);
-        }
-    } catch (error) {
-        console.error('Error updating ticket status:', error);
+    if (!ticketId || !draggedFromStatus) {
+        return;
     }
 
-    return false;
+    if (!canMoveTo(draggedFromStatus, targetStatus)) {
+        return;
+    }
+
+    await moveTicket(ticketId, targetStatus);
 }
 
-// Setup event listeners
+// Event listeners
 function setupEventListeners() {
     // New ticket button
     document.getElementById('newTicketBtn').addEventListener('click', () => {
         document.getElementById('newTicketModal').classList.add('active');
+        document.getElementById('ticketTitle').focus();
     });
 
     // Settings button
     document.getElementById('settingsBtn').addEventListener('click', showSettings);
 
     // New ticket form
-    document.getElementById('newTicketForm').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        
-        const title = document.getElementById('ticketTitle').value;
-        const description = document.getElementById('ticketDescription').value;
+    document.getElementById('newTicketForm').addEventListener('submit', handleCreateTicket);
 
-        try {
-            const response = await fetch(`${API_BASE}/tickets`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    title,
-                    description,
-                    status: 'Backlog',
-                    tasks: [],
-                    activityLog: []
-                })
-            });
+    // Git config form
+    document.getElementById('gitConfigForm').addEventListener('submit', handleSaveSettings);
 
-            if (response.ok) {
-                document.getElementById('newTicketModal').classList.remove('active');
-                document.getElementById('newTicketForm').reset();
+    // Add LLM button
+    document.getElementById('addLLMBtn').addEventListener('click', addLLMConfig);
+
+    // Close modal buttons
+    document.querySelectorAll('.close').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const modal = btn.closest('.modal');
+            modal.classList.remove('active');
+
+            if (modal.id === 'ticketDetailModal') {
+                currentDetailTicketId = null;
             }
-        } catch (error) {
-            console.error('Error creating ticket:', error);
-        }
-    });
-
-    // Close modals
-    document.querySelectorAll('.close').forEach(closeBtn => {
-        closeBtn.addEventListener('click', () => {
-            closeBtn.closest('.modal').classList.remove('active');
         });
     });
 
-    // Close modals on outside click
-    window.addEventListener('click', (e) => {
-        if (e.target.classList.contains('modal')) {
-            e.target.classList.remove('active');
+    // Close modals on backdrop click
+    document.querySelectorAll('.modal').forEach(modal => {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                modal.classList.remove('active');
+
+                if (modal.id === 'ticketDetailModal') {
+                    currentDetailTicketId = null;
+                }
+            }
+        });
+    });
+
+    // Close modals on Escape key
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            document.querySelectorAll('.modal.active').forEach(modal => {
+                modal.classList.remove('active');
+
+                if (modal.id === 'ticketDetailModal') {
+                    currentDetailTicketId = null;
+                }
+            });
         }
     });
 }
 
-// Show settings
-function showSettings() {
-    const modal = document.getElementById('settingsModal');
-    modal.classList.add('active');
+async function handleCreateTicket(e) {
+    e.preventDefault();
 
-    // Populate git config
-    if (settings) {
-        document.getElementById('gitUrl').value = settings.gitConfig?.repositoryUrl || '';
-        document.getElementById('gitUsername').value = settings.gitConfig?.username || '';
-        document.getElementById('gitEmail').value = settings.gitConfig?.email || '';
-        document.getElementById('gitSshKey').value = settings.gitConfig?.sshKey || '';
-        renderSystemPrompts(settings.systemPrompts || []);
+    const title = document.getElementById('ticketTitle').value.trim();
+    const description = document.getElementById('ticketDescription').value.trim();
+
+    if (!title) {
+        return;
     }
 
-    // Setup git config form
-    document.getElementById('gitConfigForm').onsubmit = async (e) => {
-        e.preventDefault();
-        
-        const updatedSettings = {
-            ...settings,
-            systemPrompts: collectSystemPrompts(settings.systemPrompts || []),
-            gitConfig: {
-                repositoryUrl: document.getElementById('gitUrl').value,
-                username: document.getElementById('gitUsername').value,
-                email: document.getElementById('gitEmail').value,
-                sshKey: document.getElementById('gitSshKey').value
-            }
-        };
+    try {
+        const response = await fetch(`${API_BASE}/tickets`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                title,
+                description,
+                status: 'Backlog'
+            })
+        });
 
-        try {
-            const response = await fetch(`${API_BASE}/settings`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(updatedSettings)
-            });
-
-            if (response.ok) {
-                settings = await response.json();
-                alert('Settings saved successfully!');
-            }
-        } catch (error) {
-            console.error('Error saving settings:', error);
+        if (response.ok) {
+            document.getElementById('newTicketModal').classList.remove('active');
+            document.getElementById('newTicketForm').reset();
+            await refreshAllTickets();
+        } else {
+            console.error('Failed to create ticket');
         }
-    };
+    } catch (error) {
+        console.error('Error creating ticket:', error);
+    }
 }
 
-function renderSystemPrompts(prompts) {
-    const container = document.getElementById('systemPrompts');
+// Settings management
+function showSettings() {
+    const modal = document.getElementById('settingsModal');
+
+    // Populate Git config
+    if (settings && settings.gitConfig) {
+        document.getElementById('gitUrl').value = settings.gitConfig.repositoryUrl || '';
+        document.getElementById('gitUsername').value = settings.gitConfig.username || '';
+        document.getElementById('gitEmail').value = settings.gitConfig.email || '';
+        document.getElementById('gitSshKey').value = settings.gitConfig.sshKey || '';
+    }
+
+    // Populate LLM configs
+    renderLLMConfigs();
+
+    modal.classList.add('active');
+}
+
+function renderLLMConfigs() {
+    const container = document.getElementById('llmConfigs');
+    const llmConfigs = (settings && settings.llmConfigs) || [];
+
     container.innerHTML = '';
 
-    prompts.forEach(prompt => {
-        const group = document.createElement('div');
-        group.className = 'form-group';
+    if (llmConfigs.length === 0) {
+        container.innerHTML = '<div class="empty-state">No LLM configurations</div>';
+        return;
+    }
 
-        const label = document.createElement('label');
-        label.textContent = prompt.displayName || prompt.key;
+    llmConfigs.forEach((config, index) => {
+        const configEl = document.createElement('div');
+        configEl.className = 'llm-config';
+        configEl.innerHTML = `
+            <button type="button" class="btn-danger btn-sm remove-btn" data-index="${index}">Remove</button>
+            <div class="form-group">
+                <label>Model</label>
+                <input type="text" class="llm-model" value="${escapeHtml(config.model || '')}" placeholder="gpt-4o">
+            </div>
+            <div class="form-group">
+                <label>API Key</label>
+                <input type="password" class="llm-apikey" value="${escapeHtml(config.apiKey || '')}" placeholder="sk-...">
+            </div>
+            <div class="form-group">
+                <label>Endpoint (optional, for Azure)</label>
+                <input type="text" class="llm-endpoint" value="${escapeHtml(config.endpoint || '')}" placeholder="https://...">
+            </div>
+        `;
 
-        const textarea = document.createElement('textarea');
-        textarea.rows = 4;
-        textarea.value = prompt.content || '';
-        textarea.dataset.promptKey = prompt.key;
-
-        group.appendChild(label);
-        group.appendChild(textarea);
-        container.appendChild(group);
+        configEl.querySelector('.remove-btn').addEventListener('click', () => removeLLMConfig(index));
+        container.appendChild(configEl);
     });
 }
 
-function collectSystemPrompts(existingPrompts) {
-    return existingPrompts.map(prompt => {
-        const textarea = document.querySelector(`[data-prompt-key="${prompt.key}"]`);
-        return {
-            ...prompt,
-            content: textarea ? textarea.value : prompt.content
-        };
-    });
+function addLLMConfig() {
+    if (!settings) {
+        settings = { llmConfigs: [], gitConfig: {} };
+    }
+
+    if (!settings.llmConfigs) {
+        settings.llmConfigs = [];
+    }
+
+    settings.llmConfigs.push({ model: '', apiKey: '', endpoint: '' });
+    renderLLMConfigs();
 }
 
-// Utility function to escape HTML
+function removeLLMConfig(index) {
+    if (settings && settings.llmConfigs) {
+        settings.llmConfigs.splice(index, 1);
+        renderLLMConfigs();
+    }
+}
+
+function collectLLMConfigs() {
+    const configs = [];
+
+    document.querySelectorAll('.llm-config').forEach(configEl => {
+        configs.push({
+            model: configEl.querySelector('.llm-model').value,
+            apiKey: configEl.querySelector('.llm-apikey').value,
+            endpoint: configEl.querySelector('.llm-endpoint').value || null
+        });
+    });
+
+    return configs;
+}
+
+async function handleSaveSettings(e) {
+    e.preventDefault();
+
+    const updatedSettings = {
+        llmConfigs: collectLLMConfigs(),
+        gitConfig: {
+            repositoryUrl: document.getElementById('gitUrl').value,
+            username: document.getElementById('gitUsername').value,
+            email: document.getElementById('gitEmail').value,
+            sshKey: document.getElementById('gitSshKey').value || null
+        }
+    };
+
+    try {
+        const response = await fetch(`${API_BASE}/settings`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updatedSettings)
+        });
+
+        if (response.ok) {
+            settings = await response.json();
+            document.getElementById('settingsModal').classList.remove('active');
+        } else {
+            console.error('Failed to save settings');
+            alert('Failed to save settings. Please check the console for details.');
+        }
+    } catch (error) {
+        console.error('Error saving settings:', error);
+        alert('Error saving settings. Please check the console for details.');
+    }
+}
+
+// Utility functions
 function escapeHtml(text) {
+    if (text == null) {
+        return '';
+    }
+
     const div = document.createElement('div');
-    div.textContent = text;
+    div.textContent = String(text);
+
     return div.innerHTML;
 }
 
-// Initialize on page load
+// Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', init);

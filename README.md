@@ -1,100 +1,103 @@
-# KanBeast 🦁
+﻿# KanBeast
 
 An AI-driven Kanban board system that automatically breaks down feature requests into tasks and executes them using AI agents.
 
 ## Overview
 
-KanBeast is a complete kanban management system that combines traditional project management with AI-powered automation. When a ticket is moved to the "Active" column, the system spawns a worker that uses AI agents (Manager and Developer) to automatically implement features, write tests, and manage git workflows.
+KanBeast is a complete kanban management system that combines traditional project management with AI-powered automation. When a ticket is moved to the Active column, the system spawns a worker that uses a Manager/Developer agent orchestration loop to automatically implement features, write tests, and manage git workflows.
 
 ## Architecture
 
 ### Components
 
-1. **KanBeast Server** (C# ASP.NET Core)
-   - REST API for ticket and settings management
-   - SignalR hub for real-time updates
-   - Worker orchestration (spawns Docker containers)
-   - Web frontend with drag-and-drop kanban board
+**KanBeast Server** (C# ASP.NET Core)
+- REST API for ticket and settings management
+- SignalR hub for real-time updates
+- Static file hosting for web frontend
+- Single-port deployment (API, SignalR, and frontend on same origin)
 
-2. **KanBeast Worker** (C# Console App)
-   - Manager Agent: Breaks down tickets into actionable tasks
-   - Developer Agent: Implements features using LLM and tools
-   - Git integration: Clones, branches, commits, pushes
-   - Tool executor: Bash commands, file operations
+**KanBeast Worker** (C# Console App)
+- AgentOrchestrator: Manages Manager/Developer agent loop
+- Manager Agent: Breaks down tickets, assigns work, verifies completion
+- Developer Agent: Implements features using LLM and tools
+- Git integration: Clones, branches, commits, pushes
 
-### Workflow
+### Agent Workflow
 
-1. **User creates ticket** in Backlog column
-2. **User drags ticket to Active** → Server spawns Worker container
-3. **Manager Agent** analyzes ticket and creates task list
-4. **Developer Agent** implements each task
-5. **Manager Agent** verifies completion and updates ticket
-6. **Worker commits and pushes** changes to git branch
-7. **Ticket moves to Testing** → Tests are written and run
-8. **Ticket moves to Done** → Branch is rebased to master
+The orchestrator maintains state and switches between agents based on tool invocations:
+
+1. Manager calls `assign_to_developer` -> switches to Developer
+2. Developer calls `subtask_complete` -> switches back to Manager
+3. Manager calls `update_subtask` to mark work complete or rejected
+4. Manager calls `complete_ticket` when all work is done
+
+### Ticket Lifecycle
+
+1. User creates ticket in Backlog column
+2. User moves ticket to Active -> Server spawns Worker
+3. Manager Agent analyzes ticket and creates subtask list
+4. Manager assigns subtask to Developer via `assign_to_developer`
+5. Developer Agent implements the subtask using tools
+6. Developer signals completion via `subtask_complete`
+7. Manager verifies work and marks subtask complete or rejected
+8. Repeat 4-7 for each subtask
+9. Manager marks ticket Done via `complete_ticket`
 
 ## Features
 
-✅ **Kanban Board**
+### Kanban Board
 - Drag-and-drop interface
 - Four columns: Backlog, Active, Testing, Done
 - Real-time updates via SignalR
-- Ticket details with task lists and activity logs
+- Restricted moves: Backlog to Active (start), anywhere to Backlog (cancel)
 
-✅ **Settings Management**
-- Multiple LLM configurations with fallback
-- Git repository configuration (URL, SSH key, credentials)
-- Custom system prompts for Manager and Developer agents
+### Agent Tools
 
-✅ **Worker Automation**
-- Automatic worker spawning when ticket moves to Active
-- Git operations (clone, branch, commit, push, rebase)
-- Tool execution (bash commands, file editing)
-- Task breakdown and verification
+**Manager Tools:**
+- `assign_to_developer`: Transfer control to developer with structured assignment
+- `update_subtask`: Mark subtask complete, rejected, or blocked
+- `complete_ticket`: Finalize ticket after all work is done
 
-✅ **Docker-Based Deployment**
-- Server runs in Docker container
-- Workers spawn as separate Docker containers
-- Single Dockerfile builds both server and worker
-- Windows batch script to run the server container
+**Developer Tools:**
+- `subtask_complete`: Signal work done and return control to manager
+
+### Orchestration Features
+- Automatic rejection escalation (3 rejections -> blocked status)
+- Developer mode switching (implementation, testing, write-tests)
+- Context injection from manager assignment to developer
+- Completion report passed from developer back to manager
 
 ## Getting Started
 
 ### Prerequisites
 
-- Docker
-- .NET 9.0 SDK (for local development)
+- .NET 9.0 SDK
 - Git
 
-### Running with Docker
+### Running Locally
 
-```powershell
-# Build and start the server
-./run-docker.bat
-
-# Access the application
-start http://localhost:8080
-```
-
-To run a worker container from the same image:
+Start the server:
 
 ```bash
-docker run --rm --network kanbeast-network kanbeast dotnet /app/worker/KanBeast.Worker.dll -- --ticket-id <ticket-guid> --server-url http://kanbeast-server:8080
-```
-
-### Local Development
-
-```bash
-# Restore dependencies
-dotnet restore
-
-# Run the server
 cd src/KanBeast.Server
 dotnet run
+```
 
-# Run a worker (for testing)
+Open http://localhost:5000 in your browser.
+
+### Running the Worker
+
+The worker requires configuration files in the env directory.
+
+Required files:
+- `env/settings.json` - LLM and Git configuration
+- `env/prompts/*.txt` - Prompt templates
+
+Run worker:
+
+```bash
 cd src/KanBeast.Worker
-dotnet run -- --ticket-id <ticket-guid> --server-url http://localhost:5000
+dotnet run -- --ticket-id <TICKET_ID> --server-url http://localhost:5000
 ```
 
 ## API Endpoints
@@ -104,109 +107,28 @@ dotnet run -- --ticket-id <ticket-guid> --server-url http://localhost:5000
 - `GET /api/tickets` - Get all tickets
 - `GET /api/tickets/{id}` - Get specific ticket
 - `POST /api/tickets` - Create new ticket
-- `PUT /api/tickets/{id}` - Update ticket
-- `DELETE /api/tickets/{id}` - Delete ticket
 - `PATCH /api/tickets/{id}/status` - Update ticket status
 - `POST /api/tickets/{id}/tasks` - Add task to ticket
-- `PATCH /api/tickets/{ticketId}/tasks/{taskId}` - Update task status
 - `POST /api/tickets/{id}/activity` - Add activity log entry
-- `PATCH /api/tickets/{id}/branch` - Set branch name
 
 ### Settings
 
 - `GET /api/settings` - Get current settings
 - `PUT /api/settings` - Update settings
-- `POST /api/settings/llm` - Add LLM configuration
-- `DELETE /api/settings/llm/{id}` - Remove LLM configuration
 
 ### SignalR Hub
 
-- `/hubs/kanban` - Real-time updates for tickets
+Connect to `/hubs/kanban` for real-time updates.
 
-## Configuration
-
-### LLM Configuration
-
-Configure multiple LLM providers with priority-based fallback:
-
-```json
-{
-  "name": "Primary OpenAI",
-  "provider": "openai",
-  "apiKey": "sk-...",
-  "model": "gpt-4",
-  "priority": 1,
-  "isEnabled": true
-}
-```
-
-### Git Configuration
-
-```json
-{
-  "repositoryUrl": "git@github.com:user/repo.git",
-  "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----...",
-  "username": "Git User",
-  "email": "user@example.com"
-}
-```
-
-## Project Structure
-
-```
-kanbeast/
-├── src/
-│   ├── KanBeast.Server/
-│   │   ├── Controllers/        # API controllers
-│   │   ├── Hubs/              # SignalR hubs
-│   │   ├── Models/            # Data models
-│   │   ├── Services/          # Business logic
-│   │   ├── wwwroot/           # Frontend files
-│   │   │   ├── css/
-│   │   │   ├── js/
-│   │   │   └── index.html
-│   │   └── Program.cs
-│   │
-│   └── KanBeast.Worker/
-│       ├── Agents/            # Manager & Developer agents
-│       ├── Models/            # Worker models
-│       ├── Services/          # Git, API client, tools
-│       └── Program.cs
-│
-├── Dockerfile
-├── run-docker.bat
-├── KanBeast.sln
-└── README.md
-```
+Events:
+- `TicketUpdated` - Ticket was modified
+- `TicketCreated` - New ticket created
+- `TicketDeleted` - Ticket was deleted
 
 ## Technology Stack
 
-- **Backend**: C# 13, .NET 9.0, ASP.NET Core
-- **Frontend**: HTML5, CSS3, Vanilla JavaScript
-- **Real-time**: SignalR
-- **Containerization**: Docker
-- **Version Control**: Git
-
-## Future Enhancements
-
-- [ ] Full LLM integration (OpenAI, Anthropic, Azure)
-- [ ] Advanced tool system for agents
-- [ ] Test execution and verification
-- [ ] Automatic rebase and merge to master
-- [ ] User authentication and authorization
-- [ ] Persistent storage (database)
-- [ ] Webhook integrations
-- [ ] Advanced git workflows (pull requests, code reviews)
-- [ ] Metrics and analytics dashboard
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Author
-
-Built with ❤️ for automated software development
+- Backend: C# 13, .NET 9, ASP.NET Core
+- Frontend: HTML5, CSS3, Vanilla JavaScript
+- Real-time: SignalR
+- LLM: Microsoft Semantic Kernel
+- Version Control: Git

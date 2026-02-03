@@ -3,18 +3,26 @@ using CommandLine;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
 using KanBeast.Worker.Services.Tools;
-using KanBeast.Worker.Agents;
 using Microsoft.SemanticKernel;
 
 Console.WriteLine("KanBeast Worker Starting...");
 
 // Parse command line arguments or environment variables
-WorkerConfig? config = Parser.Default.ParseArguments<WorkerOptions>(args)
-    .MapResult(BuildConfiguration, _ => null);
-
-if (config == null)
+WorkerConfig? config = null;
+try
 {
-    Console.WriteLine("Error: Invalid configuration. Please provide worker configuration.");
+    config = Parser.Default.ParseArguments<WorkerOptions>(args)
+        .MapResult(
+            BuildConfiguration,
+            errors =>
+            {
+                Console.WriteLine("Error: Failed to parse command line arguments.");
+                throw new InvalidOperationException("Failed to parse command line arguments.");
+            });
+}
+catch (Exception ex)
+{
+    Console.WriteLine($"Configuration error: {ex.Message}");
     Console.WriteLine("Usage: KanBeast.Worker --ticket-id <id> --server-url <url> [options]");
     return 1;
 }
@@ -95,115 +103,39 @@ try
         }
     }
 
-    // Initialize agents
-    Kernel managerKernel = managerLlmService.CreateKernel(new object[]
+    // Initialize and run the agent orchestrator
+    AgentOrchestrator orchestrator = new AgentOrchestrator(
+        apiClient,
+        managerLlmService,
+        developerLlmService,
+        toolExecutor,
+        gitService,
+        config.ManagerPrompt,
+        config.DeveloperImplementationPrompt,
+        config.DeveloperTestingPrompt,
+        config.DeveloperWriteTestsPrompt,
+        config.MaxIterationsPerSubtask);
+
+    Console.WriteLine("Starting agent orchestrator...");
+    await orchestrator.RunAsync(ticket, workDir, CancellationToken.None);
+
+    // Commit and push changes after completion
+    if (!string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
     {
-        new ShellTools(toolExecutor),
-        new FileTools(toolExecutor),
-        new KanbanTools(apiClient)
-    });
-
-    Kernel developerKernel = developerLlmService.CreateKernel(new object[]
-    {
-        new ShellTools(toolExecutor),
-        new FileTools(toolExecutor),
-        new DeveloperTaskTools(apiClient)
-    });
-
-    ManagerAgent managerAgent = new ManagerAgent(apiClient, toolExecutor, config.ManagerPrompt, managerLlmService, managerKernel);
-    DeveloperAgent developerAgent = new DeveloperAgent(toolExecutor, apiClient, config.DeveloperPrompt, ticket.Id, developerLlmService, developerKernel);
-
-    // Manager breaks down the ticket
-    Console.WriteLine("Manager: Breaking down ticket into tasks...");
-    List<string> tasks = await managerAgent.BreakDownTicketAsync(ticket);
-    
-    // Refresh ticket to get the updated tasks
-    ticket = await apiClient.GetTicketAsync(config.TicketId);
-
-    // Work on each task
-    foreach (KanbanTaskDto task in ticket!.Tasks)
-    {
-        foreach (KanbanSubtaskDto subtask in task.Subtasks)
+        try
         {
-            if (subtask.Status == SubtaskStatus.Complete)
-                continue;
-
-            Console.WriteLine($"Working on subtask: {subtask.Name}");
-
-            bool success = await developerAgent.WorkOnTaskAsync(task, subtask, ticket.Id, workDir);
-
-            if (!success)
+            TicketDto? finalTicket = await apiClient.GetTicketAsync(config.TicketId);
+            if (finalTicket != null && finalTicket.Status == "Done")
             {
-                return 1;
-            }
-
-            TicketDto? refreshed = await apiClient.GetTicketAsync(config.TicketId);
-            KanbanTaskDto? refreshedTask = null;
-            KanbanSubtaskDto? refreshedSubtask = null;
-
-            if (refreshed != null)
-            {
-                foreach (KanbanTaskDto candidate in refreshed.Tasks)
-                {
-                    if (string.Equals(candidate.Id, task.Id, StringComparison.Ordinal))
-                    {
-                        refreshedTask = candidate;
-                        break;
-                    }
-                }
-
-                if (refreshedTask != null)
-                {
-                    foreach (KanbanSubtaskDto candidate in refreshedTask.Subtasks)
-                    {
-                        if (string.Equals(candidate.Id, subtask.Id, StringComparison.Ordinal))
-                        {
-                            refreshedSubtask = candidate;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (refreshedSubtask?.Status != SubtaskStatus.Complete)
-            {
-                await apiClient.AddActivityLogAsync(ticket.Id, $"Manager: Subtask not marked complete - {subtask.Name}");
-                return 1;
-            }
-
-            bool verified = await managerAgent.VerifyTaskCompletionAsync(subtask.Name, workDir);
-            if (!verified)
-            {
-                await apiClient.UpdateSubtaskStatusAsync(ticket.Id, task.Id, subtask.Id, SubtaskStatus.Incomplete);
-                await apiClient.AddActivityLogAsync(ticket.Id, $"Manager: Verification failed for {subtask.Name}");
-                return 1;
-            }
-
-            Console.WriteLine($"Subtask completed: {subtask.Name}");
-        }
-    }
-
-    // Check if all tasks are complete
-    ticket = await apiClient.GetTicketAsync(config.TicketId);
-    if (ticket != null && await managerAgent.AllTasksCompleteAsync(ticket))
-    {
-        Console.WriteLine("All tasks complete! Moving to Testing...");
-        await apiClient.UpdateTicketStatusAsync(ticket.Id, "Testing");
-        
-        // Commit and push changes
-        if (!string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
-        {
-            try
-            {
-                await gitService.CommitChangesAsync($"Completed ticket: {ticket.Title}", workDir);
+                await gitService.CommitChangesAsync($"Completed ticket: {finalTicket.Title}", workDir);
                 await gitService.PushChangesAsync(workDir);
-                await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Changes committed and pushed");
+                await apiClient.AddActivityLogAsync(finalTicket.Id, "Worker: Changes committed and pushed");
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"Git commit/push failed: {ex.Message}");
-                await apiClient.AddActivityLogAsync(ticket.Id, $"Worker: Git error - {ex.Message}");
-            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Git commit/push failed: {ex.Message}");
+            await apiClient.AddActivityLogAsync(ticket.Id, $"Worker: Git error - {ex.Message}");
         }
     }
 
@@ -217,67 +149,96 @@ catch (Exception ex)
     return 1;
 }
 
-static WorkerConfig? BuildConfiguration(WorkerOptions options)
+static WorkerConfig BuildConfiguration(WorkerOptions options)
 {
-    WorkerConfig? config = null;
     string? ticketId = options.TicketId ?? GetEnvValue("TICKET_ID");
     string? serverUrl = options.ServerUrl ?? GetEnvValue("SERVER_URL") ?? "http://localhost:5000";
 
-    if (!string.IsNullOrEmpty(ticketId))
+    if (string.IsNullOrEmpty(ticketId))
     {
-        WorkerSettings? settings = LoadWorkerSettings();
-
-        if (settings != null && settings.LLMConfigs.Count > 0)
-        {
-            string promptDirectory = "env/prompts";
-            string resolvedPromptDirectory = ResolvePromptDirectory(promptDirectory);
-            List<PromptTemplate> systemPrompts = LoadPromptTemplates(resolvedPromptDirectory);
-
-            string managerPrompt = BuildManagerPrompt(systemPrompts);
-            string developerPrompt = BuildDeveloperPrompt(systemPrompts);
-
-            config = new WorkerConfig
-            {
-                TicketId = ticketId,
-                ServerUrl = serverUrl,
-                GitConfig = settings.GitConfig,
-                LLMConfigs = settings.LLMConfigs,
-                LlmRetryCount = settings.LlmRetryCount,
-                LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds,
-                ManagerCompaction = settings.ManagerCompaction,
-                DeveloperCompaction = settings.DeveloperCompaction,
-                ManagerCompactionSummaryPrompt = GetPromptContent(systemPrompts, "manager-compaction-summary"),
-                ManagerCompactionSystemPrompt = GetPromptContent(systemPrompts, "manager-compaction-system"),
-                DeveloperCompactionSummaryPrompt = GetPromptContent(systemPrompts, "developer-compaction-summary"),
-                DeveloperCompactionSystemPrompt = GetPromptContent(systemPrompts, "developer-compaction-system"),
-                ManagerPrompt = string.IsNullOrWhiteSpace(managerPrompt)
-                    ? "You are a project manager. Break down tasks and verify completion."
-                    : managerPrompt,
-                DeveloperPrompt = string.IsNullOrWhiteSpace(developerPrompt)
-                    ? "You are a software developer. Implement features and write tests."
-                    : developerPrompt,
-                PromptDirectory = resolvedPromptDirectory
-            };
-        }
+        Console.WriteLine("Error: Ticket ID is required. Provide via --ticket-id or TICKET_ID environment variable.");
+        throw new InvalidOperationException("Ticket ID is required.");
     }
+
+    WorkerSettings settings = LoadWorkerSettings();
+
+    string promptDirectory = "env/prompts";
+    string resolvedPromptDirectory = ResolvePromptDirectory(promptDirectory);
+    List<PromptTemplate> systemPrompts = LoadPromptTemplates(resolvedPromptDirectory);
+
+    string managerPrompt = BuildManagerPrompt(systemPrompts);
+    string developerPrompt = BuildDeveloperPrompt(systemPrompts);
+    string developerImplementationPrompt = GetPromptContent(systemPrompts, "developer-implementation", true);
+    string developerTestingPrompt = GetPromptContent(systemPrompts, "developer-testing", true);
+    string developerWriteTestsPrompt = GetPromptContent(systemPrompts, "developer-write-tests", false);
+
+    if (string.IsNullOrWhiteSpace(managerPrompt))
+    {
+        Console.WriteLine("Error: Manager prompt is empty after loading templates");
+        throw new InvalidOperationException("Manager prompt is empty. Ensure manager prompt files exist.");
+    }
+
+    if (string.IsNullOrWhiteSpace(developerImplementationPrompt))
+    {
+        Console.WriteLine("Error: Developer implementation prompt is empty");
+        throw new InvalidOperationException("Developer implementation prompt is empty.");
+    }
+
+    WorkerConfig config = new WorkerConfig
+    {
+        TicketId = ticketId,
+        ServerUrl = serverUrl,
+        GitConfig = settings.GitConfig,
+        LLMConfigs = settings.LLMConfigs,
+        LlmRetryCount = settings.LlmRetryCount,
+        LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds,
+        ManagerCompaction = settings.ManagerCompaction,
+        DeveloperCompaction = settings.DeveloperCompaction,
+        ManagerCompactionSummaryPrompt = GetPromptContent(systemPrompts, "manager-compaction-summary", false),
+        ManagerCompactionSystemPrompt = GetPromptContent(systemPrompts, "manager-compaction-system", false),
+        DeveloperCompactionSummaryPrompt = GetPromptContent(systemPrompts, "developer-compaction-summary", false),
+        DeveloperCompactionSystemPrompt = GetPromptContent(systemPrompts, "developer-compaction-system", false),
+        ManagerPrompt = managerPrompt,
+        DeveloperPrompt = developerPrompt,
+        DeveloperImplementationPrompt = developerImplementationPrompt,
+        DeveloperTestingPrompt = developerTestingPrompt,
+        DeveloperWriteTestsPrompt = string.IsNullOrWhiteSpace(developerWriteTestsPrompt)
+            ? developerImplementationPrompt
+            : developerWriteTestsPrompt,
+        PromptDirectory = resolvedPromptDirectory
+    };
 
     return config;
 }
 
-static WorkerSettings? LoadWorkerSettings()
+static WorkerSettings LoadWorkerSettings()
 {
-    WorkerSettings? settings = null;
     string resolvedPath = ResolveSettingsPath();
 
-    if (File.Exists(resolvedPath))
+    if (!File.Exists(resolvedPath))
     {
-        string json = File.ReadAllText(resolvedPath);
-        JsonSerializerOptions options = new JsonSerializerOptions
-        {
-            PropertyNameCaseInsensitive = true
-        };
+        Console.WriteLine($"Error: Required settings file not found: {resolvedPath}");
+        throw new FileNotFoundException($"Required settings file not found: {resolvedPath}", resolvedPath);
+    }
 
-        settings = JsonSerializer.Deserialize<WorkerSettings>(json, options);
+    string json = File.ReadAllText(resolvedPath);
+    JsonSerializerOptions options = new JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
+    WorkerSettings? settings = JsonSerializer.Deserialize<WorkerSettings>(json, options);
+
+    if (settings == null)
+    {
+        Console.WriteLine($"Error: Failed to deserialize settings from: {resolvedPath}");
+        throw new InvalidOperationException($"Failed to deserialize settings from: {resolvedPath}");
+    }
+
+    if (settings.LLMConfigs.Count == 0)
+    {
+        Console.WriteLine("Error: No LLM configurations found in settings");
+        throw new InvalidOperationException("No LLM configurations found in settings. At least one LLM config is required.");
     }
 
     return settings;
@@ -325,32 +286,86 @@ static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> 
     return compaction;
 }
 
-static string GetPromptContent(List<PromptTemplate> prompts, string key)
+static string GetPromptContent(List<PromptTemplate> prompts, string key, bool required)
 {
-    string content = string.Empty;
-
     foreach (PromptTemplate prompt in prompts)
     {
         if (string.Equals(prompt.Key, key, StringComparison.Ordinal))
         {
-            content = prompt.Content;
-            break;
+            if (required && string.IsNullOrWhiteSpace(prompt.Content))
+            {
+                Console.WriteLine($"Error: Required prompt '{key}' has no content (file: {prompt.FileName})");
+                throw new InvalidOperationException($"Required prompt '{key}' has no content. Ensure {prompt.FileName} exists and is not empty.");
+            }
+
+            return prompt.Content;
         }
     }
 
-    return content;
+    if (required)
+    {
+        Console.WriteLine($"Error: Required prompt '{key}' not found in templates");
+        throw new InvalidOperationException($"Required prompt '{key}' not found in templates.");
+    }
+
+    return string.Empty;
 }
 
 static List<PromptTemplate> LoadPromptTemplates(string promptDirectory)
 {
+    if (!Directory.Exists(promptDirectory))
+    {
+        Console.WriteLine($"Error: Prompt directory not found: {promptDirectory}");
+        throw new DirectoryNotFoundException($"Prompt directory not found: {promptDirectory}");
+    }
+
     List<PromptTemplate> prompts = GetDefaultPromptTemplates();
+    List<string> missingFiles = new List<string>();
+
     foreach (PromptTemplate prompt in prompts)
     {
         string path = Path.Combine(promptDirectory, prompt.FileName);
+
         if (File.Exists(path))
         {
             prompt.Content = File.ReadAllText(path);
         }
+        else
+        {
+            missingFiles.Add(prompt.FileName);
+            Console.WriteLine($"Warning: Prompt file not found, using default: {path}");
+        }
+    }
+
+    // Core prompts that must exist (not use defaults)
+    string[] requiredPrompts = new[]
+    {
+        "manager-master.txt",
+        "manager-breakdown.txt",
+        "manager-assign.txt",
+        "manager-verify.txt",
+        "developer-implementation.txt",
+        "developer-testing.txt"
+    };
+
+    List<string> missingRequired = new List<string>();
+    foreach (string required in requiredPrompts)
+    {
+        foreach (string missing in missingFiles)
+        {
+            if (string.Equals(missing, required, StringComparison.Ordinal))
+            {
+                missingRequired.Add(required);
+                break;
+            }
+        }
+    }
+
+    if (missingRequired.Count > 0)
+    {
+        string missingList = string.Join(", ", missingRequired);
+        Console.WriteLine($"Error: Required prompt files missing: {missingList}");
+        throw new FileNotFoundException($"Required prompt files missing in {promptDirectory}: {missingList}");
     }
 
     return prompts;
@@ -365,7 +380,8 @@ static string BuildManagerPrompt(List<PromptTemplate> prompts)
         "manager-assign",
         "manager-verify",
         "manager-accept",
-        "manager-testing"
+        "manager-testing",
+        "manager-blocked"
     };
 
     return BuildPromptFromSections(prompts, sections);
@@ -373,10 +389,13 @@ static string BuildManagerPrompt(List<PromptTemplate> prompts)
 
 static string BuildDeveloperPrompt(List<PromptTemplate> prompts)
 {
+    // Return a combined prompt for backward compatibility
+    // The orchestrator uses individual prompts from config
     string[] sections = new[]
     {
         "developer-implementation",
-        "developer-testing"
+        "developer-testing",
+        "developer-write-tests"
     };
 
     return BuildPromptFromSections(prompts, sections);
@@ -474,6 +493,20 @@ static List<PromptTemplate> GetDefaultPromptTemplates()
             DisplayName = "Developer: Test Changes",
             FileName = "developer-testing.txt",
             Content = "Role: Developer agent in testing mode.\n\nProcess:\n- Add or update tests as needed.\n- Run relevant test suites and analyze failures.\n- Fix issues and re-run until green.\n\nOutput:\n- Report test commands and results."
+        },
+        new()
+        {
+            Key = "developer-write-tests",
+            DisplayName = "Developer: Write Tests",
+            FileName = "developer-write-tests.txt",
+            Content = "Role: Developer agent in write-tests mode.\n\nProcess:\n- Inspect existing tests to understand patterns.\n- Write or update unit tests for the specified functionality.\n- Run tests to ensure they pass.\n\nOutput:\n- Report tests created and results."
+        },
+        new()
+        {
+            Key = "manager-blocked",
+            DisplayName = "Manager: Blocked State",
+            FileName = "manager-blocked.txt",
+            Content = "Role: Manager agent in Blocked mode.\n\nProcess:\n- Document the blocker and what was tried.\n- Specify what is needed to unblock.\n- Await human input before resuming."
         },
         new()
         {
