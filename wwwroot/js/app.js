@@ -412,6 +412,12 @@ async function showTicketDetails(ticketId) {
 
 // Move ticket to new status
 async function moveTicket(ticketId, newStatus) {
+    // Close modal immediately before API call to prevent SignalR race condition
+    if (currentDetailTicketId === ticketId) {
+        document.getElementById('ticketDetailModal').classList.remove('active');
+        currentDetailTicketId = null;
+    }
+
     try {
         const response = await fetch(`${API_BASE}/tickets/${ticketId}/status`, {
             method: 'PATCH',
@@ -421,12 +427,6 @@ async function moveTicket(ticketId, newStatus) {
 
         if (response.ok) {
             await refreshAllTickets();
-
-            // Close detail modal if open
-            if (currentDetailTicketId === ticketId) {
-                document.getElementById('ticketDetailModal').classList.remove('active');
-                currentDetailTicketId = null;
-            }
         } else {
             console.error('Failed to move ticket');
         }

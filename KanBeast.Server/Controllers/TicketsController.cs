@@ -94,20 +94,35 @@ public class TicketsController : ControllerBase
             return NotFound();
         }
 
-        _logger.LogInformation("PATCH /tickets/{Id}/status - changed to {Status}", id, update.Status);
+        _logger.LogInformation("PATCH /tickets/{Id}/status - changed to {Status} (WorkerId={WorkerId})", id, update.Status, ticket.WorkerId ?? "null");
+
+        // If moving to Backlog, clear the worker ID so it can be restarted
+        if (update.Status == TicketStatus.Backlog && !string.IsNullOrEmpty(ticket.WorkerId))
+        {
+            _logger.LogInformation("Clearing WorkerId for ticket #{Id}", id);
+            ticket.WorkerId = null;
+            await _ticketService.UpdateTicketAsync(id, ticket);
+        }
 
         // If moving to Active, start a worker
-        if (update.Status == TicketStatus.Active && string.IsNullOrEmpty(ticket.WorkerId))
+        if (update.Status == TicketStatus.Active)
         {
-            try
+            if (string.IsNullOrEmpty(ticket.WorkerId))
             {
-                _logger.LogInformation("Starting worker for ticket #{Id}...", id);
-                string workerId = await _workerOrchestrator.StartWorkerAsync(id);
-                _logger.LogInformation("Worker started: {WorkerId} for ticket #{Id}", workerId, id);
+                try
+                {
+                    _logger.LogInformation("Starting worker for ticket #{Id}...", id);
+                    string workerId = await _workerOrchestrator.StartWorkerAsync(id);
+                    _logger.LogInformation("Worker started: {WorkerId} for ticket #{Id}", workerId, id);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to start worker for ticket #{Id}: {Message}", id, ex.Message);
+                }
             }
-            catch (Exception ex)
+            else
             {
-                _logger.LogError(ex, "Failed to start worker for ticket #{Id}: {Message}", id, ex.Message);
+                _logger.LogInformation("Ticket #{Id} already has worker {WorkerId}, not starting new one", id, ticket.WorkerId);
             }
         }
 
