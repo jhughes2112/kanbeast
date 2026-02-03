@@ -357,6 +357,7 @@ async function showTicketDetails(ticketId) {
     // Build action buttons based on allowed transitions
     let actionsHtml = '<div class="ticket-actions">';
     const allowedTargets = ALLOWED_TRANSITIONS[status] || [];
+    const canDelete = status === 'Backlog' || status === 'Done';
 
     if (status === 'Backlog') {
         actionsHtml += `<button class="btn-primary" onclick="moveTicket('${ticketId}', 'Active')">🚀 Start Work</button>`;
@@ -364,6 +365,10 @@ async function showTicketDetails(ticketId) {
         actionsHtml += `<button class="btn-danger" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Cancel & Return to Backlog</button>`;
     } else {
         actionsHtml += `<button class="btn-secondary" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Reopen</button>`;
+    }
+
+    if (canDelete) {
+        actionsHtml += `<button class="btn-danger btn-delete" onclick="deleteTicket('${ticketId}')">🗑️ Delete</button>`;
     }
 
     actionsHtml += '</div>';
@@ -432,6 +437,34 @@ async function moveTicket(ticketId, newStatus) {
 
 // Make moveTicket available globally for onclick handlers
 window.moveTicket = moveTicket;
+
+// Delete ticket
+async function deleteTicket(ticketId) {
+    if (!confirm('Are you sure you want to delete this ticket? This cannot be undone.')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/tickets/${ticketId}`, {
+            method: 'DELETE'
+        });
+
+        if (response.ok) {
+            await refreshAllTickets();
+
+            // Close detail modal
+            document.getElementById('ticketDetailModal').classList.remove('active');
+            currentDetailTicketId = null;
+        } else {
+            console.error('Failed to delete ticket');
+        }
+    } catch (error) {
+        console.error('Error deleting ticket:', error);
+    }
+}
+
+// Make deleteTicket available globally for onclick handlers
+window.deleteTicket = deleteTicket;
 
 // Drag and drop
 function canMoveFrom(status) {

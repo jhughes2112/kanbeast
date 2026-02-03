@@ -684,6 +684,18 @@ nav {
     justify-content: center;
 }
 
+.ticket-actions .btn-delete {
+    flex: 0 0 auto;
+    background: transparent;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+}
+
+.ticket-actions .btn-delete:hover {
+    background: var(--danger);
+    color: white;
+}
+
 @media (max-width: 1400px) {
     #kanbanBoard {
         grid-template-columns: repeat(2, 1fr);

@@ -1,8 +1,18 @@
 using System.Text.Json.Serialization;
+using KanBeast.Server;
 using KanBeast.Server.Services;
 using KanBeast.Server.Hubs;
+using Microsoft.Extensions.Logging.Console;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+
+// Configure clean console logging - just timestamp and message
+builder.Logging.ClearProviders();
+builder.Logging.AddConsole(options =>
+{
+    options.FormatterName = MinimalConsoleFormatter.FormatterName;
+});
+builder.Logging.AddConsoleFormatter<MinimalConsoleFormatter, ConsoleFormatterOptions>();
 
 // Add services to the container
 builder.Services.AddControllers()
@@ -14,7 +24,11 @@ builder.Services.AddSignalR();
 builder.Services.AddOpenApi();
 
 // Initialize container context (detects Docker environment)
-ILoggerFactory loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+ILoggerFactory loggerFactory = LoggerFactory.Create(b =>
+{
+    b.AddConsole(options => options.FormatterName = MinimalConsoleFormatter.FormatterName);
+    b.AddConsoleFormatter<MinimalConsoleFormatter, ConsoleFormatterOptions>();
+});
 ILogger<ContainerContext> contextLogger = loggerFactory.CreateLogger<ContainerContext>();
 ContainerContext containerContext = await ContainerContext.CreateAsync(contextLogger);
 

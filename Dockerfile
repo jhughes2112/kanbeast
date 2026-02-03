@@ -16,6 +16,8 @@ FROM runtime AS final
 WORKDIR /app
 COPY --from=build /app/publish/server ./server
 COPY --from=build /app/publish/worker ./worker
+COPY --from=build /app/publish/server/appsettings.json ./appsettings.json
 COPY env ./env
 COPY wwwroot ./wwwroot
+ENV ASPNETCORE_CONTENTROOT=/app
 ENTRYPOINT ["dotnet", "/app/server/KanBeast.Server.dll"]
