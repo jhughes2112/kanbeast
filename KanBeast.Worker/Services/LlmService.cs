@@ -33,7 +33,11 @@ public class LlmService : ILlmService
 
         if (!string.IsNullOrWhiteSpace(_config.Endpoint))
         {
-            builder.AddAzureOpenAIChatCompletion(_config.Model, _config.Endpoint, _config.ApiKey);
+            // Custom endpoint (OpenRouter, Azure, or other OpenAI-compatible APIs)
+            // Use HttpClient with custom base address for non-Azure endpoints
+            Uri endpoint = new Uri(_config.Endpoint);
+            HttpClient httpClient = new HttpClient { BaseAddress = endpoint };
+            builder.AddOpenAIChatCompletion(_config.Model, _config.ApiKey, httpClient: httpClient);
         }
         else
         {
