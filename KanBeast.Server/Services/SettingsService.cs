@@ -274,6 +274,37 @@ public class SettingsService : ISettingsService
             }
         }
 
+        // Apply sensible defaults for missing values
+        if (settingsFile.LlmRetryCount <= 0)
+        {
+            settingsFile.LlmRetryCount = 3;
+        }
+
+        if (settingsFile.LlmRetryDelaySeconds <= 0)
+        {
+            settingsFile.LlmRetryDelaySeconds = 5;
+        }
+
+        if (string.IsNullOrEmpty(settingsFile.ManagerCompaction.Type))
+        {
+            settingsFile.ManagerCompaction.Type = "summarize";
+        }
+
+        if (settingsFile.ManagerCompaction.ContextSizeThreshold <= 0)
+        {
+            settingsFile.ManagerCompaction.ContextSizeThreshold = 100000;
+        }
+
+        if (string.IsNullOrEmpty(settingsFile.DeveloperCompaction.Type))
+        {
+            settingsFile.DeveloperCompaction.Type = "summarize";
+        }
+
+        if (settingsFile.DeveloperCompaction.ContextSizeThreshold <= 0)
+        {
+            settingsFile.DeveloperCompaction.ContextSizeThreshold = 100000;
+        }
+
         return settingsFile;
     }
 
@@ -282,7 +313,8 @@ public class SettingsService : ISettingsService
         Directory.CreateDirectory(Path.GetDirectoryName(_settingsPath) ?? string.Empty);
         JsonSerializerOptions options = new JsonSerializerOptions
         {
-            WriteIndented = true
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
         };
 
         string json = JsonSerializer.Serialize(settings, options);
