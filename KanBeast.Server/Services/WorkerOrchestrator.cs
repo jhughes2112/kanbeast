@@ -1,5 +1,5 @@
-using System.Diagnostics;
-using System.Text;
+using Docker.DotNet;
+using Docker.DotNet.Models;
 using KanBeast.Server.Models;
 
 namespace KanBeast.Server.Services;
@@ -18,17 +18,18 @@ public class WorkerOrchestrator : IWorkerOrchestrator
     private readonly Dictionary<string, string> _activeWorkers = new Dictionary<string, string>();
     private readonly ITicketService _ticketService;
     private readonly ILogger<WorkerOrchestrator> _logger;
-    private readonly ServerOptions _options;
-    private const string WorkerEnvDirectory = "/app/env";
+    private readonly ContainerContext _containerContext;
+    private readonly DockerClient _dockerClient;
 
     public WorkerOrchestrator(
         ITicketService ticketService,
         ILogger<WorkerOrchestrator> logger,
-        ServerOptions options)
+        ContainerContext containerContext)
     {
         _ticketService = ticketService;
         _logger = logger;
-        _options = options;
+        _containerContext = containerContext;
+        _dockerClient = new DockerClientConfiguration().CreateClient();
     }
 
     public async Task<string> StartWorkerAsync(string ticketId)
@@ -37,6 +38,16 @@ public class WorkerOrchestrator : IWorkerOrchestrator
         if (ticket == null)
         {
             throw new InvalidOperationException($"Ticket {ticketId} not found");
+        }
+
+        if (!_containerContext.IsRunningInDocker)
+        {
+            throw new InvalidOperationException("Cannot start workers when not running in Docker");
+        }
+
+        if (_containerContext.Image == null)
+        {
+            throw new InvalidOperationException("Container image could not be determined");
         }
 
         string workerId = Guid.NewGuid().ToString();
@@ -48,43 +59,54 @@ public class WorkerOrchestrator : IWorkerOrchestrator
 
         _logger.LogInformation("Starting worker {WorkerId} for ticket {TicketId}", workerId, ticketId);
 
-        StringBuilder envArgsBuilder = new StringBuilder();
-        foreach ((string Key, string Value) in envVars)
+        List<string> envList = new List<string>();
+        foreach ((string key, string value) in envVars)
         {
-            if (envArgsBuilder.Length > 0)
-            {
-                envArgsBuilder.Append(' ');
-            }
-
-            envArgsBuilder.Append($"-e \"{EscapeDockerArg(Key)}={EscapeDockerArg(Value)}\"");
+            envList.Add($"{key}={value}");
         }
 
-        string envArgs = envArgsBuilder.ToString();
-        string args = $"run -d --name {EscapeDockerArg(containerName)} --network {EscapeDockerArg(_options.DockerNetwork)} {envArgs} {EscapeDockerArg(_options.WorkerImage)} dotnet /app/worker/KanBeast.Worker.dll";
-        string containerId = await RunDockerCommandAsync(args);
+        CreateContainerParameters createParams = new CreateContainerParameters
+        {
+            Image = _containerContext.Image,
+            Name = containerName,
+            Env = envList,
+            Cmd = new List<string> { "dotnet", "/app/worker/KanBeast.Worker.dll" },
+            HostConfig = new HostConfig
+            {
+                NetworkMode = _containerContext.Network,
+                Mounts = _containerContext.Mounts
+            }
+        };
+
+        CreateContainerResponse response = await _dockerClient.Containers.CreateContainerAsync(createParams);
+        string containerId = response.ID;
+
+        await _dockerClient.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
 
         // Update ticket with worker ID
         ticket.WorkerId = workerId;
         await _ticketService.AddActivityLogAsync(ticketId, $"Worker {workerId} assigned (container {containerName})");
 
-        // Store the worker ID and status
+        // Store the worker ID and container ID
         _activeWorkers[workerId] = containerId;
 
         return workerId;
     }
 
-    public Task<bool> StopWorkerAsync(string workerId)
+    public async Task<bool> StopWorkerAsync(string workerId)
     {
-        if (!_activeWorkers.ContainsKey(workerId))
+        if (!_activeWorkers.TryGetValue(workerId, out string? containerId))
         {
-            return Task.FromResult(false);
+            return false;
         }
 
-        _logger.LogInformation($"Stopping worker {workerId}");
-        
-        // In production, stop the Docker container
+        _logger.LogInformation("Stopping worker {WorkerId}", workerId);
+
+        await _dockerClient.Containers.StopContainerAsync(containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 10 });
+        await _dockerClient.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true });
+
         _activeWorkers.Remove(workerId);
-        return Task.FromResult(true);
+        return true;
     }
 
     public Task<Dictionary<string, string>> GetActiveWorkersAsync()
@@ -99,53 +121,31 @@ public class WorkerOrchestrator : IWorkerOrchestrator
         return new Dictionary<string, string>
         {
             ["TICKET_ID"] = ticketId,
-            ["SERVER_URL"] = _options.ServerUrl
+            ["SERVER_URL"] = _containerContext.ServerUrl
         };
     }
 
     private async Task EnsureDockerNetworkAsync()
     {
-        try
+        if (_containerContext.Network == null)
         {
-            await RunDockerCommandAsync($"network inspect {EscapeDockerArg(_options.DockerNetwork)}");
-        }
-        catch
-        {
-            await RunDockerCommandAsync($"network create {EscapeDockerArg(_options.DockerNetwork)}");
-        }
-    }
-
-    private async Task<string> RunDockerCommandAsync(string arguments)
-    {
-        ProcessStartInfo startInfo = new ProcessStartInfo("docker", arguments)
-        {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false
-        };
-
-        using Process process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        string output = await process.StandardOutput.ReadToEndAsync();
-        string error = await process.StandardError.ReadToEndAsync();
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
-        {
-            throw new InvalidOperationException($"Docker command failed: {error}".Trim());
+            return;
         }
 
-        return output.Trim();
-    }
+        IList<NetworkResponse> networks = await _dockerClient.Networks.ListNetworksAsync(new NetworksListParameters());
+        bool networkExists = false;
+        foreach (NetworkResponse network in networks)
+        {
+            if (network.Name == _containerContext.Network)
+            {
+                networkExists = true;
+                break;
+            }
+        }
 
-    private static string EscapeDockerArg(string value)
-    {
-        string escaped = value
-            .Replace("\r", "")
-            .Replace("\n", "\\n")
-            .Replace("\"", "\\\"");
-
-        return escaped;
+        if (!networkExists)
+        {
+            await _dockerClient.Networks.CreateNetworkAsync(new NetworksCreateParameters { Name = _containerContext.Network });
+        }
     }
 }

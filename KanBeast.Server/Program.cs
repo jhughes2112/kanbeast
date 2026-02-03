@@ -1,22 +1,23 @@
-using CommandLine;
 using KanBeast.Server.Services;
 using KanBeast.Server.Hubs;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
-
-ServerOptions serverOptions = Parser.Default.ParseArguments<ServerOptions>(args)
-    .MapResult(options => options, _ => new ServerOptions());
 
 // Add services to the container
 builder.Services.AddControllers();
 builder.Services.AddSignalR();
 builder.Services.AddOpenApi();
 
+// Initialize container context (detects Docker environment)
+ILoggerFactory loggerFactory = LoggerFactory.Create(b => b.AddConsole());
+ILogger<ContainerContext> contextLogger = loggerFactory.CreateLogger<ContainerContext>();
+ContainerContext containerContext = await ContainerContext.CreateAsync(contextLogger);
+
 // Register application services
 builder.Services.AddSingleton<ITicketService, TicketService>();
 builder.Services.AddSingleton<ISettingsService, SettingsService>();
 builder.Services.AddSingleton<IWorkerOrchestrator, WorkerOrchestrator>();
-builder.Services.AddSingleton(serverOptions);
+builder.Services.AddSingleton(containerContext);
 
 WebApplication app = builder.Build();
 
