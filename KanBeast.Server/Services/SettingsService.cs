@@ -37,14 +37,46 @@ public class SettingsService : ISettingsService
 
     public Task<Settings> UpdateSettingsAsync(Settings settings)
     {
-        List<PromptTemplate> prompts = settings.SystemPrompts.Count > 0
-            ? settings.SystemPrompts
-            : _settings.SystemPrompts;
-        settings.SystemPrompts = UpdatePromptFiles(prompts);
+        // Merge incoming settings with existing - only overwrite fields that were actually provided
+        if (settings.LLMConfigs.Count > 0)
+        {
+            _settings.LLMConfigs = settings.LLMConfigs;
+        }
 
-        SettingsFile fileSettings = BuildSettingsFile(settings);
+        if (!string.IsNullOrEmpty(settings.GitConfig.RepositoryUrl) ||
+            !string.IsNullOrEmpty(settings.GitConfig.Username) ||
+            !string.IsNullOrEmpty(settings.GitConfig.Email))
+        {
+            _settings.GitConfig = settings.GitConfig;
+        }
+
+        if (settings.LlmRetryCount > 0)
+        {
+            _settings.LlmRetryCount = settings.LlmRetryCount;
+        }
+
+        if (settings.LlmRetryDelaySeconds > 0)
+        {
+            _settings.LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds;
+        }
+
+        if (!string.IsNullOrEmpty(settings.ManagerCompaction.Type))
+        {
+            _settings.ManagerCompaction = settings.ManagerCompaction;
+        }
+
+        if (!string.IsNullOrEmpty(settings.DeveloperCompaction.Type))
+        {
+            _settings.DeveloperCompaction = settings.DeveloperCompaction;
+        }
+
+        if (settings.SystemPrompts.Count > 0)
+        {
+            _settings.SystemPrompts = UpdatePromptFiles(settings.SystemPrompts);
+        }
+
+        SettingsFile fileSettings = BuildSettingsFile(_settings);
         SaveSettingsFile(fileSettings);
-        _settings = settings;
 
         return Task.FromResult(_settings);
     }

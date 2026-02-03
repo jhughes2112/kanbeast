@@ -23,19 +23,31 @@ public class CompactionNone : ICompaction
 // Summarizes context statements into a compact continuation summary.
 public class CompactionSummarizer : ICompaction
 {
+    private const int MinimumThreshold = 3072;
+
     private readonly LlmService _summarizerService;
     private readonly Kernel _kernel;
     private readonly string _summaryPrompt;
     private readonly string _summarySystemPrompt;
-    private readonly int _contextSizeThreshold;
+    private readonly int _effectiveThreshold;
 
-    public CompactionSummarizer(LlmService summarizerService, Kernel kernel, string summaryPrompt, string summarySystemPrompt, int contextSizeThreshold)
+    public CompactionSummarizer(LlmService summarizerService, Kernel kernel, string summaryPrompt, string summarySystemPrompt, int contextSizeThreshold, int llmContextLength)
     {
         _summarizerService = summarizerService;
         _kernel = kernel;
         _summaryPrompt = summaryPrompt;
         _summarySystemPrompt = summarySystemPrompt;
-        _contextSizeThreshold = contextSizeThreshold;
+
+        // Compute effective threshold as lower of 90% of LLM context or configured threshold
+        int llmLimit = (int)(llmContextLength * 0.9);
+        if (contextSizeThreshold > 0)
+        {
+            _effectiveThreshold = Math.Max(MinimumThreshold, Math.Min(llmLimit, contextSizeThreshold));
+        }
+        else
+        {
+            _effectiveThreshold = Math.Max(MinimumThreshold, llmLimit);
+        }
     }
 
     public async Task<List<string>> CompactAsync(List<string> contextStatements, CancellationToken cancellationToken)
@@ -44,7 +56,7 @@ public class CompactionSummarizer : ICompaction
         string contextBlock = BuildContextBlock(contextStatements);
         int contextSize = contextBlock.Length;
 
-        if (contextSize > _contextSizeThreshold)
+        if (contextSize > _effectiveThreshold)
         {
             string userPrompt = $"{_summaryPrompt}\n\nContext:\n{contextBlock}";
             string summary = await _summarizerService.RunAsync(_kernel, _summarySystemPrompt, userPrompt, cancellationToken);

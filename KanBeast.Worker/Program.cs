@@ -252,17 +252,18 @@ static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> 
 {
     ICompaction compaction = new CompactionNone();
 
-    if (string.Equals(settings.Type, "summarizer", StringComparison.OrdinalIgnoreCase))
+    if (string.Equals(settings.Type, "summarize", StringComparison.OrdinalIgnoreCase) && llmConfigs.Count > 0)
     {
-        LLMConfig summarizerConfig = llmConfigs[settings.SummarizerConfigIndex];
-        LlmService summarizerService = new LlmService(summarizerConfig);
+        LLMConfig currentLlm = llmConfigs[0];
+        LlmService summarizerService = new LlmService(currentLlm);
         Kernel summarizerKernel = summarizerService.CreateKernel(Array.Empty<object>());
         compaction = new CompactionSummarizer(
             summarizerService,
             summarizerKernel,
             summaryPrompt,
             summarySystemPrompt,
-            settings.ContextSizeThreshold);
+            settings.ContextSizeThreshold,
+            currentLlm.ContextLength);
     }
 
     return compaction;

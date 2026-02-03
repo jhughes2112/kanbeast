@@ -30,6 +30,7 @@ public class LLMConfig
     public required string ApiKey { get; set; }
     public required string Model { get; set; }
     public string? Endpoint { get; set; }
+    public int ContextLength { get; set; } = 128000;
 }
 
 // Stores Git integration settings for worker operations.
@@ -71,5 +72,4 @@ public class CompactionSettings
 {
     public string Type { get; set; } = string.Empty;
     public int ContextSizeThreshold { get; set; }
-    public int SummarizerConfigIndex { get; set; }
 }

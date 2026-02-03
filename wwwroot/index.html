@@ -97,6 +97,36 @@
 				</div>
 
 				<div class="settings-section">
+					<h3>Compaction Settings</h3>
+					<div class="form-group">
+						<label for="managerCompactionType">Manager Compaction</label>
+						<select id="managerCompactionType">
+							<option value="disabled">Disabled</option>
+							<option value="summarize">Summarize</option>
+						</select>
+					</div>
+					<div id="managerCompactionOptions" class="compaction-options" style="display: none;">
+						<div class="form-group">
+							<label for="managerContextThreshold">Context Size Threshold (0 = use LLM limit only)</label>
+							<input type="number" id="managerContextThreshold" min="0" step="1000" placeholder="100000">
+						</div>
+					</div>
+					<div class="form-group">
+						<label for="developerCompactionType">Developer Compaction</label>
+						<select id="developerCompactionType">
+							<option value="disabled">Disabled</option>
+							<option value="summarize">Summarize</option>
+						</select>
+					</div>
+					<div id="developerCompactionOptions" class="compaction-options" style="display: none;">
+						<div class="form-group">
+							<label for="developerContextThreshold">Context Size Threshold (0 = use LLM limit only)</label>
+							<input type="number" id="developerContextThreshold" min="0" step="1000" placeholder="100000">
+						</div>
+					</div>
+				</div>
+
+				<div class="settings-section">
 					<h3>Git Configuration</h3>
 					<form id="gitConfigForm">
 						<div class="form-group">

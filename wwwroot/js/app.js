@@ -560,6 +560,10 @@ function setupEventListeners() {
     // Add LLM button
     document.getElementById('addLLMBtn').addEventListener('click', addLLMConfig);
 
+    // Compaction type dropdowns
+    document.getElementById('managerCompactionType').addEventListener('change', updateCompactionVisibility);
+    document.getElementById('developerCompactionType').addEventListener('change', updateCompactionVisibility);
+
     // Close modal buttons
     document.querySelectorAll('.close').forEach(btn => {
         btn.addEventListener('click', () => {
@@ -644,10 +648,26 @@ function showSettings() {
         document.getElementById('gitSshKey').value = settings.gitConfig.sshKey || '';
     }
 
+    // Populate compaction settings
+    const managerType = (settings && settings.managerCompaction && settings.managerCompaction.type) || 'disabled';
+    const developerType = (settings && settings.developerCompaction && settings.developerCompaction.type) || 'disabled';
+    document.getElementById('managerCompactionType').value = managerType === 'summarize' ? 'summarize' : 'disabled';
+    document.getElementById('developerCompactionType').value = developerType === 'summarize' ? 'summarize' : 'disabled';
+    document.getElementById('managerContextThreshold').value = (settings && settings.managerCompaction && settings.managerCompaction.contextSizeThreshold) || 0;
+    document.getElementById('developerContextThreshold').value = (settings && settings.developerCompaction && settings.developerCompaction.contextSizeThreshold) || 0;
+    updateCompactionVisibility();
+
     // Populate LLM configs
     renderLLMConfigs();
 
     modal.classList.add('active');
+}
+
+function updateCompactionVisibility() {
+    const managerType = document.getElementById('managerCompactionType').value;
+    const developerType = document.getElementById('developerCompactionType').value;
+    document.getElementById('managerCompactionOptions').style.display = managerType === 'summarize' ? 'block' : 'none';
+    document.getElementById('developerCompactionOptions').style.display = developerType === 'summarize' ? 'block' : 'none';
 }
 
 function renderLLMConfigs() {
@@ -678,6 +698,10 @@ function renderLLMConfigs() {
                 <label>Endpoint (optional, for Azure)</label>
                 <input type="text" class="llm-endpoint" value="${escapeHtml(config.endpoint || '')}" placeholder="https://...">
             </div>
+            <div class="form-group">
+                <label>Context Length</label>
+                <input type="number" class="llm-context-length" value="${config.contextLength || 128000}" min="1000" step="1000" placeholder="128000">
+            </div>
         `;
 
         configEl.querySelector('.remove-btn').addEventListener('click', () => removeLLMConfig(index));
@@ -694,7 +718,7 @@ function addLLMConfig() {
         settings.llmConfigs = [];
     }
 
-    settings.llmConfigs.push({ model: '', apiKey: '', endpoint: '' });
+    settings.llmConfigs.push({ model: '', apiKey: '', endpoint: '', contextLength: 128000 });
     renderLLMConfigs();
 }
 
@@ -712,7 +736,8 @@ function collectLLMConfigs() {
         configs.push({
             model: configEl.querySelector('.llm-model').value,
             apiKey: configEl.querySelector('.llm-apikey').value,
-            endpoint: configEl.querySelector('.llm-endpoint').value || null
+            endpoint: configEl.querySelector('.llm-endpoint').value || null,
+            contextLength: parseInt(configEl.querySelector('.llm-context-length').value, 10) || 128000
         });
     });
 
@@ -729,6 +754,14 @@ async function handleSaveSettings(e) {
             username: document.getElementById('gitUsername').value,
             email: document.getElementById('gitEmail').value,
             sshKey: document.getElementById('gitSshKey').value || null
+        },
+        managerCompaction: {
+            type: document.getElementById('managerCompactionType').value,
+            contextSizeThreshold: parseInt(document.getElementById('managerContextThreshold').value, 10) || 0
+        },
+        developerCompaction: {
+            type: document.getElementById('developerCompactionType').value,
+            contextSizeThreshold: parseInt(document.getElementById('developerContextThreshold').value, 10) || 0
         }
     };
 

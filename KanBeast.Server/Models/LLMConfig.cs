@@ -4,13 +4,10 @@ namespace KanBeast.Server.Models;
 public class LLMConfig
 {
     public string Id { get; set; } = Guid.NewGuid().ToString();
-    public string Name { get; set; } = string.Empty;
-    public string Provider { get; set; } = string.Empty; // e.g., "openai", "anthropic", "azure"
     public string ApiKey { get; set; } = string.Empty;
     public string Model { get; set; } = string.Empty;
     public string? Endpoint { get; set; }
-    public int Priority { get; set; } // Lower number = higher priority
-    public bool IsEnabled { get; set; } = true;
+    public int ContextLength { get; set; } = 128000;
 }
 
 // Stores Git integration settings for workers.
@@ -47,7 +44,6 @@ public class CompactionSettings
 {
     public string Type { get; set; } = "summarize";
     public int ContextSizeThreshold { get; set; } = 100000;
-    public int SummarizerConfigIndex { get; set; } = 0;
 }
 
 // Aggregates runtime settings for the API and UI.
