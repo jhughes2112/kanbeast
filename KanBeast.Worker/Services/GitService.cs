@@ -122,15 +122,24 @@ public class GitService : IGitService
                 }
             }
 
-            // Write the key to a file
-            string keyPath = Path.Combine(sshDir, "id_rsa");
-
             // Normalize line endings to Unix (LF only) and ensure proper format
+            // Also handle JSON unicode escapes that might not have been decoded
             string normalizedKey = sshKeyContent
+                .Replace("\\u002B", "+")
+                .Replace("\\u002b", "+")
+                .Replace("\\u002F", "/")
+                .Replace("\\u002f", "/")
                 .Replace("\\n", "\n")
                 .Replace("\r\n", "\n")
                 .Replace("\r", "\n")
                 .Trim();
+
+            // Decode any remaining \uXXXX escapes
+            normalizedKey = System.Text.RegularExpressions.Regex.Replace(
+                normalizedKey,
+                @"\\u([0-9A-Fa-f]{4})",
+                m => ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString());
+
             if (!normalizedKey.EndsWith("\n"))
             {
                 normalizedKey += "\n";
@@ -139,6 +148,30 @@ public class GitService : IGitService
             Console.WriteLine($"SSH key after normalization: {normalizedKey.Length} chars");
             Console.WriteLine($"SSH key starts with: {normalizedKey.Substring(0, Math.Min(50, normalizedKey.Length))}...");
             Console.WriteLine($"SSH key ends with: ...{normalizedKey.Substring(Math.Max(0, normalizedKey.Length - 50))}");
+
+            // Detect key type from content
+            string keyFileName = "id_rsa";
+            if (normalizedKey.Contains("OPENSSH PRIVATE KEY"))
+            {
+                // New OpenSSH format - check if it's ed25519 by size (ed25519 keys are ~400-500 chars)
+                // RSA keys in OpenSSH format are typically 2000+ chars
+                if (normalizedKey.Length < 600)
+                {
+                    keyFileName = "id_ed25519";
+                    Console.WriteLine("Detected ed25519 key format (based on size)");
+                }
+                else
+                {
+                    Console.WriteLine("Detected OpenSSH format RSA key");
+                }
+            }
+            else if (normalizedKey.Contains("RSA PRIVATE KEY"))
+            {
+                Console.WriteLine("Detected PEM format RSA key");
+            }
+
+            // Write the key to a file
+            string keyPath = Path.Combine(sshDir, keyFileName);
 
             // Write with explicit Unix line endings
             using (StreamWriter writer = new StreamWriter(keyPath, false, new System.Text.UTF8Encoding(false)))
@@ -159,7 +192,7 @@ public class GitService : IGitService
 
             // Create SSH config to disable host key checking globally
             string configPath = Path.Combine(sshDir, "config");
-            string sshConfig = "Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/id_rsa\n";
+            string sshConfig = $"Host *\n  StrictHostKeyChecking no\n  UserKnownHostsFile /dev/null\n  IdentityFile ~/.ssh/{keyFileName}\n";
 
             // Write config with explicit Unix line endings
             using (StreamWriter writer = new StreamWriter(configPath, false, new System.Text.UTF8Encoding(false)))

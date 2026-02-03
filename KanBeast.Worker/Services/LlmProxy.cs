@@ -24,6 +24,12 @@ public class LlmProxy : ILlmService
         _kernelSets = new Dictionary<Kernel, KernelSet>();
         _contextStatements = new List<string>();
         _compaction = compaction;
+
+        Console.WriteLine($"LlmProxy initialized with {configs.Count} LLM config(s)");
+        foreach (LLMConfig config in configs)
+        {
+            Console.WriteLine($"  - Model: {config.Model}, Endpoint: {config.Endpoint ?? "default"}, ContextLength: {config.ContextLength}");
+        }
     }
 
     public Kernel CreateKernel(IEnumerable<object> tools)
@@ -63,8 +69,9 @@ public class LlmProxy : ILlmService
                     result = await entry.Service.RunAsync(entry.Kernel, resolvedSystemPrompt, userPrompt, cancellationToken);
                     succeeded = true;
                 }
-                catch (Exception)
+                catch (Exception ex)
                 {
+                    Console.WriteLine($"LLM {entry.ConfigIndex} attempt {attempt + 1} failed: {ex.Message}");
                     if (attempt < _retryCount)
                     {
                         if (_retryDelay > TimeSpan.Zero)
@@ -74,6 +81,7 @@ public class LlmProxy : ILlmService
                     }
                     else
                     {
+                        Console.WriteLine($"LLM {entry.ConfigIndex} marked as down after {_retryCount + 1} attempts");
                         _downedIndices.Add(entry.ConfigIndex);
                     }
                 }
