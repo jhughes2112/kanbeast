@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using KanBeast.Server.Models;
 
 namespace KanBeast.Server.Services;
@@ -20,10 +22,82 @@ public interface ITicketService
 public class TicketService : ITicketService
 {
     private readonly ConcurrentDictionary<string, Ticket> _tickets = new();
+    private readonly string _ticketsDirectory;
+    private readonly JsonSerializerOptions _jsonOptions;
+    private readonly object _idLock = new();
+    private int _nextTicketId = 1;
+
+    public TicketService(IWebHostEnvironment environment)
+    {
+        _ticketsDirectory = Path.Combine(environment.ContentRootPath, "env", "tickets");
+        Directory.CreateDirectory(_ticketsDirectory);
+
+        _jsonOptions = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = true
+        };
+        _jsonOptions.Converters.Add(new JsonStringEnumConverter());
+
+        LoadTicketsFromDisk();
+    }
+
+    private void LoadTicketsFromDisk()
+    {
+        int maxId = 0;
+
+        foreach (string filePath in Directory.EnumerateFiles(_ticketsDirectory, "*.json"))
+        {
+            string json = File.ReadAllText(filePath);
+            Ticket? ticket = JsonSerializer.Deserialize<Ticket>(json, _jsonOptions);
+
+            if (ticket != null && !string.IsNullOrEmpty(ticket.Id))
+            {
+                _tickets[ticket.Id] = ticket;
+
+                if (int.TryParse(ticket.Id, out int ticketIdNum) && ticketIdNum > maxId)
+                {
+                    maxId = ticketIdNum;
+                }
+            }
+        }
+
+        _nextTicketId = maxId + 1;
+    }
+
+    private void SaveTicketToDisk(Ticket ticket)
+    {
+        string filePath = Path.Combine(_ticketsDirectory, $"ticket-{ticket.Id}.json");
+        string json = JsonSerializer.Serialize(ticket, _jsonOptions);
+        File.WriteAllText(filePath, json);
+    }
+
+    private void DeleteTicketFromDisk(string id)
+    {
+        string filePath = Path.Combine(_ticketsDirectory, $"ticket-{id}.json");
+
+        if (File.Exists(filePath))
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    private string AllocateNextId()
+    {
+        lock (_idLock)
+        {
+            int id = _nextTicketId;
+            _nextTicketId++;
+            return id.ToString();
+        }
+    }
 
     public Task<Ticket> CreateTicketAsync(Ticket ticket)
     {
+        ticket.Id = AllocateNextId();
         _tickets[ticket.Id] = ticket;
+        SaveTicketToDisk(ticket);
         return Task.FromResult(ticket);
     }
 
@@ -41,82 +115,129 @@ public class TicketService : ITicketService
     public Task<Ticket?> UpdateTicketAsync(string id, Ticket ticket)
     {
         if (!_tickets.ContainsKey(id))
+        {
             return Task.FromResult<Ticket?>(null);
+        }
 
         ticket.Id = id;
         ticket.UpdatedAt = DateTime.UtcNow;
         _tickets[id] = ticket;
+        SaveTicketToDisk(ticket);
         return Task.FromResult<Ticket?>(ticket);
     }
 
     public Task<bool> DeleteTicketAsync(string id)
     {
-        return Task.FromResult(_tickets.TryRemove(id, out _));
+        bool removed = _tickets.TryRemove(id, out _);
+
+        if (removed)
+        {
+            DeleteTicketFromDisk(id);
+        }
+
+        return Task.FromResult(removed);
     }
 
     public Task<Ticket?> UpdateTicketStatusAsync(string id, TicketStatus status)
     {
-        if (!_tickets.TryGetValue(id, out var ticket))
+        if (!_tickets.TryGetValue(id, out Ticket? ticket))
+        {
             return Task.FromResult<Ticket?>(null);
+        }
 
         ticket.Status = status;
         ticket.UpdatedAt = DateTime.UtcNow;
+        SaveTicketToDisk(ticket);
         return Task.FromResult<Ticket?>(ticket);
     }
 
     public Task<Ticket?> AddTaskToTicketAsync(string id, KanbanTask task)
     {
-        if (!_tickets.TryGetValue(id, out var ticket))
+        if (!_tickets.TryGetValue(id, out Ticket? ticket))
+        {
             return Task.FromResult<Ticket?>(null);
+        }
 
         task.LastUpdatedAt = DateTime.UtcNow;
-        foreach (var subtask in task.Subtasks)
+        foreach (KanbanSubtask subtask in task.Subtasks)
         {
             subtask.LastUpdatedAt = DateTime.UtcNow;
         }
 
         ticket.Tasks.Add(task);
         ticket.UpdatedAt = DateTime.UtcNow;
+        SaveTicketToDisk(ticket);
         return Task.FromResult<Ticket?>(ticket);
     }
 
     public Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
     {
-        if (!_tickets.TryGetValue(ticketId, out var ticket))
+        if (!_tickets.TryGetValue(ticketId, out Ticket? ticket))
+        {
             return Task.FromResult<Ticket?>(null);
+        }
 
-        var task = ticket.Tasks.FirstOrDefault(t => t.Id == taskId);
+        KanbanTask? task = null;
+        foreach (KanbanTask candidate in ticket.Tasks)
+        {
+            if (string.Equals(candidate.Id, taskId, StringComparison.Ordinal))
+            {
+                task = candidate;
+                break;
+            }
+        }
+
         if (task == null)
+        {
             return Task.FromResult<Ticket?>(null);
+        }
 
-        var subtask = task.Subtasks.FirstOrDefault(s => s.Id == subtaskId);
+        KanbanSubtask? subtask = null;
+        foreach (KanbanSubtask candidate in task.Subtasks)
+        {
+            if (string.Equals(candidate.Id, subtaskId, StringComparison.Ordinal))
+            {
+                subtask = candidate;
+                break;
+            }
+        }
+
         if (subtask == null)
+        {
             return Task.FromResult<Ticket?>(null);
+        }
 
         subtask.Status = status;
         subtask.LastUpdatedAt = DateTime.UtcNow;
         task.LastUpdatedAt = DateTime.UtcNow;
         ticket.UpdatedAt = DateTime.UtcNow;
+        SaveTicketToDisk(ticket);
         return Task.FromResult<Ticket?>(ticket);
     }
 
     public Task<Ticket?> AddActivityLogAsync(string id, string activity)
     {
-        if (!_tickets.TryGetValue(id, out var ticket))
+        if (!_tickets.TryGetValue(id, out Ticket? ticket))
+        {
             return Task.FromResult<Ticket?>(null);
+        }
 
         ticket.ActivityLog.Add($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] {activity}");
         ticket.UpdatedAt = DateTime.UtcNow;
+        SaveTicketToDisk(ticket);
         return Task.FromResult<Ticket?>(ticket);
     }
 
     public Task<Ticket?> SetBranchNameAsync(string id, string branchName)
     {
-        if (!_tickets.TryGetValue(id, out var ticket))
+        if (!_tickets.TryGetValue(id, out Ticket? ticket))
+        {
             return Task.FromResult<Ticket?>(null);
+        }
 
         ticket.BranchName = branchName;
         ticket.UpdatedAt = DateTime.UtcNow;
+        SaveTicketToDisk(ticket);
         return Task.FromResult<Ticket?>(ticket);
     }
 }

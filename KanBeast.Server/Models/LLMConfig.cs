@@ -37,6 +37,7 @@ public class SettingsFile
     public int LlmRetryDelaySeconds { get; set; }
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
+    public WebSearchConfig WebSearch { get; set; } = new();
 }
 
 // Configures compaction behavior for agent context handling.
@@ -44,6 +45,14 @@ public class CompactionSettings
 {
     public string Type { get; set; } = string.Empty;
     public int ContextSizeThreshold { get; set; }
+}
+
+// Configures web search provider for agents.
+public class WebSearchConfig
+{
+    public string Provider { get; set; } = "duckduckgo";
+    public string? GoogleApiKey { get; set; }
+    public string? GoogleSearchEngineId { get; set; }
 }
 
 // Aggregates runtime settings for the API and UI.
@@ -55,5 +64,6 @@ public class Settings
     public int LlmRetryDelaySeconds { get; set; }
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
+    public WebSearchConfig WebSearch { get; set; } = new();
     public List<PromptTemplate> SystemPrompts { get; set; } = new();
 }

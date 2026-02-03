@@ -305,6 +305,11 @@ public class SettingsService : ISettingsService
             settingsFile.DeveloperCompaction.ContextSizeThreshold = 100000;
         }
 
+        if (string.IsNullOrEmpty(settingsFile.WebSearch.Provider))
+        {
+            settingsFile.WebSearch.Provider = "duckduckgo";
+        }
+
         return settingsFile;
     }
 
@@ -331,6 +336,7 @@ public class SettingsService : ISettingsService
             LlmRetryDelaySeconds = fileSettings.LlmRetryDelaySeconds,
             ManagerCompaction = fileSettings.ManagerCompaction,
             DeveloperCompaction = fileSettings.DeveloperCompaction,
+            WebSearch = fileSettings.WebSearch,
             SystemPrompts = LoadPromptTemplates()
         };
 
@@ -346,7 +352,8 @@ public class SettingsService : ISettingsService
             LlmRetryCount = settings.LlmRetryCount,
             LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds,
             ManagerCompaction = settings.ManagerCompaction,
-            DeveloperCompaction = settings.DeveloperCompaction
+            DeveloperCompaction = settings.DeveloperCompaction,
+            WebSearch = settings.WebSearch
         };
 
         return fileSettings;
