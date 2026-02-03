@@ -24,6 +24,7 @@ async function init() {
     try {
         await loadTickets();
         await loadSettings();
+        renderAllTickets();
         setupSignalR();
         setupEventListeners();
         setupDragAndDrop();

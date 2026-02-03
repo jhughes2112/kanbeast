@@ -20,8 +20,10 @@ public class SettingsService : ISettingsService
 
     public SettingsService(IWebHostEnvironment environment)
     {
-        _promptDirectory = Path.Combine(environment.ContentRootPath, "env", "prompts");
-        _settingsPath = Path.Combine(environment.ContentRootPath, "env", "settings.json");
+        // Use /app/env in Docker, or ContentRootPath/env locally
+        string basePath = Directory.Exists("/app/env") ? "/app" : environment.ContentRootPath;
+        _promptDirectory = Path.Combine(basePath, "env", "prompts");
+        _settingsPath = Path.Combine(basePath, "env", "settings.json");
         Directory.CreateDirectory(_promptDirectory);
     }
 

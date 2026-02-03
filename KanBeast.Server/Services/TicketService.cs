@@ -24,13 +24,20 @@ public class TicketService : ITicketService
     private readonly ConcurrentDictionary<string, Ticket> _tickets = new();
     private readonly string _ticketsDirectory;
     private readonly JsonSerializerOptions _jsonOptions;
+    private readonly ILogger<TicketService> _logger;
     private readonly object _idLock = new();
     private int _nextTicketId = 1;
 
-    public TicketService(IWebHostEnvironment environment)
+    public TicketService(IWebHostEnvironment environment, ILogger<TicketService> logger)
     {
-        _ticketsDirectory = Path.Combine(environment.ContentRootPath, "env", "tickets");
+        _logger = logger;
+
+        // Use /app/env in Docker, or ContentRootPath/env locally
+        string basePath = Directory.Exists("/app/env") ? "/app" : environment.ContentRootPath;
+        _ticketsDirectory = Path.Combine(basePath, "env", "tickets");
         Directory.CreateDirectory(_ticketsDirectory);
+
+        _logger.LogInformation("Tickets directory: {Path}", _ticketsDirectory);
 
         _jsonOptions = new JsonSerializerOptions
         {
@@ -46,24 +53,34 @@ public class TicketService : ITicketService
     private void LoadTicketsFromDisk()
     {
         int maxId = 0;
+        int loadedCount = 0;
 
         foreach (string filePath in Directory.EnumerateFiles(_ticketsDirectory, "*.json"))
         {
-            string json = File.ReadAllText(filePath);
-            Ticket? ticket = JsonSerializer.Deserialize<Ticket>(json, _jsonOptions);
-
-            if (ticket != null && !string.IsNullOrEmpty(ticket.Id))
+            try
             {
-                _tickets[ticket.Id] = ticket;
+                string json = File.ReadAllText(filePath);
+                Ticket? ticket = JsonSerializer.Deserialize<Ticket>(json, _jsonOptions);
 
-                if (int.TryParse(ticket.Id, out int ticketIdNum) && ticketIdNum > maxId)
+                if (ticket != null && !string.IsNullOrEmpty(ticket.Id))
                 {
-                    maxId = ticketIdNum;
+                    _tickets[ticket.Id] = ticket;
+                    loadedCount++;
+
+                    if (int.TryParse(ticket.Id, out int ticketIdNum) && ticketIdNum > maxId)
+                    {
+                        maxId = ticketIdNum;
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("Failed to load ticket from {Path}: {Error}", filePath, ex.Message);
             }
         }
 
         _nextTicketId = maxId + 1;
+        _logger.LogInformation("Loaded {Count} tickets from disk, next ID: {NextId}", loadedCount, _nextTicketId);
     }
 
     private void SaveTicketToDisk(Ticket ticket)
