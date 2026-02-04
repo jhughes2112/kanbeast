@@ -111,7 +111,7 @@ public class LlmService : ILlmService
     {
         Directory.CreateDirectory(LogDirectory);
 
-        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+        long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         string filename = !string.IsNullOrEmpty(LogPrefix)
             ? $"{LogPrefix}-{timestamp}.txt"
             : $"request-{timestamp}.txt";
