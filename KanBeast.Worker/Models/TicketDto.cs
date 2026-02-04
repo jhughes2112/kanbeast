@@ -39,6 +39,7 @@ public class KanbanTask
 {
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
     public List<KanbanSubtask> Subtasks { get; set; } = new List<KanbanSubtask>();
 }
 
@@ -46,6 +47,7 @@ public class KanbanSubtask
 {
     public string Id { get; set; } = string.Empty;
     public string Name { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
     public SubtaskStatus Status { get; set; } = SubtaskStatus.Incomplete;
 }
 

@@ -136,23 +136,77 @@ public class TicketsController : ControllerBase
     [HttpPost("{id}/tasks")]
     public async Task<ActionResult<Ticket>> AddTask(string id, [FromBody] KanbanTask task)
     {
-        var ticket = await _ticketService.AddTaskToTicketAsync(id, task);
-        if (ticket == null)
-            return NotFound();
+        ActionResult<Ticket> result;
+        Ticket? ticket = await _ticketService.AddTaskToTicketAsync(id, task);
 
-        await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
-        return Ok(ticket);
+        if (ticket == null)
+        {
+            result = NotFound();
+        }
+        else
+        {
+            await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+            result = Ok(ticket);
+        }
+
+        return result;
+    }
+
+    [HttpPatch("{ticketId}/tasks/{taskName}/complete")]
+    public async Task<ActionResult<Ticket>> MarkTaskComplete(string ticketId, string taskName)
+    {
+        ActionResult<Ticket> result;
+        Ticket? ticket = await _ticketService.MarkTaskCompleteAsync(ticketId, taskName);
+
+        if (ticket == null)
+        {
+            result = NotFound();
+        }
+        else
+        {
+            await _hubContext.Clients.Group($"ticket-{ticketId}").TicketUpdated(ticket);
+            result = Ok(ticket);
+        }
+
+        return result;
+    }
+
+    [HttpPost("{id}/tasks/{taskId}/subtasks")]
+    public async Task<ActionResult<Ticket>> AddSubtask(string id, string taskId, [FromBody] KanbanSubtask subtask)
+    {
+        ActionResult<Ticket> result;
+        Ticket? ticket = await _ticketService.AddSubtaskToTaskAsync(id, taskId, subtask);
+
+        if (ticket == null)
+        {
+            result = NotFound();
+        }
+        else
+        {
+            await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+            result = Ok(ticket);
+        }
+
+        return result;
     }
 
     [HttpPatch("{ticketId}/tasks/{taskId}/subtasks/{subtaskId}")]
     public async Task<ActionResult<Ticket>> UpdateSubtaskStatus(string ticketId, string taskId, string subtaskId, [FromBody] SubtaskStatusUpdate update)
     {
-        var ticket = await _ticketService.UpdateSubtaskStatusAsync(ticketId, taskId, subtaskId, update.Status);
-        if (ticket == null)
-            return NotFound();
+        ActionResult<Ticket> result;
+        Ticket? ticket = await _ticketService.UpdateSubtaskStatusAsync(ticketId, taskId, subtaskId, update.Status);
 
-        await _hubContext.Clients.Group($"ticket-{ticketId}").TicketUpdated(ticket);
-        return Ok(ticket);
+        if (ticket == null)
+        {
+            result = NotFound();
+        }
+        else
+        {
+            await _hubContext.Clients.Group($"ticket-{ticketId}").TicketUpdated(ticket);
+            result = Ok(ticket);
+        }
+
+        return result;
     }
 
     [HttpPost("{id}/activity")]

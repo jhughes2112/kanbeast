@@ -81,98 +81,214 @@ public class TicketTools
         }
     }
 
-    [KernelFunction("create_subtasks")]
-    [Description("Create subtasks for the ticket. Call this after analyzing what needs to be done.")]
-    public async Task<string> CreateSubtasksAsync(
-        [Description("Name of the main task grouping these subtasks")] string taskName,
-        [Description("Array of subtask names in order of execution")] string[] subtasks)
+    // Looks up a task ID by name from the current ticket state.
+    private string? FindTaskIdByName(string taskName)
     {
+        foreach (KanbanTaskDto task in _ticketHolder.Ticket.Tasks)
+        {
+            if (string.Equals(task.Name, taskName, StringComparison.Ordinal))
+            {
+                return task.Id;
+            }
+        }
+
+        return null;
+    }
+
+    [KernelFunction("mark_task_complete")]
+    [Description("Mark a task as complete when all of its subtasks are done.")]
+    public async Task<string> MarkTaskCompleteAsync(
+        [Description("Name of the task to mark complete")] string taskName)
+    {
+        string result = string.Empty;
+
         if (string.IsNullOrWhiteSpace(taskName))
         {
-            return "Error: Task name cannot be empty";
+            result = "Error: Task name cannot be empty";
         }
-
-        if (subtasks == null || subtasks.Length == 0)
+        else
         {
-            return "Error: No subtasks provided";
-        }
+            string? taskId = FindTaskIdByName(taskName);
 
-        try
-        {
-            KanbanTask task = new KanbanTask
+            if (taskId == null)
             {
-                Name = taskName,
-                Subtasks = new List<KanbanSubtask>()
-            };
-
-            foreach (string subtaskName in subtasks)
+                result = $"Error: Task '{taskName}' not found";
+            }
+            else
             {
-                if (!string.IsNullOrWhiteSpace(subtaskName))
+                try
                 {
-                    task.Subtasks.Add(new KanbanSubtask
+                    using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                    TicketDto? updated = await _apiClient.MarkTaskCompleteAsync(_ticketHolder.Ticket.Id, taskId);
+
+                    if (updated == null)
                     {
-                        Name = subtaskName,
-                        Status = SubtaskStatus.Incomplete
-                    });
+                        result = "Error: API returned null when marking task complete";
+                    }
+                    else
+                    {
+                        _ticketHolder.Update(updated);
+                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Task '{taskName}' marked complete");
+                        result = $"Task '{taskName}' marked complete";
+                    }
+                }
+                catch (TaskCanceledException)
+                {
+                    result = "Error: Request timed out while marking task complete";
+                }
+                catch (Exception ex)
+                {
+                    result = $"Error: Failed to mark task complete: {ex.Message}";
                 }
             }
-
-            if (task.Subtasks.Count == 0)
-            {
-                return "Error: All subtask names were empty";
-            }
-
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.AddTaskToTicketAsync(_ticketHolder.Ticket.Id, task);
-
-            if (updated == null)
-            {
-                return "Error: API returned null when creating subtasks";
-            }
-
-            _ticketHolder.Update(updated);
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created task '{taskName}' with {task.Subtasks.Count} subtasks");
-
-            SubtasksCreated = true;
-            SubtaskCount = task.Subtasks.Count;
-
-            // Return ticket summary so the manager knows the current state
-            return FormatTicketSummary(updated, taskName);
         }
-        catch (TaskCanceledException)
+
+        return result;
+    }
+
+    [KernelFunction("create_task")]
+    [Description("Create a new task for the ticket.")]
+    public async Task<string> CreateTaskAsync(
+        [Description("Name of the task")] string taskName,
+        [Description("Description of the task")] string taskDescription)
+    {
+        string result = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(taskName))
         {
-            return "Error: Request timed out while creating subtasks";
+            result = "Error: Task name cannot be empty";
         }
-        catch (Exception ex)
+        else
         {
-            return $"Error: Failed to create subtasks: {ex.Message}";
+            try
+            {
+                KanbanTask task = new KanbanTask
+                {
+                    Name = taskName,
+                    Description = taskDescription,
+                    Subtasks = new List<KanbanSubtask>()
+                };
+
+                using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                TicketDto? updated = await _apiClient.AddTaskToTicketAsync(_ticketHolder.Ticket.Id, task);
+
+                if (updated == null)
+                {
+                    result = "Error: API returned null when creating task";
+                }
+                else
+                {
+                    _ticketHolder.Update(updated);
+                    await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created task '{taskName}'");
+
+                    result = FormatTicketSummary(updated, $"SUCCESS: Created task '{taskName}'");
+                }
+            }
+            catch (TaskCanceledException)
+            {
+                result = "Error: Request timed out while creating task";
+            }
+            catch (Exception ex)
+            {
+                result = $"Error: Failed to create task: {ex.Message}";
+            }
         }
+
+        return result;
+    }
+
+    [KernelFunction("create_subtask")]
+    [Description("Create a subtask for an existing task.")]
+    public async Task<string> CreateSubtaskAsync(
+        [Description("Name of the task to add the subtask to")] string taskName,
+        [Description("Name of the subtask")] string subtaskName,
+        [Description("Description of the subtask")] string subtaskDescription)
+    {
+        string result = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(taskName))
+        {
+            result = "Error: Task name cannot be empty";
+        }
+        else if (string.IsNullOrWhiteSpace(subtaskName))
+        {
+            result = "Error: Subtask name cannot be empty";
+        }
+        else
+        {
+            string? taskId = FindTaskIdByName(taskName);
+
+            if (taskId == null)
+            {
+                result = $"Error: Task '{taskName}' not found";
+            }
+            else
+            {
+                try
+                {
+                    KanbanSubtask subtask = new KanbanSubtask
+                    {
+                        Name = subtaskName,
+                        Description = subtaskDescription,
+                        Status = SubtaskStatus.Incomplete
+                    };
+
+                    using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                    TicketDto? updated = await _apiClient.AddSubtaskToTaskAsync(_ticketHolder.Ticket.Id, taskId, subtask);
+
+                    if (updated == null)
+                    {
+                        result = "Error: API returned null when creating subtask";
+                    }
+                    else
+                    {
+                        _ticketHolder.Update(updated);
+                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created subtask '{subtaskName}' under task '{taskName}'");
+
+                        SubtasksCreated = true;
+                        SubtaskCount += 1;
+
+                        result = FormatTicketSummary(updated, $"SUCCESS: Created subtask '{subtaskName}' under task '{taskName}'");
+                    }
+                }
+                catch (TaskCanceledException)
+                {
+                    result = "Error: Request timed out while creating subtask";
+                }
+                catch (Exception ex)
+                {
+                    result = $"Error: Failed to create subtask: {ex.Message}";
+                }
+            }
+        }
+
+        return result;
     }
 
     // Formats ticket state for LLM context (excludes activity log to save tokens).
-    private static string FormatTicketSummary(TicketDto ticket, string createdTaskName)
+    private static string FormatTicketSummary(TicketDto ticket, string header)
     {
         System.Text.StringBuilder sb = new System.Text.StringBuilder();
-        sb.AppendLine($"SUCCESS: Created task '{createdTaskName}'");
+        sb.AppendLine(header);
         sb.AppendLine();
         sb.AppendLine($"Ticket: {ticket.Title} (Status: {ticket.Status})");
         sb.AppendLine("Tasks:");
 
         foreach (KanbanTaskDto task in ticket.Tasks)
         {
-            sb.AppendLine($"  - {task.Name} (ID: {task.Id})");
+            sb.AppendLine($"  - {task.Name}");
             foreach (KanbanSubtaskDto subtask in task.Subtasks)
             {
-                sb.AppendLine($"      [{subtask.Status}] {subtask.Name} (ID: {subtask.Id})");
+                sb.AppendLine($"      [{subtask.Status}] {subtask.Name}");
             }
         }
 
         return sb.ToString();
     }
 
-    [KernelFunction("assign_to_developer")]
+    [KernelFunction("assign_subtask_to_developer")]
     [Description("Assign the current subtask to the developer with specific instructions.")]
-    public async Task<string> AssignToDeveloperAsync(
+    public async Task<string> AssignSubtaskToDeveloperAsync(
         [Description("Mode: 'implementation', 'testing', or 'write-tests'")] string mode,
         [Description("Clear goal statement for the developer")] string goal)
     {
@@ -223,9 +339,9 @@ public class TicketTools
         }
     }
 
-    [KernelFunction("subtask_complete")]
+    [KernelFunction("mark_subtask_complete")]
     [Description("Call when the developer has completed the subtask or is blocked.")]
-    public async Task<string> SubtaskCompleteAsync(
+    public async Task<string> MarkSubtaskCompleteAsync(
         [Description("Status: 'done', 'blocked', or 'partial'")] string status,
         [Description("Summary of what was done")] string message)
     {
@@ -271,8 +387,13 @@ public class TicketTools
     [KernelFunction("approve_subtask")]
     [Description("Approve the subtask - the work meets acceptance criteria.")]
     public async Task<string> ApproveSubtaskAsync(
-        [Description("Optional notes about the approval")] string? notes = null)
+        [Description("Notes about the approval explaining why it meets criteria")] string notes)
     {
+        if (string.IsNullOrWhiteSpace(notes))
+        {
+            return "Error: Notes cannot be empty";
+        }
+
         if (_currentTaskId == null || _currentSubtaskId == null)
         {
             return "Error: No subtask selected for approval";
@@ -289,7 +410,7 @@ public class TicketTools
             }
 
             _ticketHolder.Update(updated);
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask approved{(notes != null ? $": {notes}" : "")}");
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask approved: {notes}");
 
             SubtaskApproved = true;
             return "Subtask approved";
@@ -346,9 +467,9 @@ public class TicketTools
         }
     }
 
-    [KernelFunction("mark_complete")]
+    [KernelFunction("mark_ticket_complete")]
     [Description("Mark the ticket as complete - all work is done and verified.")]
-    public async Task<string> MarkCompleteAsync(
+    public async Task<string> MarkTicketCompleteAsync(
         [Description("Summary of what was accomplished")] string summary)
     {
         if (string.IsNullOrWhiteSpace(summary))
@@ -382,9 +503,9 @@ public class TicketTools
         }
     }
 
-    [KernelFunction("mark_blocked")]
+    [KernelFunction("mark_ticket_blocked")]
     [Description("Mark the ticket as blocked - requires human intervention.")]
-    public async Task<string> MarkBlockedAsync(
+    public async Task<string> MarkTicketBlockedAsync(
         [Description("Reason the ticket is blocked")] string reason)
     {
         if (string.IsNullOrWhiteSpace(reason))

@@ -179,7 +179,7 @@ public class AgentOrchestrator : IAgentOrchestrator
             ticketTools
         });
 
-        string userPrompt = $"Break down this ticket into subtasks:\n\nTicket: {ticketHolder.Ticket.Title}\nDescription: {ticketHolder.Ticket.Description}\nWorking Directory: {workDir}\n\nCall create_subtasks when ready.";
+        string userPrompt = $"Break down this ticket into tasks and subtasks:\n\nTicket: {ticketHolder.Ticket.Title}\nDescription: {ticketHolder.Ticket.Description}\nWorking Directory: {workDir}\n\nCreate a task with create_task, then add subtasks to it with create_subtask.";
 
         await _managerLlmService.ClearContextStatementsAsync(cancellationToken);
         string response = await _managerLlmService.RunAsync(kernel, _managerPrompt, userPrompt, cancellationToken);
@@ -225,7 +225,7 @@ public class AgentOrchestrator : IAgentOrchestrator
             ticketTools
         });
 
-        string userPrompt = $"Assign this subtask to the developer:\n\nSubtask: {subtask.Name}\nWorking Directory: {workDir}\n\nCall assign_to_developer with mode and goal.";
+        string userPrompt = $"Assign this subtask to the developer:\n\nSubtask: {subtask.Name}\nWorking Directory: {workDir}\n\nCall assign_subtask_to_developer with mode and goal.";
 
         await _managerLlmService.ClearContextStatementsAsync(cancellationToken);
         string response = await _managerLlmService.RunAsync(kernel, _managerPrompt, userPrompt, cancellationToken);
@@ -270,7 +270,7 @@ public class AgentOrchestrator : IAgentOrchestrator
             ticketTools
         });
 
-        string userPrompt = $"Complete this subtask:\n\nSubtask: {subtask.Name}\nWorking Directory: {workDir}\n\nCall subtask_complete when done or blocked.";
+        string userPrompt = $"Complete this subtask:\n\nSubtask: {subtask.Name}\nWorking Directory: {workDir}\n\nCall mark_subtask_complete when done or blocked.";
 
         await _developerLlmService.ClearContextStatementsAsync(cancellationToken);
 
@@ -286,7 +286,7 @@ public class AgentOrchestrator : IAgentOrchestrator
 
             if (!ticketTools.DeveloperComplete)
             {
-                userPrompt = "Continue working. When done or blocked, call subtask_complete.";
+                userPrompt = "Continue working. When done or blocked, call mark_subtask_complete.";
             }
         }
 
@@ -368,7 +368,7 @@ public class AgentOrchestrator : IAgentOrchestrator
             ticketTools
         });
 
-        string userPrompt = $"All subtasks complete. Finalize this ticket:\n\nTicket: {ticketHolder.Ticket.Title}\nWorking Directory: {workDir}\n\n1. Use shell to commit any uncommitted changes with git\n2. Use shell to push to the remote branch with git\n3. Call mark_complete or mark_blocked";
+        string userPrompt = $"All subtasks complete. Finalize this ticket:\n\nTicket: {ticketHolder.Ticket.Title}\nWorking Directory: {workDir}\n\n1. Use shell to commit any uncommitted changes with git\n2. Use shell to push to the remote branch with git\n3. Call mark_ticket_complete or mark_ticket_blocked";
 
         await _managerLlmService.ClearContextStatementsAsync(cancellationToken);
         string response = await _managerLlmService.RunAsync(kernel, _managerPrompt, userPrompt, cancellationToken);

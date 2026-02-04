@@ -17,7 +17,6 @@ WORKDIR /app
 COPY --from=build /app/publish/server ./server
 COPY --from=build /app/publish/worker ./worker
 COPY --from=build /app/publish/server/appsettings.json ./appsettings.json
-COPY env ./env
-COPY wwwroot ./wwwroot
-ENV ASPNETCORE_CONTENTROOT=/app
+COPY env /app/env
+ENV ASPNETCORE_CONTENTROOT=/app/env
 ENTRYPOINT ["dotnet", "/app/server/KanBeast.Server.dll"]

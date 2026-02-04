@@ -73,12 +73,7 @@ public class LlmService : ILlmService
         string logPath = string.Empty;
         if (!string.IsNullOrEmpty(LogDirectory))
         {
-            Directory.CreateDirectory(LogDirectory);
-            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss");
-            string filename = !string.IsNullOrEmpty(LogPrefix)
-                ? $"{LogPrefix}-{timestamp}.txt"
-                : $"request-{timestamp}.txt";
-            logPath = Path.Combine(LogDirectory, filename);
+            logPath = BuildLogPath();
 
             System.Text.StringBuilder requestLog = new System.Text.StringBuilder();
             requestLog.AppendLine("=== LLM REQUEST ===");
@@ -110,6 +105,29 @@ public class LlmService : ILlmService
         }
 
         return content;
+    }
+
+    private string BuildLogPath()
+    {
+        Directory.CreateDirectory(LogDirectory);
+
+        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd_HH-mm-ss-fff");
+        string filename = !string.IsNullOrEmpty(LogPrefix)
+            ? $"{LogPrefix}-{timestamp}.txt"
+            : $"request-{timestamp}.txt";
+        string logPath = Path.Combine(LogDirectory, filename);
+
+        int duplicateIndex = 1;
+        while (File.Exists(logPath))
+        {
+            string duplicateName = !string.IsNullOrEmpty(LogPrefix)
+                ? $"{LogPrefix}-{timestamp}-{duplicateIndex}.txt"
+                : $"request-{timestamp}-{duplicateIndex}.txt";
+            logPath = Path.Combine(LogDirectory, duplicateName);
+            duplicateIndex++;
+        }
+
+        return logPath;
     }
 
     public Task AddContextStatementAsync(string statement, CancellationToken cancellationToken)

@@ -14,7 +14,9 @@ public interface ITicketService
     Task<bool> DeleteTicketAsync(string id);
     Task<Ticket?> UpdateTicketStatusAsync(string id, TicketStatus status);
     Task<Ticket?> AddTaskToTicketAsync(string id, KanbanTask task);
+    Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask);
     Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
+    Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskId);
     Task<Ticket?> AddActivityLogAsync(string id, string activity);
     Task<Ticket?> SetBranchNameAsync(string id, string branchName);
 }
@@ -143,6 +145,57 @@ public class TicketService : ITicketService
         return Task.FromResult<Ticket?>(ticket);
     }
 
+    public Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskName)
+    {
+        Ticket? ticket = null;
+
+        if (_tickets.TryGetValue(ticketId, out Ticket? foundTicket))
+        {
+            ticket = foundTicket;
+
+            KanbanTask? task = null;
+            foreach (KanbanTask candidate in ticket.Tasks)
+            {
+                if (string.Equals(candidate.Name, taskName, StringComparison.Ordinal) ||
+                    string.Equals(candidate.Id, taskName, StringComparison.Ordinal))
+                {
+                    task = candidate;
+                    break;
+                }
+            }
+
+            if (task != null)
+            {
+                bool allComplete = true;
+                foreach (KanbanSubtask subtask in task.Subtasks)
+                {
+                    if (subtask.Status != SubtaskStatus.Complete)
+                    {
+                        allComplete = false;
+                        break;
+                    }
+                }
+
+                if (allComplete)
+                {
+                    task.LastUpdatedAt = DateTime.UtcNow;
+                    ticket.UpdatedAt = DateTime.UtcNow;
+                    SaveTicketToDisk(ticket);
+                }
+                else
+                {
+                    ticket = null;
+                }
+            }
+            else
+            {
+                ticket = null;
+            }
+        }
+
+        return Task.FromResult<Ticket?>(ticket);
+    }
+
     public Task<bool> DeleteTicketAsync(string id)
     {
         bool removed = _tickets.TryRemove(id, out _);
@@ -170,36 +223,107 @@ public class TicketService : ITicketService
 
     public Task<Ticket?> AddTaskToTicketAsync(string id, KanbanTask task)
     {
-        if (!_tickets.TryGetValue(id, out Ticket? ticket))
-        {
-            return Task.FromResult<Ticket?>(null);
-        }
+        Ticket? ticket = null;
 
-        // Server assigns incrementing IDs
-        int nextTaskId = 1;
-        foreach (KanbanTask existingTask in ticket.Tasks)
+        if (_tickets.TryGetValue(id, out Ticket? foundTicket))
         {
-            if (int.TryParse(existingTask.Id, out int existingId) && existingId >= nextTaskId)
+            ticket = foundTicket;
+
+            if (!string.IsNullOrWhiteSpace(task.Name))
             {
-                nextTaskId = existingId + 1;
+                KanbanTask? existingTask = null;
+                foreach (KanbanTask candidate in ticket.Tasks)
+                {
+                    if (string.Equals(candidate.Name, task.Name, StringComparison.Ordinal))
+                    {
+                        existingTask = candidate;
+                        break;
+                    }
+                }
+
+                if (existingTask != null)
+                {
+                    existingTask.Description = task.Description;
+                    existingTask.LastUpdatedAt = DateTime.UtcNow;
+                }
+                else
+                {
+                    task.Id = Guid.NewGuid().ToString("N");
+                    task.LastUpdatedAt = DateTime.UtcNow;
+
+                    foreach (KanbanSubtask subtask in task.Subtasks)
+                    {
+                        subtask.Id = Guid.NewGuid().ToString("N");
+                        subtask.LastUpdatedAt = DateTime.UtcNow;
+                    }
+
+                    ticket.Tasks.Add(task);
+                }
+
+                ticket.UpdatedAt = DateTime.UtcNow;
+                SaveTicketToDisk(ticket);
             }
         }
 
-        task.Id = nextTaskId.ToString();
-        task.LastUpdatedAt = DateTime.UtcNow;
+        return Task.FromResult(ticket);
+    }
 
-        int subtaskId = 1;
-        foreach (KanbanSubtask subtask in task.Subtasks)
+    public Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask)
+    {
+        Ticket? ticket = null;
+
+        if (_tickets.TryGetValue(ticketId, out Ticket? foundTicket))
         {
-            subtask.Id = subtaskId.ToString();
-            subtask.LastUpdatedAt = DateTime.UtcNow;
-            subtaskId++;
+            ticket = foundTicket;
+
+            if (!string.IsNullOrWhiteSpace(taskId) && !string.IsNullOrWhiteSpace(subtask.Name))
+            {
+                KanbanTask? task = null;
+                foreach (KanbanTask candidate in ticket.Tasks)
+                {
+                    if (string.Equals(candidate.Id, taskId, StringComparison.Ordinal))
+                    {
+                        task = candidate;
+                        break;
+                    }
+                }
+
+                if (task != null)
+                {
+                    KanbanSubtask? existingSubtask = null;
+                    foreach (KanbanSubtask candidate in task.Subtasks)
+                    {
+                        if (string.Equals(candidate.Name, subtask.Name, StringComparison.Ordinal))
+                        {
+                            existingSubtask = candidate;
+                            break;
+                        }
+                    }
+
+                    if (existingSubtask != null)
+                    {
+                        existingSubtask.Description = subtask.Description;
+                        existingSubtask.LastUpdatedAt = DateTime.UtcNow;
+                    }
+                    else
+                    {
+                        subtask.Id = Guid.NewGuid().ToString("N");
+                        subtask.LastUpdatedAt = DateTime.UtcNow;
+                        task.Subtasks.Add(subtask);
+                    }
+
+                    task.LastUpdatedAt = DateTime.UtcNow;
+                    ticket.UpdatedAt = DateTime.UtcNow;
+                    SaveTicketToDisk(ticket);
+                }
+                else
+                {
+                    ticket = null;
+                }
+            }
         }
 
-        ticket.Tasks.Add(task);
-        ticket.UpdatedAt = DateTime.UtcNow;
-        SaveTicketToDisk(ticket);
-        return Task.FromResult<Ticket?>(ticket);
+        return Task.FromResult(ticket);
     }
 
     public Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
@@ -212,7 +336,8 @@ public class TicketService : ITicketService
         KanbanTask? task = null;
         foreach (KanbanTask candidate in ticket.Tasks)
         {
-            if (string.Equals(candidate.Id, taskId, StringComparison.Ordinal))
+            if (string.Equals(candidate.Name, taskId, StringComparison.Ordinal) ||
+                string.Equals(candidate.Id, taskId, StringComparison.Ordinal))
             {
                 task = candidate;
                 break;
@@ -227,7 +352,8 @@ public class TicketService : ITicketService
         KanbanSubtask? subtask = null;
         foreach (KanbanSubtask candidate in task.Subtasks)
         {
-            if (string.Equals(candidate.Id, subtaskId, StringComparison.Ordinal))
+            if (string.Equals(candidate.Name, subtaskId, StringComparison.Ordinal) ||
+                string.Equals(candidate.Id, subtaskId, StringComparison.Ordinal))
             {
                 subtask = candidate;
                 break;
