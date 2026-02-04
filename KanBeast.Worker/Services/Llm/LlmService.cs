@@ -156,7 +156,6 @@ public class LlmService
 		}
 
 		List<ToolDefinition>? toolDefs = null;
-		Dictionary<string, Func<JsonObject, Task<string>>> handlers = new Dictionary<string, Func<JsonObject, Task<string>>>();
 
 		if (tools.Count > 0)
 		{
@@ -164,9 +163,8 @@ public class LlmService
 			foreach (Tool tool in tools)
 			{
 				toolDefs.Add(tool.Definition);
-				handlers[tool.Definition.Function.Name] = tool.Handler;
 			}
-        }
+		}
 
         string finalContent = string.Empty;
         int maxIterations = 50;
@@ -233,32 +231,32 @@ public class LlmService
 
             foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
             {
-                string toolResult;
-                JsonObject? parsedArgs = null;
+                string toolResult = $"Error: Unknown tool '{toolCall.Function.Name}'";
 
-                try
+                foreach (Tool tool in tools)
                 {
-                    parsedArgs = JsonNode.Parse(toolCall.Function.Arguments)?.AsObject();
-                }
-                catch
-                {
-                    parsedArgs = new JsonObject();
-                }
+                    if (tool.Definition.Function.Name == toolCall.Function.Name)
+                    {
+                        JsonObject args;
+                        try
+                        {
+                            args = JsonNode.Parse(toolCall.Function.Arguments)?.AsObject() ?? new JsonObject();
+                        }
+                        catch
+                        {
+                            args = new JsonObject();
+                        }
 
-                if (handlers.TryGetValue(toolCall.Function.Name, out Func<JsonObject, Task<string>>? handler))
-                {
-                    try
-                    {
-                        toolResult = await handler(parsedArgs ?? new JsonObject());
+                        try
+                        {
+                            toolResult = await tool.Handler(args);
+                        }
+                        catch (Exception ex)
+                        {
+                            toolResult = $"Error: {ex.Message}";
+                        }
+                        break;
                     }
-                    catch (Exception ex)
-                    {
-                        toolResult = $"Error: {ex.Message}";
-                    }
-                }
-                else
-                {
-                    toolResult = $"Error: Unknown tool '{toolCall.Function.Name}'";
                 }
 
                 conversation.AddToolMessage(toolCall.Id, toolResult);
