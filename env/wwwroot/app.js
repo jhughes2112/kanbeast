@@ -231,22 +231,42 @@ function createTicketElement(ticket) {
     const totalCount = subtasks.length;
     const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
-    // Find current task (first task with a non-complete subtask)
+    // Find current task and current subtask (first task/subtask with a non-complete status)
     let currentTaskName = '';
+    let currentSubtaskName = '';
     for (const task of (ticket.tasks || [])) {
-        const hasIncomplete = (task.subtasks || []).some(s => 
+        const incompleteSubtask = (task.subtasks || []).find(s => 
             s.status !== 'Complete' && s.status !== 3
         );
-        if (hasIncomplete) {
+        if (incompleteSubtask) {
             currentTaskName = task.name || '';
+            currentSubtaskName = incompleteSubtask.name || '';
             break;
         }
     }
 
-    // Get last activity log entry
-    const lastLog = (ticket.activityLog && ticket.activityLog.length > 0) 
-        ? ticket.activityLog[ticket.activityLog.length - 1] 
-        : '';
+    // Get last activity log entry and parse it
+    let lastLogHtml = '';
+    if (ticket.activityLog && ticket.activityLog.length > 0) {
+        const lastLog = ticket.activityLog[ticket.activityLog.length - 1];
+        const parsed = parseLogEntry(lastLog);
+
+        let logClass = '';
+        if (parsed.message.includes('Manager:')) {
+            logClass = 'manager';
+        } else if (parsed.message.includes('Developer:')) {
+            logClass = 'developer';
+        } else if (parsed.message.includes('Worker:')) {
+            logClass = 'worker';
+        }
+
+        lastLogHtml = `
+            <div class="ticket-activity-log ${logClass}">
+                ${parsed.timestamp ? `<span class="activity-timestamp ${logClass}" data-timestamp="${parsed.timestamp}">${formatRelativeTime(parsed.timestamp)}</span>` : ''}
+                <span class="activity-message">${escapeHtml(parsed.message)}</span>
+            </div>
+        `;
+    }
 
     const ticketEl = document.createElement('div');
     ticketEl.className = `ticket${isDraggable ? ' draggable' : ''}`;
@@ -264,7 +284,8 @@ function createTicketElement(ticket) {
             <div class="ticket-id">#${ticket.id}</div>
         </div>
         ${currentTaskName ? `<div class="ticket-current-task">📌 ${escapeHtml(currentTaskName)}</div>` : ''}
-        ${lastLog ? `<div class="ticket-last-log">${escapeHtml(lastLog)}</div>` : ''}
+        ${currentSubtaskName ? `<div class="ticket-current-subtask">└─ ${escapeHtml(currentSubtaskName)}</div>` : ''}
+        ${lastLogHtml}
         <div class="ticket-footer">
             <div class="ticket-meta">
                 <span>📅 ${formatDate(ticket.createdAt)}</span>
