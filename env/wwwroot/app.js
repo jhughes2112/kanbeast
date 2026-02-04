@@ -59,9 +59,18 @@ function setupSignalR() {
         .build();
 
     // All events trigger full state refresh for idempotency
-    connection.on('TicketUpdated', handleTicketEvent);
-    connection.on('TicketCreated', handleTicketEvent);
-    connection.on('TicketDeleted', handleTicketEvent);
+    connection.on('TicketUpdated', (ticket) => {
+        console.log('SignalR: TicketUpdated received', ticket.id, ticket.title);
+        handleTicketEvent();
+    });
+    connection.on('TicketCreated', (ticket) => {
+        console.log('SignalR: TicketCreated received', ticket.id, ticket.title);
+        handleTicketEvent();
+    });
+    connection.on('TicketDeleted', (ticketId) => {
+        console.log('SignalR: TicketDeleted received', ticketId);
+        handleTicketEvent();
+    });
 
     connection.onreconnecting(() => {
         updateConnectionStatus('connecting', 'Reconnecting...');

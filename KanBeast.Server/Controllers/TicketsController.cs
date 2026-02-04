@@ -68,6 +68,7 @@ public class TicketsController : ControllerBase
 
         _logger.LogInformation("PUT /tickets/{Id} - updated", id);
         await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(updatedTicket);
+        await _hubContext.Clients.All.TicketUpdated(updatedTicket);
         return Ok(updatedTicket);
     }
 
@@ -130,6 +131,7 @@ public class TicketsController : ControllerBase
         }
 
         await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
         return Ok(ticket);
     }
 
@@ -146,6 +148,7 @@ public class TicketsController : ControllerBase
         else
         {
             await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+            await _hubContext.Clients.All.TicketUpdated(ticket);
             result = Ok(ticket);
         }
 
@@ -165,6 +168,7 @@ public class TicketsController : ControllerBase
         else
         {
             await _hubContext.Clients.Group($"ticket-{ticketId}").TicketUpdated(ticket);
+            await _hubContext.Clients.All.TicketUpdated(ticket);
             result = Ok(ticket);
         }
 
@@ -184,6 +188,7 @@ public class TicketsController : ControllerBase
         else
         {
             await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+            await _hubContext.Clients.All.TicketUpdated(ticket);
             result = Ok(ticket);
         }
 
@@ -203,6 +208,7 @@ public class TicketsController : ControllerBase
         else
         {
             await _hubContext.Clients.Group($"ticket-{ticketId}").TicketUpdated(ticket);
+            await _hubContext.Clients.All.TicketUpdated(ticket);
             result = Ok(ticket);
         }
 
@@ -217,6 +223,7 @@ public class TicketsController : ControllerBase
             return NotFound();
 
         await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
         return Ok(ticket);
     }
 
@@ -228,6 +235,7 @@ public class TicketsController : ControllerBase
             return NotFound();
 
         await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
         return Ok(ticket);
     }
 }

@@ -126,7 +126,13 @@ public class KanbanApiClient : IKanbanApiClient
 
     public async Task AddActivityLogAsync(string ticketId, string message)
     {
-        await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/activity", new { message }, _jsonOptions);
+        HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/activity", new { message }, _jsonOptions);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            string error = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"Failed to add activity log: {response.StatusCode} - {error}");
+        }
     }
 
     public async Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName)
