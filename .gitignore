@@ -1,6 +1,6 @@
 # KanBeast
 env/tickets
-env/repo
+repo/
 
 # Build results
 [Dd]ebug/

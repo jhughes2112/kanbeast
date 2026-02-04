@@ -24,6 +24,9 @@ public class TaskState
     public bool? TicketComplete { get; set; }
     public string? BlockedReason { get; set; }
 
+    // General blocked state
+    public bool Blocked { get; set; }
+
     // Current context
     public string? CurrentTaskId { get; set; }
     public string? CurrentSubtaskId { get; set; }
@@ -47,6 +50,7 @@ public class TaskState
         RejectionReason = null;
         TicketComplete = null;
         BlockedReason = null;
+        Blocked = false;
     }
 }
 

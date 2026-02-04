@@ -71,18 +71,37 @@ public class AgentOrchestrator : IAgentOrchestrator
             ticketTools
         };
 
-        _phase = DetermineInitialPhase(ticketHolder.Ticket, state);
-        _logger.LogInformation("Initial phase: {Phase}", _phase);
-
         int totalIterations = 0;
         int maxTotalIterations = 500;
 
-        while (_phase != OrchestratorPhase.Complete && _phase != OrchestratorPhase.Blocked && totalIterations < maxTotalIterations)
+        for (;;)
         {
             cancellationToken.ThrowIfCancellationRequested();
             totalIterations++;
 
+            _phase = DetermineCurrentPhase(ticketHolder.Ticket, state);
             _logger.LogDebug("Phase: {Phase} (iteration {Iteration})", _phase, totalIterations);
+
+            if (_phase == OrchestratorPhase.Complete)  // exit condition met
+            {
+                _logger.LogInformation("Orchestrator completed successfully");
+                await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Completed successfully");
+                break;
+            }
+
+            if (_phase == OrchestratorPhase.Blocked)  // exit condition met
+            {
+                _logger.LogWarning("Orchestrator blocked - requires human intervention");
+                await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Blocked - requires human intervention");
+                break;
+            }
+
+			if (totalIterations >= maxTotalIterations)  // exit condition met
+			{
+				_logger.LogWarning("Orchestrator exceeded max iterations ({Max})", maxTotalIterations);
+				await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Orchestrator: Exceeded max iterations ({maxTotalIterations})");
+                break;
+			}
 
             switch (_phase)
             {
@@ -107,27 +126,21 @@ public class AgentOrchestrator : IAgentOrchestrator
                     break;
             }
         }
-
-        if (_phase == OrchestratorPhase.Complete)
-        {
-            _logger.LogInformation("Orchestrator completed successfully");
-            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Completed successfully");
-        }
-        else if (_phase == OrchestratorPhase.Blocked)
-        {
-            _logger.LogWarning("Orchestrator blocked - requires human intervention");
-            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Blocked - requires human intervention");
-        }
-        else
-        {
-            _logger.LogWarning("Orchestrator exceeded max iterations ({Max})", maxTotalIterations);
-            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Orchestrator: Exceeded max iterations ({maxTotalIterations})");
-        }
     }
 
-    // Inspects ticket state to determine which phase to start in.
-    private OrchestratorPhase DetermineInitialPhase(TicketDto ticket, TaskState state)
+    // Inspects ticket state to determine which phase should be active.
+    private OrchestratorPhase DetermineCurrentPhase(TicketDto ticket, TaskState state)
     {
+        if (state.Blocked)
+        {
+            return OrchestratorPhase.Blocked;
+        }
+
+        if (state.TicketComplete == true)
+        {
+            return OrchestratorPhase.Complete;
+        }
+
         bool hasSubtasks = false;
         bool hasIncomplete = false;
         bool hasAwaitingReview = false;
@@ -160,6 +173,11 @@ public class AgentOrchestrator : IAgentOrchestrator
             return OrchestratorPhase.Verify;
         }
 
+        if (state.Assigned)
+        {
+            return OrchestratorPhase.Develop;
+        }
+
         if (hasIncomplete)
         {
             return OrchestratorPhase.Assign;
@@ -184,13 +202,12 @@ public class AgentOrchestrator : IAgentOrchestrator
         if (state.SubtasksCreated)
         {
             _logger.LogInformation("Breakdown complete: {Count} subtasks created", state.SubtaskCount);
-            _phase = OrchestratorPhase.Assign;
         }
         else
         {
             _logger.LogWarning("Breakdown failed - no subtasks created");
             await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Failed to break down ticket");
-            _phase = OrchestratorPhase.Blocked;
+            state.Blocked = true;
         }
     }
 
@@ -201,8 +218,7 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         if (subtask == null)
         {
-            _logger.LogInformation("No incomplete subtasks - moving to finalize");
-            _phase = OrchestratorPhase.Finalize;
+            _logger.LogInformation("No incomplete subtasks");
             return;
         }
 
@@ -220,13 +236,12 @@ public class AgentOrchestrator : IAgentOrchestrator
         if (state.Assigned)
         {
             _logger.LogInformation("Assignment ready: mode={Mode}", state.AssignedMode);
-            _phase = OrchestratorPhase.Develop;
         }
         else
         {
             _logger.LogWarning("Assignment failed");
             await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Failed to assign subtask");
-            _phase = OrchestratorPhase.Blocked;
+            state.Blocked = true;
         }
     }
 
@@ -237,7 +252,6 @@ public class AgentOrchestrator : IAgentOrchestrator
         if (subtask == null)
         {
             _logger.LogWarning("Current subtask not found");
-            _phase = OrchestratorPhase.Assign;
             return;
         }
 
@@ -272,13 +286,12 @@ public class AgentOrchestrator : IAgentOrchestrator
             updated = await _apiClient.UpdateSubtaskStatusAsync(ticketHolder.Ticket.Id, state.CurrentTaskId!, state.CurrentSubtaskId!, SubtaskStatus.AwaitingReview);
             ticketHolder.Update(updated);
             await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Developer: Completed work on '{subtask.Name}'");
-            _phase = OrchestratorPhase.Verify;
         }
         else
         {
             _logger.LogWarning("Developer exceeded max iterations ({Max})", _maxIterationsPerSubtask);
             await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Developer: Exceeded max iterations");
-            _phase = OrchestratorPhase.Blocked;
+            state.Blocked = true;
         }
     }
 
@@ -289,7 +302,6 @@ public class AgentOrchestrator : IAgentOrchestrator
         if (subtask == null)
         {
             _logger.LogWarning("Subtask to verify not found");
-            _phase = OrchestratorPhase.Assign;
             return;
         }
 
@@ -306,18 +318,16 @@ public class AgentOrchestrator : IAgentOrchestrator
         if (state.SubtaskApproved == true)
         {
             _logger.LogInformation("Subtask approved");
-            _phase = OrchestratorPhase.Assign;
         }
         else if (state.SubtaskApproved == false)
         {
             _logger.LogInformation("Subtask rejected: {Reason}", state.RejectionReason);
-            _phase = OrchestratorPhase.Assign;
         }
         else
         {
             _logger.LogWarning("Verification failed - no decision made");
             await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Failed to verify '{subtask.Name}'");
-            _phase = OrchestratorPhase.Blocked;
+            state.Blocked = true;
         }
     }
 
@@ -334,20 +344,16 @@ public class AgentOrchestrator : IAgentOrchestrator
         string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
         _logger.LogDebug("Manager finalize response: {Response}", response);
 
-        if (state.TicketComplete == true)
-        {
-            _phase = OrchestratorPhase.Complete;
-        }
-        else if (state.TicketComplete == false)
+        if (state.TicketComplete == false)
         {
             _logger.LogWarning("Finalization failed: {Reason}", state.BlockedReason);
             await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Finalization failed - {state.BlockedReason}");
-            _phase = OrchestratorPhase.Blocked;
+            state.Blocked = true;
         }
-        else
+        else if (state.TicketComplete == null)
         {
             _logger.LogWarning("Finalization failed - no decision made");
-            _phase = OrchestratorPhase.Blocked;
+            state.Blocked = true;
         }
     }
 
