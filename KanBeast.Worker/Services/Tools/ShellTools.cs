@@ -1,11 +1,10 @@
 using System.ComponentModel;
 using System.Diagnostics;
-using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Services.Tools;
 
 // Tools for LLM to execute shell commands within allowed directories.
-public class ShellTools
+public class ShellTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
     private static readonly string[] AllowedPrefixes = { "/app", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
@@ -15,6 +14,16 @@ public class ShellTools
     public ShellTools(string workDir)
     {
         _workDir = workDir;
+    }
+
+    public Dictionary<string, ProviderTool> GetTools(LlmRole role)
+    {
+        Dictionary<string, ProviderTool> tools = new Dictionary<string, ProviderTool>();
+
+        // Both Manager and Developer get shell access
+        ToolHelper.AddTools(tools, this, nameof(RunCommandAsync));
+
+        return tools;
     }
 
     // Validates that a working directory is within allowed paths.
@@ -63,7 +72,6 @@ public class ShellTools
         return null;
     }
 
-    [KernelFunction("run_command")]
     [Description("Execute a shell command in the specified working directory.")]
     public async Task<string> RunCommandAsync(
         [Description("Command to execute")] string command,

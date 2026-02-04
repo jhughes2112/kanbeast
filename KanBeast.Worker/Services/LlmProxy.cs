@@ -1,6 +1,6 @@
 using System.Text;
 using KanBeast.Worker.Models;
-using Microsoft.SemanticKernel;
+using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
 
@@ -11,9 +11,10 @@ public class LlmProxy : ILlmService
     private readonly int _retryCount;
     private readonly TimeSpan _retryDelay;
     private readonly HashSet<int> _downedIndices;
-    private readonly Dictionary<Kernel, KernelSet> _kernelSets;
     private readonly List<string> _contextStatements;
     private readonly ICompaction _compaction;
+    private List<IToolProvider> _providers;
+    private LlmRole _role;
     private string _logDirectory = string.Empty;
     private string _logPrefix = string.Empty;
 
@@ -35,9 +36,10 @@ public class LlmProxy : ILlmService
         _retryCount = retryCount;
         _retryDelay = TimeSpan.FromSeconds(retryDelaySeconds);
         _downedIndices = downedIndices;
-        _kernelSets = new Dictionary<Kernel, KernelSet>();
         _contextStatements = new List<string>();
         _compaction = compaction;
+        _providers = new List<IToolProvider>();
+        _role = LlmRole.Developer;
 
         Console.WriteLine($"LlmProxy initialized with {configs.Count} LLM config(s)");
         foreach (LLMConfig config in configs)
@@ -46,46 +48,42 @@ public class LlmProxy : ILlmService
         }
     }
 
-    public Kernel CreateKernel(IEnumerable<object> tools)
+    public void RegisterToolsFromProviders(IEnumerable<IToolProvider> providers, LlmRole role)
     {
-        KernelSet kernelSet = BuildKernelSet(tools);
-        _kernelSets[kernelSet.PrimaryKernel] = kernelSet;
-
-        Kernel kernel = kernelSet.PrimaryKernel;
-
-        return kernel;
+        _providers = new List<IToolProvider>(providers);
+        _role = role;
     }
 
-    public async Task<string> RunAsync(Kernel kernel, string systemPrompt, string userPrompt, CancellationToken cancellationToken)
+    public async Task<string> RunAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
     {
-        if (!_kernelSets.TryGetValue(kernel, out KernelSet? kernelSet) || kernelSet == null)
-        {
-            throw new InvalidOperationException("Kernel is not registered with the LLM proxy.");
-        }
-
-        KernelSet resolvedKernelSet = kernelSet;
         string resolvedSystemPrompt = BuildSystemPrompt(systemPrompt);
         string result = string.Empty;
         bool succeeded = false;
 
-        foreach (KernelEntry entry in resolvedKernelSet.Entries)
+        for (int configIndex = 0; configIndex < _configs.Count; configIndex++)
         {
-            if (_downedIndices.Contains(entry.ConfigIndex))
+            if (_downedIndices.Contains(configIndex))
             {
                 continue;
             }
+
+            LLMConfig config = _configs[configIndex];
+            LlmService service = new LlmService(config);
+            service.LogDirectory = _logDirectory;
+            service.LogPrefix = _logPrefix;
+            service.RegisterToolsFromProviders(_providers, _role);
 
             int attempt = 0;
             while (attempt <= _retryCount && !succeeded)
             {
                 try
                 {
-                    result = await entry.Service.RunAsync(entry.Kernel, resolvedSystemPrompt, userPrompt, cancellationToken);
+                    result = await service.RunAsync(resolvedSystemPrompt, userPrompt, cancellationToken);
                     succeeded = true;
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"LLM {entry.ConfigIndex} attempt {attempt + 1} failed: {ex.Message}");
+                    Console.WriteLine($"LLM {configIndex} attempt {attempt + 1} failed: {ex.Message}");
                     if (attempt < _retryCount)
                     {
                         if (_retryDelay > TimeSpan.Zero)
@@ -95,8 +93,8 @@ public class LlmProxy : ILlmService
                     }
                     else
                     {
-                        Console.WriteLine($"LLM {entry.ConfigIndex} marked as down after {_retryCount + 1} attempts");
-                        _downedIndices.Add(entry.ConfigIndex);
+                        Console.WriteLine($"LLM {configIndex} marked as down after {_retryCount + 1} attempts");
+                        _downedIndices.Add(configIndex);
                     }
                 }
 
@@ -131,18 +129,9 @@ public class LlmProxy : ILlmService
         }
     }
 
-    public Task ClearContextStatementsAsync(CancellationToken cancellationToken)
+    public void ClearContextStatements()
     {
         _contextStatements.Clear();
-
-        return Task.CompletedTask;
-    }
-
-    public IReadOnlyList<string> GetContextStatements()
-    {
-        IReadOnlyList<string> statements = _contextStatements.AsReadOnly();
-
-        return statements;
     }
 
     private string BuildSystemPrompt(string systemPrompt)
@@ -166,63 +155,5 @@ public class LlmProxy : ILlmService
         }
 
         return resolvedPrompt;
-    }
-
-    private KernelSet BuildKernelSet(IEnumerable<object> tools)
-    {
-        List<KernelEntry> entries = new List<KernelEntry>();
-        int index = 0;
-
-        foreach (LLMConfig config in _configs)
-        {
-            LlmService service = new LlmService(config);
-            service.LogDirectory = _logDirectory;
-            service.LogPrefix = _logPrefix;
-            Kernel kernel = service.CreateKernel(tools);
-
-            KernelEntry entry = new KernelEntry(index, kernel, service);
-            entries.Add(entry);
-            index++;
-        }
-
-        if (entries.Count == 0)
-        {
-            throw new InvalidOperationException("No LLM configurations are available.");
-        }
-
-        KernelSet kernelSet = new KernelSet(entries);
-
-        return kernelSet;
-    }
-
-    // Tracks kernels and services for each configured LLM.
-    private sealed class KernelSet
-    {
-        public KernelSet(List<KernelEntry> entries)
-        {
-            Entries = entries;
-            PrimaryKernel = entries[0].Kernel;
-        }
-
-        public Kernel PrimaryKernel { get; }
-
-        public List<KernelEntry> Entries { get; }
-    }
-
-    // Binds a single LLM kernel to its config index for retry tracking.
-    private sealed class KernelEntry
-    {
-        public KernelEntry(int configIndex, Kernel kernel, LlmService service)
-        {
-            ConfigIndex = configIndex;
-            Kernel = kernel;
-            Service = service;
-        }
-
-        public int ConfigIndex { get; }
-
-        public Kernel Kernel { get; }
-
-        public LlmService Service { get; }
     }
 }

@@ -3,7 +3,6 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
-using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Services.Tools;
 
@@ -25,7 +24,6 @@ public class WebTools
         _googleSearchEngineId = googleSearchEngineId;
     }
 
-    [KernelFunction("get_web_page")]
     [Description("Fetch the contents of a web page at the specified URL. Returns the text content with HTML tags stripped.")]
     public async Task<string> GetWebPageAsync(string url)
     {
@@ -78,7 +76,6 @@ public class WebTools
         }
     }
 
-    [KernelFunction("search_web")]
     [Description("Search the web for information. Returns a list of search results with titles, URLs, and snippets.")]
     public async Task<string> SearchWebAsync(string query, int maxResults)
     {

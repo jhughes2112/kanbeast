@@ -1,5 +1,4 @@
 using System.Text;
-using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Services;
 
@@ -26,14 +25,12 @@ public class CompactionSummarizer : ICompaction
     private const int MinimumThreshold = 3072;
 
     private readonly LlmService _summarizerService;
-    private readonly Kernel _kernel;
     private readonly string _compactionPrompt;
     private readonly int _effectiveThreshold;
 
-    public CompactionSummarizer(LlmService summarizerService, Kernel kernel, string compactionPrompt, int contextSizeThreshold, int llmContextLength)
+    public CompactionSummarizer(LlmService summarizerService, string compactionPrompt, int contextSizeThreshold, int llmContextLength)
     {
         _summarizerService = summarizerService;
-        _kernel = kernel;
         _compactionPrompt = compactionPrompt;
 
         int llmLimit = (int)(llmContextLength * 0.9);
@@ -56,7 +53,7 @@ public class CompactionSummarizer : ICompaction
         if (contextSize > _effectiveThreshold)
         {
             string userPrompt = $"{_compactionPrompt}\n\nContext:\n{contextBlock}";
-            string summary = await _summarizerService.RunAsync(_kernel, string.Empty, userPrompt, cancellationToken);
+            string summary = await _summarizerService.RunAsync(string.Empty, userPrompt, cancellationToken);
             List<string> summaryList = new List<string>();
             summaryList.Add(summary);
             compactedStatements = summaryList;

@@ -1,27 +1,184 @@
+using System.Net.Http.Json;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using KanBeast.Worker.Models;
-using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.ChatCompletion;
-using Microsoft.SemanticKernel.Connectors.OpenAI;
 
 namespace KanBeast.Worker.Services;
+
+// A tool that can be invoked by the LLM.
+public class LlmTool
+{
+    public required string Name { get; init; }
+    public required string Description { get; init; }
+    public required JsonObject Parameters { get; init; }
+    public required Func<JsonObject, Task<string>> InvokeAsync { get; init; }
+}
+
+// A message in the chat conversation.
+public class ChatMessage
+{
+    [JsonPropertyName("role")]
+    public string Role { get; set; } = string.Empty;
+
+    [JsonPropertyName("content")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Content { get; set; }
+
+    [JsonPropertyName("tool_calls")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ToolCallMessage>? ToolCalls { get; set; }
+
+    [JsonPropertyName("tool_call_id")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToolCallId { get; set; }
+}
+
+public class ToolCallMessage
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "function";
+
+    [JsonPropertyName("function")]
+    public FunctionCallMessage Function { get; set; } = new();
+}
+
+public class FunctionCallMessage
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("arguments")]
+    public string Arguments { get; set; } = string.Empty;
+}
+
+// OpenAI API request/response structures.
+public class ChatCompletionRequest
+{
+    [JsonPropertyName("model")]
+    public string Model { get; set; } = string.Empty;
+
+    [JsonPropertyName("messages")]
+    public List<ChatMessage> Messages { get; set; } = new();
+
+    [JsonPropertyName("tools")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public List<ToolDefinition>? Tools { get; set; }
+
+    [JsonPropertyName("tool_choice")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? ToolChoice { get; set; }
+}
+
+public class ToolDefinition
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "function";
+
+    [JsonPropertyName("function")]
+    public FunctionDefinition Function { get; set; } = new();
+}
+
+public class FunctionDefinition
+{
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    [JsonPropertyName("parameters")]
+    public JsonObject Parameters { get; set; } = new();
+}
+
+public class ChatCompletionResponse
+{
+    [JsonPropertyName("id")]
+    public string Id { get; set; } = string.Empty;
+
+    [JsonPropertyName("choices")]
+    public List<ChatChoice> Choices { get; set; } = new();
+
+    [JsonPropertyName("error")]
+    public ApiError? Error { get; set; }
+}
+
+public class ChatChoice
+{
+    [JsonPropertyName("message")]
+    public ChatMessage Message { get; set; } = new();
+
+    [JsonPropertyName("finish_reason")]
+    public string? FinishReason { get; set; }
+}
+
+public class ApiError
+{
+    [JsonPropertyName("message")]
+    public string Message { get; set; } = string.Empty;
+}
+
+// Session log containing the full conversation.
+public class SessionLog
+{
+    [JsonPropertyName("model")]
+    public string Model { get; set; } = string.Empty;
+
+    [JsonPropertyName("started_at")]
+    public string StartedAt { get; set; } = string.Empty;
+
+    [JsonPropertyName("completed_at")]
+    public string CompletedAt { get; set; } = string.Empty;
+
+    [JsonPropertyName("messages")]
+    public List<ChatMessage> Messages { get; set; } = new();
+
+    [JsonPropertyName("tool_invocations")]
+    public List<ToolInvocationLog> ToolInvocations { get; set; } = new();
+}
+
+public class ToolInvocationLog
+{
+    [JsonPropertyName("tool_call_id")]
+    public string ToolCallId { get; set; } = string.Empty;
+
+    [JsonPropertyName("function_name")]
+    public string FunctionName { get; set; } = string.Empty;
+
+    [JsonPropertyName("arguments")]
+    public JsonObject? Arguments { get; set; }
+
+    [JsonPropertyName("result")]
+    public string Result { get; set; } = string.Empty;
+
+    [JsonPropertyName("timestamp")]
+    public string Timestamp { get; set; } = string.Empty;
+}
 
 // Defines the LLM operations required by the worker agents.
 public interface ILlmService
 {
-    Kernel CreateKernel(IEnumerable<object> tools);
-    Task<string> RunAsync(Kernel kernel, string systemPrompt, string userPrompt, CancellationToken cancellationToken);
-    Task AddContextStatementAsync(string statement, CancellationToken cancellationToken);
-    Task ClearContextStatementsAsync(CancellationToken cancellationToken);
-    IReadOnlyList<string> GetContextStatements();
+    void RegisterToolsFromProviders(IEnumerable<Tools.IToolProvider> providers, Tools.LlmRole role);
+    Task<string> RunAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken);
     string LogDirectory { get; set; }
     string LogPrefix { get; set; }
 }
 
-// Wraps a single LLM endpoint and executes chat completions.
+// Direct OpenAI-compatible chat completion client with tool calling.
 public class LlmService : ILlmService
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        WriteIndented = true,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     private readonly LLMConfig _config;
-    private readonly List<string> _contextStatements;
+    private readonly HttpClient _httpClient;
+    private readonly Dictionary<string, LlmTool> _tools;
 
     public string LogDirectory { get; set; } = string.Empty;
     public string LogPrefix { get; set; } = string.Empty;
@@ -29,125 +186,201 @@ public class LlmService : ILlmService
     public LlmService(LLMConfig config)
     {
         _config = config;
-        _contextStatements = new List<string>();
+        _tools = new Dictionary<string, LlmTool>();
+
+        string baseUrl = !string.IsNullOrWhiteSpace(config.Endpoint)
+            ? config.Endpoint.TrimEnd('/')
+            : "https://api.openai.com/v1";
+
+        _httpClient = new HttpClient { BaseAddress = new Uri(baseUrl) };
+        _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
     }
 
-    public Kernel CreateKernel(IEnumerable<object> tools)
+    public void RegisterToolsFromProviders(IEnumerable<Tools.IToolProvider> providers, Tools.LlmRole role)
     {
-        IKernelBuilder builder = Kernel.CreateBuilder();
+        _tools.Clear();
 
-        if (!string.IsNullOrWhiteSpace(_config.Endpoint))
+        foreach (Tools.IToolProvider provider in providers)
         {
-            // Custom endpoint (OpenRouter, Azure, or other OpenAI-compatible APIs)
-            // Use HttpClient with custom base address for non-Azure endpoints
-            Uri endpoint = new Uri(_config.Endpoint);
-            HttpClient httpClient = new HttpClient { BaseAddress = endpoint };
-            builder.AddOpenAIChatCompletion(_config.Model, _config.ApiKey, httpClient: httpClient);
+            foreach (KeyValuePair<string, Tools.ProviderTool> entry in provider.GetTools(role))
+            {
+                Tools.ProviderTool def = entry.Value;
+                _tools[def.Name] = new LlmTool
+                {
+                    Name = def.Name,
+                    Description = def.Description,
+                    Parameters = def.Parameters,
+                    InvokeAsync = def.InvokeAsync
+                };
+            }
         }
-        else
-        {
-            builder.AddOpenAIChatCompletion(_config.Model, _config.ApiKey);
-        }
-
-        Kernel kernel = builder.Build();
-        foreach (object tool in tools)
-        {
-            kernel.Plugins.AddFromObject(tool);
-        }
-
-        return kernel;
     }
 
-    public async Task<string> RunAsync(Kernel kernel, string systemPrompt, string userPrompt, CancellationToken cancellationToken)
+    public async Task<string> RunAsync(string systemPrompt, string userPrompt, CancellationToken cancellationToken)
     {
-        IChatCompletionService chat = kernel.GetRequiredService<IChatCompletionService>();
-        ChatHistory history = new ChatHistory();
-        history.AddSystemMessage(systemPrompt);
-        history.AddUserMessage(userPrompt);
-
-        OpenAIPromptExecutionSettings settings = new OpenAIPromptExecutionSettings
+        SessionLog session = new SessionLog
         {
-            ToolCallBehavior = ToolCallBehavior.AutoInvokeKernelFunctions
+            Model = _config.Model,
+            StartedAt = DateTime.UtcNow.ToString("O")
         };
 
-        string logPath = string.Empty;
+        List<ChatMessage> messages = new List<ChatMessage>
+        {
+            new ChatMessage { Role = "system", Content = systemPrompt },
+            new ChatMessage { Role = "user", Content = userPrompt }
+        };
+
+        List<ToolDefinition>? toolDefs = null;
+        if (_tools.Count > 0)
+        {
+            toolDefs = new List<ToolDefinition>();
+            foreach (LlmTool tool in _tools.Values)
+            {
+                toolDefs.Add(new ToolDefinition
+                {
+                    Type = "function",
+                    Function = new FunctionDefinition
+                    {
+                        Name = tool.Name,
+                        Description = tool.Description,
+                        Parameters = tool.Parameters
+                    }
+                });
+            }
+        }
+
+        string finalContent = string.Empty;
+        int maxIterations = 50;
+        int iteration = 0;
+
+        while (iteration < maxIterations)
+        {
+            iteration++;
+            cancellationToken.ThrowIfCancellationRequested();
+
+            ChatCompletionRequest request = new ChatCompletionRequest
+            {
+                Model = _config.Model,
+                Messages = messages,
+                Tools = toolDefs,
+                ToolChoice = toolDefs != null ? "auto" : null
+            };
+
+            HttpResponseMessage httpResponse = await _httpClient.PostAsJsonAsync(
+                "/chat/completions",
+                request,
+                JsonOptions,
+                cancellationToken);
+
+            string responseBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
+
+            if (!httpResponse.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException($"API error {httpResponse.StatusCode}: {responseBody}");
+            }
+
+            ChatCompletionResponse? response = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions);
+
+            if (response == null || response.Choices.Count == 0)
+            {
+                throw new InvalidOperationException($"Empty response from API: {responseBody}");
+            }
+
+            if (response.Error != null)
+            {
+                throw new InvalidOperationException($"API error: {response.Error.Message}");
+            }
+
+            ChatChoice choice = response.Choices[0];
+            ChatMessage assistantMessage = choice.Message;
+            messages.Add(assistantMessage);
+
+            if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
+            {
+                finalContent = assistantMessage.Content ?? string.Empty;
+                break;
+            }
+
+            foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
+            {
+                string toolResult;
+                JsonObject? parsedArgs = null;
+
+                try
+                {
+                    parsedArgs = JsonNode.Parse(toolCall.Function.Arguments)?.AsObject();
+                }
+                catch
+                {
+                    parsedArgs = new JsonObject();
+                }
+
+                if (_tools.TryGetValue(toolCall.Function.Name, out LlmTool? tool))
+                {
+                    try
+                    {
+                        toolResult = await tool.InvokeAsync(parsedArgs ?? new JsonObject());
+                    }
+                    catch (Exception ex)
+                    {
+                        toolResult = $"Error: {ex.Message}";
+                    }
+                }
+                else
+                {
+                    toolResult = $"Error: Unknown tool '{toolCall.Function.Name}'";
+                }
+
+                session.ToolInvocations.Add(new ToolInvocationLog
+                {
+                    ToolCallId = toolCall.Id,
+                    FunctionName = toolCall.Function.Name,
+                    Arguments = parsedArgs,
+                    Result = toolResult,
+                    Timestamp = DateTime.UtcNow.ToString("O")
+                });
+
+                messages.Add(new ChatMessage
+                {
+                    Role = "tool",
+                    Content = toolResult,
+                    ToolCallId = toolCall.Id
+                });
+            }
+        }
+
+        session.CompletedAt = DateTime.UtcNow.ToString("O");
+        session.Messages = messages;
+
         if (!string.IsNullOrEmpty(LogDirectory))
         {
-            logPath = BuildLogPath();
-
-            System.Text.StringBuilder requestLog = new System.Text.StringBuilder();
-            requestLog.AppendLine("=== LLM REQUEST ===");
-            requestLog.AppendLine($"Timestamp: {DateTime.UtcNow:O}");
-            requestLog.AppendLine($"Model: {_config.Model}");
-            requestLog.AppendLine();
-            requestLog.AppendLine("=== SYSTEM PROMPT ===");
-            requestLog.AppendLine(systemPrompt);
-            requestLog.AppendLine();
-            requestLog.AppendLine("=== USER PROMPT ===");
-            requestLog.AppendLine(userPrompt);
-            requestLog.AppendLine();
-
-            await File.WriteAllTextAsync(logPath, requestLog.ToString(), cancellationToken);
+            await WriteSessionLogAsync(session, cancellationToken);
         }
 
-        ChatMessageContent response = await chat.GetChatMessageContentAsync(history, settings, kernel, cancellationToken);
-        string content = response.Content ?? string.Empty;
-
-        if (!string.IsNullOrEmpty(logPath))
-        {
-            System.Text.StringBuilder responseLog = new System.Text.StringBuilder();
-            responseLog.AppendLine("=== LLM RESPONSE ===");
-            responseLog.AppendLine($"Timestamp: {DateTime.UtcNow:O}");
-            responseLog.AppendLine();
-            responseLog.AppendLine(content);
-
-            await File.AppendAllTextAsync(logPath, responseLog.ToString(), cancellationToken);
-        }
-
-        return content;
+        return finalContent;
     }
 
-    private string BuildLogPath()
+    private async Task WriteSessionLogAsync(SessionLog session, CancellationToken cancellationToken)
     {
         Directory.CreateDirectory(LogDirectory);
 
         long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         string filename = !string.IsNullOrEmpty(LogPrefix)
-            ? $"{LogPrefix}-{timestamp}.txt"
-            : $"request-{timestamp}.txt";
+            ? $"{LogPrefix}-{timestamp}.json"
+            : $"session-{timestamp}.json";
         string logPath = Path.Combine(LogDirectory, filename);
 
         int duplicateIndex = 1;
         while (File.Exists(logPath))
         {
             string duplicateName = !string.IsNullOrEmpty(LogPrefix)
-                ? $"{LogPrefix}-{timestamp}-{duplicateIndex}.txt"
-                : $"request-{timestamp}-{duplicateIndex}.txt";
+                ? $"{LogPrefix}-{timestamp}-{duplicateIndex}.json"
+                : $"session-{timestamp}-{duplicateIndex}.json";
             logPath = Path.Combine(LogDirectory, duplicateName);
             duplicateIndex++;
         }
 
-        return logPath;
-    }
-
-    public Task AddContextStatementAsync(string statement, CancellationToken cancellationToken)
-    {
-        _contextStatements.Add(statement);
-
-        return Task.CompletedTask;
-    }
-
-    public Task ClearContextStatementsAsync(CancellationToken cancellationToken)
-    {
-        _contextStatements.Clear();
-
-        return Task.CompletedTask;
-    }
-
-    public IReadOnlyList<string> GetContextStatements()
-    {
-        IReadOnlyList<string> statements = _contextStatements.AsReadOnly();
-
-        return statements;
+        string json = JsonSerializer.Serialize(session, JsonOptions);
+        await File.WriteAllTextAsync(logPath, json, cancellationToken);
     }
 }

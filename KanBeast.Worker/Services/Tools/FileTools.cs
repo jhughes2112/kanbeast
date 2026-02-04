@@ -1,12 +1,11 @@
 using System.ComponentModel;
 using System.Text;
 using System.Text.Json;
-using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Services.Tools;
 
 // Tools for LLM to read and write files within allowed directories.
-public class FileTools
+public class FileTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
     private static readonly string[] AllowedPrefixes = { "/app", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
@@ -16,6 +15,26 @@ public class FileTools
     public FileTools(string workDir)
     {
         _workDir = workDir;
+    }
+
+    public Dictionary<string, ProviderTool> GetTools(LlmRole role)
+    {
+        Dictionary<string, ProviderTool> tools = new Dictionary<string, ProviderTool>();
+
+        // Both Manager and Developer get file access
+        ToolHelper.AddTools(tools, this,
+            nameof(ReadFileAsync),
+            nameof(ReadFileLinesAsync),
+            nameof(SearchInFileAsync),
+            nameof(WriteFileAsync),
+            nameof(CreateFileAsync),
+            nameof(EditFileAsync),
+            nameof(ListFilesAsync),
+            nameof(SearchFilesAsync),
+            nameof(FileExistsAsync),
+            nameof(RemoveFileAsync));
+
+        return tools;
     }
 
     // Validates that a path is within allowed directories.
@@ -64,7 +83,6 @@ public class FileTools
         return Path.GetFullPath(Path.Combine(_workDir, path));
     }
 
-    [KernelFunction("read_file")]
     [Description("Read the entire contents of a file.")]
     public async Task<string> ReadFileAsync(
         [Description("Path to the file")] string filePath)
@@ -103,7 +121,6 @@ public class FileTools
         }
     }
 
-    [KernelFunction("read_file_lines")]
     [Description("Read specific line ranges from a file with line number prefixes. Lines are 1-based.")]
     public async Task<string> ReadFileLinesAsync(
         [Description("Path to the file")] string filePath,
@@ -166,7 +183,6 @@ public class FileTools
         }
     }
 
-    [KernelFunction("search_in_file")]
     [Description("Search for a pattern in a file and return matching lines with context. Returns line numbers and surrounding lines.")]
     public async Task<string> SearchInFileAsync(
         [Description("Path to the file")] string filePath,
@@ -267,7 +283,6 @@ public class FileTools
         }
     }
 
-    [KernelFunction("write_file")]
     [Description("Write content to a file, creating or overwriting as needed.")]
     public async Task<string> WriteFileAsync(
         [Description("Path to the file")] string filePath,
@@ -303,7 +318,6 @@ public class FileTools
         }
     }
 
-    [KernelFunction("create_file")]
     [Description("Create a new file. Fails if file already exists.")]
     public async Task<string> CreateFileAsync(
         [Description("Path to the file")] string filePath,
@@ -344,7 +358,6 @@ public class FileTools
         }
     }
 
-    [KernelFunction("edit_file")]
     [Description("Replace a single exact block of text in a file. oldContent must match exactly once.")]
     public async Task<string> EditFileAsync(
         [Description("Path to the file")] string filePath,
@@ -400,7 +413,6 @@ public class FileTools
         }
     }
 
-    [KernelFunction("list_files")]
     [Description("List files and directories in a directory.")]
     public Task<string> ListFilesAsync(
         [Description("Path to the directory")] string directoryPath)
@@ -443,7 +455,6 @@ public class FileTools
         }
     }
 
-    [KernelFunction("search_files")]
     [Description("Search for files by name pattern. Returns matching paths.")]
     public Task<string> SearchFilesAsync(
         [Description("Directory to search in")] string directoryPath,
@@ -505,7 +516,6 @@ public class FileTools
         }
     }
 
-    [KernelFunction("file_exists")]
     [Description("Check if a file exists.")]
     public Task<string> FileExistsAsync(
         [Description("Path to the file")] string filePath)
@@ -521,7 +531,6 @@ public class FileTools
         return Task.FromResult(exists ? "true" : "false");
     }
 
-    [KernelFunction("remove_file")]
     [Description("Delete a file.")]
     public Task<string> RemoveFileAsync(
         [Description("Path to the file")] string filePath)

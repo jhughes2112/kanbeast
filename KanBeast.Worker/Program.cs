@@ -3,7 +3,6 @@ using CommandLine;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel;
 
 using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
 {
@@ -239,10 +238,8 @@ static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> 
     {
         LLMConfig currentLlm = llmConfigs[0];
         LlmService summarizerService = new LlmService(currentLlm);
-        Kernel summarizerKernel = summarizerService.CreateKernel(Array.Empty<object>());
         compaction = new CompactionSummarizer(
             summarizerService,
-            summarizerKernel,
             compactionPrompt,
             settings.ContextSizeThreshold,
             currentLlm.ContextLength);

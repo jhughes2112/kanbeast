@@ -1,61 +1,51 @@
 using System.ComponentModel;
 using KanBeast.Worker.Models;
-using Microsoft.SemanticKernel;
 
 namespace KanBeast.Worker.Services.Tools;
 
 // Tools for LLM to interact with the ticket system: logging, subtasks, status updates.
-public class TicketTools
+public class TicketTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 
     private readonly IKanbanApiClient _apiClient;
     private readonly TicketHolder _ticketHolder;
-    private string? _currentTaskId;
-    private string? _currentSubtaskId;
+    private readonly TaskState _state;
 
-    public bool SubtasksCreated { get; private set; }
-    public int SubtaskCount { get; private set; }
-    public bool Assigned { get; private set; }
-    public string AssignedMode { get; private set; } = DeveloperMode.Implementation;
-    public bool? SubtaskApproved { get; private set; }
-    public string? RejectionReason { get; private set; }
-    public bool? TicketComplete { get; private set; }
-    public string? BlockedReason { get; private set; }
-    public bool DeveloperComplete { get; private set; }
-    public string DeveloperStatus { get; private set; } = string.Empty;
-    public string DeveloperMessage { get; private set; } = string.Empty;
-
-    public TicketTools(IKanbanApiClient apiClient, TicketHolder ticketHolder)
+    public TicketTools(IKanbanApiClient apiClient, TicketHolder ticketHolder, TaskState state)
     {
         _apiClient = apiClient;
         _ticketHolder = ticketHolder;
+        _state = state;
     }
 
-    // Sets context for which subtask is currently being worked on.
-    public void SetCurrentSubtask(string taskId, string subtaskId)
+    public Dictionary<string, ProviderTool> GetTools(LlmRole role)
     {
-        _currentTaskId = taskId;
-        _currentSubtaskId = subtaskId;
+        Dictionary<string, ProviderTool> tools = new Dictionary<string, ProviderTool>();
+
+        // Shared tools
+        ToolHelper.AddTools(tools, this, nameof(LogMessageAsync));
+
+        if (role == LlmRole.Manager)
+        {
+            ToolHelper.AddTools(tools, this,
+                nameof(CreateTaskAsync),
+                nameof(CreateSubtaskAsync),
+                nameof(MarkTaskCompleteAsync),
+                nameof(AssignSubtaskToDeveloperAsync),
+                nameof(ApproveSubtaskAsync),
+                nameof(RejectSubtaskAsync),
+                nameof(MarkTicketCompleteAsync),
+                nameof(MarkTicketBlockedAsync));
+        }
+        else if (role == LlmRole.Developer)
+        {
+            ToolHelper.AddTools(tools, this, nameof(MarkSubtaskCompleteAsync));
+        }
+
+        return tools;
     }
 
-    // Resets all result flags for a new phase.
-    public void ClearResults()
-    {
-        SubtasksCreated = false;
-        SubtaskCount = 0;
-        Assigned = false;
-        AssignedMode = DeveloperMode.Implementation;
-        SubtaskApproved = null;
-        RejectionReason = null;
-        TicketComplete = null;
-        BlockedReason = null;
-        DeveloperComplete = false;
-        DeveloperStatus = string.Empty;
-        DeveloperMessage = string.Empty;
-    }
-
-    [KernelFunction("log_message")]
     [Description("Write a message to the ticket activity log.")]
     public async Task<string> LogMessageAsync(
         [Description("Message to log")] string message)
@@ -95,7 +85,6 @@ public class TicketTools
         return null;
     }
 
-    [KernelFunction("mark_task_complete")]
     [Description("Mark a task as complete when all of its subtasks are done.")]
     public async Task<string> MarkTaskCompleteAsync(
         [Description("Name of the task to mark complete")] string taskName)
@@ -146,7 +135,6 @@ public class TicketTools
         return result;
     }
 
-    [KernelFunction("create_task")]
     [Description("Create a new task for the ticket.")]
     public async Task<string> CreateTaskAsync(
         [Description("Name of the task")] string taskName,
@@ -197,7 +185,6 @@ public class TicketTools
         return result;
     }
 
-    [KernelFunction("create_subtask")]
     [Description("Create a subtask for an existing task.")]
     public async Task<string> CreateSubtaskAsync(
         [Description("Name of the task to add the subtask to")] string taskName,
@@ -245,8 +232,8 @@ public class TicketTools
                         _ticketHolder.Update(updated);
                         await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created subtask '{subtaskName}' under task '{taskName}'");
 
-                        SubtasksCreated = true;
-                        SubtaskCount += 1;
+                        _state.SubtasksCreated = true;
+                        _state.SubtaskCount += 1;
 
                         result = FormatTicketSummary(updated, $"SUCCESS: Created subtask '{subtaskName}' under task '{taskName}'");
                     }
@@ -286,7 +273,6 @@ public class TicketTools
         return sb.ToString();
     }
 
-    [KernelFunction("assign_subtask_to_developer")]
     [Description("Assign the current subtask to the developer with specific instructions.")]
     public async Task<string> AssignSubtaskToDeveloperAsync(
         [Description("Mode: 'implementation', 'testing', or 'write-tests'")] string mode,
@@ -302,14 +288,14 @@ public class TicketTools
             return "Error: Goal cannot be empty";
         }
 
-        if (_currentTaskId == null || _currentSubtaskId == null)
+        if (_state.CurrentTaskId == null || _state.CurrentSubtaskId == null)
         {
             return "Error: No subtask selected for assignment";
         }
 
         try
         {
-            AssignedMode = mode.ToLowerInvariant() switch
+            _state.AssignedMode = mode.ToLowerInvariant() switch
             {
                 "testing" => DeveloperMode.Testing,
                 "write-tests" or "writetests" => DeveloperMode.WriteTests,
@@ -318,16 +304,16 @@ public class TicketTools
 
             using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
 
-            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.InProgress);
+            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.InProgress);
             if (updated != null)
             {
                 _ticketHolder.Update(updated);
             }
 
             await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Assigned to developer: {goal}");
-            Assigned = true;
+            _state.Assigned = true;
 
-            return $"Subtask assigned to developer in {AssignedMode} mode";
+            return $"Subtask assigned to developer in {_state.AssignedMode} mode";
         }
         catch (TaskCanceledException)
         {
@@ -339,7 +325,6 @@ public class TicketTools
         }
     }
 
-    [KernelFunction("mark_subtask_complete")]
     [Description("Call when the developer has completed the subtask or is blocked.")]
     public async Task<string> MarkSubtaskCompleteAsync(
         [Description("Status: 'done', 'blocked', or 'partial'")] string status,
@@ -357,15 +342,15 @@ public class TicketTools
 
         try
         {
-            DeveloperStatus = status.ToLowerInvariant() switch
+            _state.DeveloperStatus = status.ToLowerInvariant() switch
             {
                 "done" or "complete" => SubtaskCompleteStatus.Done,
                 "blocked" => SubtaskCompleteStatus.Blocked,
                 _ => SubtaskCompleteStatus.Partial
             };
 
-            DeveloperMessage = message;
-            DeveloperComplete = true;
+            _state.DeveloperMessage = message;
+            _state.DeveloperComplete = true;
 
             using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
             await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: {status} - {message}");
@@ -374,17 +359,16 @@ public class TicketTools
         }
         catch (TaskCanceledException)
         {
-            DeveloperComplete = true;
+            _state.DeveloperComplete = true;
             return $"Warning: Logged locally but API timed out. Subtask marked as {status}";
         }
         catch (Exception ex)
         {
-            DeveloperComplete = true;
+            _state.DeveloperComplete = true;
             return $"Warning: Logged locally but API failed: {ex.Message}. Subtask marked as {status}";
         }
     }
 
-    [KernelFunction("approve_subtask")]
     [Description("Approve the subtask - the work meets acceptance criteria.")]
     public async Task<string> ApproveSubtaskAsync(
         [Description("Notes about the approval explaining why it meets criteria")] string notes)
@@ -394,7 +378,7 @@ public class TicketTools
             return "Error: Notes cannot be empty";
         }
 
-        if (_currentTaskId == null || _currentSubtaskId == null)
+        if (_state.CurrentTaskId == null || _state.CurrentSubtaskId == null)
         {
             return "Error: No subtask selected for approval";
         }
@@ -402,7 +386,7 @@ public class TicketTools
         try
         {
             using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Complete);
+            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.Complete);
 
             if (updated == null)
             {
@@ -412,7 +396,7 @@ public class TicketTools
             _ticketHolder.Update(updated);
             await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask approved: {notes}");
 
-            SubtaskApproved = true;
+            _state.SubtaskApproved = true;
             return "Subtask approved";
         }
         catch (TaskCanceledException)
@@ -425,12 +409,11 @@ public class TicketTools
         }
     }
 
-    [KernelFunction("reject_subtask")]
     [Description("Reject the subtask - the work does not meet acceptance criteria.")]
     public async Task<string> RejectSubtaskAsync(
         [Description("Reason for rejection - be specific about what needs to be fixed")] string reason)
     {
-        if (_currentTaskId == null || _currentSubtaskId == null)
+        if (_state.CurrentTaskId == null || _state.CurrentSubtaskId == null)
         {
             return "Error: No subtask selected for rejection";
         }
@@ -443,7 +426,7 @@ public class TicketTools
         try
         {
             using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.UpdateSubtaskRejectionAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, reason);
+            TicketDto? updated = await _apiClient.UpdateSubtaskRejectionAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, reason);
 
             if (updated == null)
             {
@@ -453,8 +436,8 @@ public class TicketTools
             _ticketHolder.Update(updated);
             await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask rejected: {reason}");
 
-            SubtaskApproved = false;
-            RejectionReason = reason;
+            _state.SubtaskApproved = false;
+            _state.RejectionReason = reason;
             return $"Subtask rejected: {reason}";
         }
         catch (TaskCanceledException)
@@ -467,7 +450,6 @@ public class TicketTools
         }
     }
 
-    [KernelFunction("mark_ticket_complete")]
     [Description("Mark the ticket as complete - all work is done and verified.")]
     public async Task<string> MarkTicketCompleteAsync(
         [Description("Summary of what was accomplished")] string summary)
@@ -490,7 +472,7 @@ public class TicketTools
             _ticketHolder.Update(updated);
             await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket complete: {summary}");
 
-            TicketComplete = true;
+            _state.TicketComplete = true;
             return "Ticket marked complete";
         }
         catch (TaskCanceledException)
@@ -503,7 +485,6 @@ public class TicketTools
         }
     }
 
-    [KernelFunction("mark_ticket_blocked")]
     [Description("Mark the ticket as blocked - requires human intervention.")]
     public async Task<string> MarkTicketBlockedAsync(
         [Description("Reason the ticket is blocked")] string reason)
@@ -526,8 +507,8 @@ public class TicketTools
             _ticketHolder.Update(updated);
             await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket blocked: {reason}");
 
-            TicketComplete = false;
-            BlockedReason = reason;
+            _state.TicketComplete = false;
+            _state.BlockedReason = reason;
             return $"Ticket blocked: {reason}";
         }
         catch (TaskCanceledException)
