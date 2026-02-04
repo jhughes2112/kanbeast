@@ -134,7 +134,9 @@ function toggleActivityLog(button) {
 
 // Data loading
 async function loadTickets() {
-    const response = await fetch(`${API_BASE}/tickets`);
+    const response = await fetch(`${API_BASE}/tickets?_=${Date.now()}`, {
+        cache: 'no-store'
+    });
 
     if (!response.ok) {
         throw new Error(`Failed to load tickets: ${response.status}`);

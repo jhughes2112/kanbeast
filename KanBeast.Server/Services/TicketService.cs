@@ -85,11 +85,11 @@ public class TicketService : ITicketService
         _logger.LogInformation("Loaded {Count} tickets from disk, next ID: {NextId}", loadedCount, _nextTicketId);
     }
 
-    private void SaveTicketToDisk(Ticket ticket)
+    private async Task SaveTicketToDiskAsync(Ticket ticket)
     {
         string filePath = Path.Combine(_ticketsDirectory, $"ticket-{ticket.Id}.json");
         string json = JsonSerializer.Serialize(ticket, _jsonOptions);
-        File.WriteAllText(filePath, json);
+        await File.WriteAllTextAsync(filePath, json);
     }
 
     private void DeleteTicketFromDisk(string id)
@@ -112,12 +112,12 @@ public class TicketService : ITicketService
         }
     }
 
-    public Task<Ticket> CreateTicketAsync(Ticket ticket)
+    public async Task<Ticket> CreateTicketAsync(Ticket ticket)
     {
         ticket.Id = AllocateNextId();
         _tickets[ticket.Id] = ticket;
-        SaveTicketToDisk(ticket);
-        return Task.FromResult(ticket);
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
     }
 
     public Task<Ticket?> GetTicketAsync(string id)
@@ -131,21 +131,21 @@ public class TicketService : ITicketService
         return Task.FromResult<IEnumerable<Ticket>>(_tickets.Values.OrderBy(t => t.CreatedAt));
     }
 
-    public Task<Ticket?> UpdateTicketAsync(string id, Ticket ticket)
+    public async Task<Ticket?> UpdateTicketAsync(string id, Ticket ticket)
     {
         if (!_tickets.ContainsKey(id))
         {
-            return Task.FromResult<Ticket?>(null);
+            return null;
         }
 
         ticket.Id = id;
         ticket.UpdatedAt = DateTime.UtcNow;
         _tickets[id] = ticket;
-        SaveTicketToDisk(ticket);
-        return Task.FromResult<Ticket?>(ticket);
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
     }
 
-    public Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskName)
+    public async Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskName)
     {
         Ticket? ticket = null;
 
@@ -180,7 +180,7 @@ public class TicketService : ITicketService
                 {
                     task.LastUpdatedAt = DateTime.UtcNow;
                     ticket.UpdatedAt = DateTime.UtcNow;
-                    SaveTicketToDisk(ticket);
+                    await SaveTicketToDiskAsync(ticket);
                 }
                 else
                 {
@@ -193,7 +193,7 @@ public class TicketService : ITicketService
             }
         }
 
-        return Task.FromResult<Ticket?>(ticket);
+        return ticket;
     }
 
     public Task<bool> DeleteTicketAsync(string id)
@@ -208,20 +208,20 @@ public class TicketService : ITicketService
         return Task.FromResult(removed);
     }
 
-    public Task<Ticket?> UpdateTicketStatusAsync(string id, TicketStatus status)
+    public async Task<Ticket?> UpdateTicketStatusAsync(string id, TicketStatus status)
     {
         if (!_tickets.TryGetValue(id, out Ticket? ticket))
         {
-            return Task.FromResult<Ticket?>(null);
+            return null;
         }
 
         ticket.Status = status;
         ticket.UpdatedAt = DateTime.UtcNow;
-        SaveTicketToDisk(ticket);
-        return Task.FromResult<Ticket?>(ticket);
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
     }
 
-    public Task<Ticket?> AddTaskToTicketAsync(string id, KanbanTask task)
+    public async Task<Ticket?> AddTaskToTicketAsync(string id, KanbanTask task)
     {
         Ticket? ticket = null;
 
@@ -261,14 +261,14 @@ public class TicketService : ITicketService
                 }
 
                 ticket.UpdatedAt = DateTime.UtcNow;
-                SaveTicketToDisk(ticket);
+                await SaveTicketToDiskAsync(ticket);
             }
         }
 
-        return Task.FromResult(ticket);
+        return ticket;
     }
 
-    public Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask)
+    public async Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask)
     {
         Ticket? ticket = null;
 
@@ -314,7 +314,7 @@ public class TicketService : ITicketService
 
                     task.LastUpdatedAt = DateTime.UtcNow;
                     ticket.UpdatedAt = DateTime.UtcNow;
-                    SaveTicketToDisk(ticket);
+                    await SaveTicketToDiskAsync(ticket);
                 }
                 else
                 {
@@ -323,14 +323,14 @@ public class TicketService : ITicketService
             }
         }
 
-        return Task.FromResult(ticket);
+        return ticket;
     }
 
-    public Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
+    public async Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
     {
         if (!_tickets.TryGetValue(ticketId, out Ticket? ticket))
         {
-            return Task.FromResult<Ticket?>(null);
+            return null;
         }
 
         KanbanTask? task = null;
@@ -346,7 +346,7 @@ public class TicketService : ITicketService
 
         if (task == null)
         {
-            return Task.FromResult<Ticket?>(null);
+            return null;
         }
 
         KanbanSubtask? subtask = null;
@@ -362,40 +362,40 @@ public class TicketService : ITicketService
 
         if (subtask == null)
         {
-            return Task.FromResult<Ticket?>(null);
+            return null;
         }
 
         subtask.Status = status;
         subtask.LastUpdatedAt = DateTime.UtcNow;
         task.LastUpdatedAt = DateTime.UtcNow;
         ticket.UpdatedAt = DateTime.UtcNow;
-        SaveTicketToDisk(ticket);
-        return Task.FromResult<Ticket?>(ticket);
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
     }
 
-    public Task<Ticket?> AddActivityLogAsync(string id, string activity)
+    public async Task<Ticket?> AddActivityLogAsync(string id, string activity)
     {
         if (!_tickets.TryGetValue(id, out Ticket? ticket))
         {
-            return Task.FromResult<Ticket?>(null);
+            return null;
         }
 
         ticket.ActivityLog.Add($"[{DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}] {activity}");
         ticket.UpdatedAt = DateTime.UtcNow;
-        SaveTicketToDisk(ticket);
-        return Task.FromResult<Ticket?>(ticket);
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
     }
 
-    public Task<Ticket?> SetBranchNameAsync(string id, string branchName)
+    public async Task<Ticket?> SetBranchNameAsync(string id, string branchName)
     {
         if (!_tickets.TryGetValue(id, out Ticket? ticket))
         {
-            return Task.FromResult<Ticket?>(null);
+            return null;
         }
 
         ticket.BranchName = branchName;
         ticket.UpdatedAt = DateTime.UtcNow;
-        SaveTicketToDisk(ticket);
-        return Task.FromResult<Ticket?>(ticket);
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
     }
 }
