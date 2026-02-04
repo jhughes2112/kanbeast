@@ -10,20 +10,39 @@ public class ShellTools : IToolProvider
     private static readonly string[] AllowedPrefixes = { "/app", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
 
     private readonly string _workDir;
+    private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
 
     public ShellTools(string workDir)
     {
         _workDir = workDir;
+        _toolsByRole = BuildToolsByRole();
     }
 
-    public Dictionary<string, ProviderTool> GetTools(LlmRole role)
+    private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
     {
-        Dictionary<string, ProviderTool> tools = new Dictionary<string, ProviderTool>();
+        List<Tool> sharedTools = new List<Tool>();
+        ToolHelper.AddTools(sharedTools, this, nameof(RunCommandAsync));
 
-        // Both Manager and Developer get shell access
-        ToolHelper.AddTools(tools, this, nameof(RunCommandAsync));
+        Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
+        {
+            [LlmRole.Manager] = sharedTools,
+            [LlmRole.Developer] = sharedTools,
+            [LlmRole.Compaction] = new List<Tool>()
+        };
 
-        return tools;
+        return result;
+    }
+
+    public void AddTools(List<Tool> tools, LlmRole role)
+    {
+        if (_toolsByRole.TryGetValue(role, out List<Tool>? roleTools))
+        {
+            tools.AddRange(roleTools);
+        }
+        else
+        {
+            throw new ArgumentException($"Unhandled role: {role}");
+        }
     }
 
     // Validates that a working directory is within allowed paths.

@@ -27,8 +27,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 {
     private readonly ILogger<AgentOrchestrator> _logger;
     private readonly IKanbanApiClient _apiClient;
-    private readonly ILlmService _managerLlmService;
-    private readonly ILlmService _developerLlmService;
+    private readonly LlmProxy _managerLlmService;
+    private readonly LlmProxy _developerLlmService;
     private readonly string _managerPrompt;
     private readonly string _developerImplementationPrompt;
     private readonly int _maxIterationsPerSubtask;
@@ -38,8 +38,8 @@ public class AgentOrchestrator : IAgentOrchestrator
     public AgentOrchestrator(
         ILogger<AgentOrchestrator> logger,
         IKanbanApiClient apiClient,
-        ILlmService managerLlmService,
-        ILlmService developerLlmService,
+        LlmProxy managerLlmService,
+        LlmProxy developerLlmService,
         string managerPrompt,
         string developerImplementationPrompt,
         int maxIterationsPerSubtask)
@@ -176,11 +176,9 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         state.Clear();
 
-        _managerLlmService.RegisterToolsFromProviders(toolProviders, LlmRole.Manager);
-
         string userPrompt = $"Break down this ticket into tasks and subtasks:\n\nTicket: {ticketHolder.Ticket.Title}\nDescription: {ticketHolder.Ticket.Description}\n\nCreate a task with create_task, then add subtasks to it with create_subtask.";
 
-        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, cancellationToken);
+        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
         _logger.LogDebug("Manager breakdown response: {Response}", response);
 
         if (state.SubtasksCreated)
@@ -214,11 +212,9 @@ public class AgentOrchestrator : IAgentOrchestrator
         _logger.LogInformation("Manager: Assigning subtask '{Name}'", subtask.Name);
         await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Assigning subtask '{subtask.Name}'");
 
-        _managerLlmService.RegisterToolsFromProviders(toolProviders, LlmRole.Manager);
-
         string userPrompt = $"Assign this subtask to the developer:\n\nSubtask: {subtask.Name}\n\nCall assign_subtask_to_developer with mode and goal.";
 
-        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, cancellationToken);
+        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
         _logger.LogDebug("Manager assign response: {Response}", response);
 
         if (state.Assigned)
@@ -253,8 +249,6 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         state.Clear();
 
-        _developerLlmService.RegisterToolsFromProviders(toolProviders, LlmRole.Developer);
-
         string userPrompt = $"Complete this subtask:\n\nSubtask: {subtask.Name}\n\nCall mark_subtask_complete when done or blocked.";
 
         int iterations = 0;
@@ -264,7 +258,7 @@ public class AgentOrchestrator : IAgentOrchestrator
             cancellationToken.ThrowIfCancellationRequested();
             iterations++;
 
-            string response = await _developerLlmService.RunAsync(_developerImplementationPrompt, userPrompt, cancellationToken);
+            string response = await _developerLlmService.RunAsync(_developerImplementationPrompt, userPrompt, toolProviders, LlmRole.Developer, cancellationToken);
             _logger.LogDebug("Developer response ({Iteration}): {Response}", iterations, response.Substring(0, Math.Min(200, response.Length)));
 
             if (!state.DeveloperComplete)
@@ -304,11 +298,9 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         state.Clear();
 
-        _managerLlmService.RegisterToolsFromProviders(toolProviders, LlmRole.Manager);
-
         string userPrompt = $"Verify this completed subtask:\n\nSubtask: {subtask.Name}\n\nCall approve_subtask or reject_subtask.";
 
-        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, cancellationToken);
+        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
         _logger.LogDebug("Manager verify response: {Response}", response);
 
         if (state.SubtaskApproved == true)
@@ -337,11 +329,9 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         state.Clear();
 
-        _managerLlmService.RegisterToolsFromProviders(toolProviders, LlmRole.Manager);
-
         string userPrompt = $"All subtasks complete. Finalize this ticket:\n\nTicket: {ticketHolder.Ticket.Title}\n\n1. Use shell to commit any uncommitted changes with git\n2. Use shell to push to the remote branch with git\n3. Call mark_ticket_complete or mark_ticket_blocked";
 
-        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, cancellationToken);
+        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
         _logger.LogDebug("Manager finalize response: {Response}", response);
 
         if (state.TicketComplete == true)

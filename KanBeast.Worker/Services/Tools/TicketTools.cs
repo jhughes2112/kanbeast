@@ -11,39 +11,55 @@ public class TicketTools : IToolProvider
     private readonly IKanbanApiClient _apiClient;
     private readonly TicketHolder _ticketHolder;
     private readonly TaskState _state;
+    private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
 
     public TicketTools(IKanbanApiClient apiClient, TicketHolder ticketHolder, TaskState state)
     {
         _apiClient = apiClient;
         _ticketHolder = ticketHolder;
         _state = state;
+        _toolsByRole = BuildToolsByRole();
     }
 
-    public Dictionary<string, ProviderTool> GetTools(LlmRole role)
+    private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
     {
-        Dictionary<string, ProviderTool> tools = new Dictionary<string, ProviderTool>();
+        List<Tool> managerTools = new List<Tool>();
+        ToolHelper.AddTools(managerTools, this,
+            nameof(LogMessageAsync),
+            nameof(CreateTaskAsync),
+            nameof(CreateSubtaskAsync),
+            nameof(MarkTaskCompleteAsync),
+            nameof(AssignSubtaskToDeveloperAsync),
+            nameof(ApproveSubtaskAsync),
+            nameof(RejectSubtaskAsync),
+            nameof(MarkTicketCompleteAsync),
+            nameof(MarkTicketBlockedAsync));
 
-        // Shared tools
-        ToolHelper.AddTools(tools, this, nameof(LogMessageAsync));
+        List<Tool> developerTools = new List<Tool>();
+        ToolHelper.AddTools(developerTools, this,
+            nameof(LogMessageAsync),
+            nameof(MarkSubtaskCompleteAsync));
 
-        if (role == LlmRole.Manager)
+        Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
-            ToolHelper.AddTools(tools, this,
-                nameof(CreateTaskAsync),
-                nameof(CreateSubtaskAsync),
-                nameof(MarkTaskCompleteAsync),
-                nameof(AssignSubtaskToDeveloperAsync),
-                nameof(ApproveSubtaskAsync),
-                nameof(RejectSubtaskAsync),
-                nameof(MarkTicketCompleteAsync),
-                nameof(MarkTicketBlockedAsync));
-        }
-        else if (role == LlmRole.Developer)
-        {
-            ToolHelper.AddTools(tools, this, nameof(MarkSubtaskCompleteAsync));
-        }
+            [LlmRole.Manager] = managerTools,
+            [LlmRole.Developer] = developerTools,
+            [LlmRole.Compaction] = new List<Tool>()
+        };
 
-        return tools;
+        return result;
+    }
+
+    public void AddTools(List<Tool> tools, LlmRole role)
+    {
+        if (_toolsByRole.TryGetValue(role, out List<Tool>? roleTools))
+        {
+            tools.AddRange(roleTools);
+        }
+        else
+        {
+            throw new ArgumentException($"Unhandled role: {role}");
+        }
     }
 
     [Description("Write a message to the ticket activity log.")]

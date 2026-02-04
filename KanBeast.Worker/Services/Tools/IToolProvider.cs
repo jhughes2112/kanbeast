@@ -6,20 +6,19 @@ namespace KanBeast.Worker.Services.Tools;
 public enum LlmRole
 {
     Manager,
-    Developer
+    Developer,
+    Compaction
 }
 
-// A tool exposed by a provider to the LLM.
-public class ProviderTool
+// A tool with its definition and invocation handler.
+public class Tool
 {
-    public required string Name { get; init; }
-    public required string Description { get; init; }
-    public required JsonObject Parameters { get; init; }
-    public required Func<JsonObject, Task<string>> InvokeAsync { get; init; }
+    public required ToolDefinition Definition { get; init; }
+    public required Func<JsonObject, Task<string>> Handler { get; init; }
 }
 
 // Interface for classes that provide tools to LLM agents.
 public interface IToolProvider
 {
-    Dictionary<string, ProviderTool> GetTools(LlmRole role);
+    void AddTools(List<Tool> tools, LlmRole role);
 }

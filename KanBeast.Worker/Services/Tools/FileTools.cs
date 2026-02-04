@@ -11,18 +11,18 @@ public class FileTools : IToolProvider
     private static readonly string[] AllowedPrefixes = { "/app", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
 
     private readonly string _workDir;
+    private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
 
     public FileTools(string workDir)
     {
         _workDir = workDir;
+        _toolsByRole = BuildToolsByRole();
     }
 
-    public Dictionary<string, ProviderTool> GetTools(LlmRole role)
+    private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
     {
-        Dictionary<string, ProviderTool> tools = new Dictionary<string, ProviderTool>();
-
-        // Both Manager and Developer get file access
-        ToolHelper.AddTools(tools, this,
+        List<Tool> sharedTools = new List<Tool>();
+        ToolHelper.AddTools(sharedTools, this,
             nameof(ReadFileAsync),
             nameof(ReadFileLinesAsync),
             nameof(SearchInFileAsync),
@@ -34,7 +34,26 @@ public class FileTools : IToolProvider
             nameof(FileExistsAsync),
             nameof(RemoveFileAsync));
 
-        return tools;
+        Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
+        {
+            [LlmRole.Manager] = sharedTools,
+            [LlmRole.Developer] = sharedTools,
+            [LlmRole.Compaction] = new List<Tool>()
+        };
+
+        return result;
+    }
+
+    public void AddTools(List<Tool> tools, LlmRole role)
+    {
+        if (_toolsByRole.TryGetValue(role, out List<Tool>? roleTools))
+        {
+            tools.AddRange(roleTools);
+        }
+        else
+        {
+            throw new ArgumentException($"Unhandled role: {role}");
+        }
     }
 
     // Validates that a path is within allowed directories.

@@ -40,7 +40,6 @@ try
 {
     KanbanApiClient apiClient = new KanbanApiClient(config.ServerUrl);
     GitService gitService = new GitService(config.GitConfig);
-    HashSet<int> downedLlmIndices = new HashSet<int>();
     ICompaction managerCompaction = BuildCompaction(
         config.ManagerCompaction,
         config.LLMConfigs,
@@ -50,16 +49,16 @@ try
         config.LLMConfigs,
         config.GetPrompt("developer-compaction"));
 
-    LlmProxy managerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, managerCompaction);
+    LlmProxy managerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, managerCompaction);
     managerProxy.LogDirectory = Path.Combine(Environment.CurrentDirectory, "env", "logs");
     managerProxy.LogPrefix = $"tik-{config.TicketId}-mgr";
 
-    LlmProxy developerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, downedLlmIndices, developerCompaction);
+    LlmProxy developerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, developerCompaction);
     developerProxy.LogDirectory = Path.Combine(Environment.CurrentDirectory, "env", "logs");
     developerProxy.LogPrefix = $"tik-{config.TicketId}-dev";
 
-    ILlmService managerLlmService = managerProxy;
-    ILlmService developerLlmService = developerProxy;
+    LlmProxy managerLlmService = managerProxy;
+    LlmProxy developerLlmService = developerProxy;
 
     logger.LogInformation("Fetching ticket details...");
     TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);
@@ -237,12 +236,9 @@ static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> 
     if (string.Equals(settings.Type, "summarize", StringComparison.OrdinalIgnoreCase) && llmConfigs.Count > 0)
     {
         LLMConfig currentLlm = llmConfigs[0];
-        LlmService summarizerService = new LlmService(currentLlm);
         compaction = new CompactionSummarizer(
-            summarizerService,
             compactionPrompt,
-            settings.ContextSizeThreshold,
-            currentLlm.ContextLength);
+            settings.ContextSizeThreshold);
     }
 
     return compaction;

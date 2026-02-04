@@ -4,11 +4,11 @@ using System.Text.Json.Nodes;
 
 namespace KanBeast.Worker.Services.Tools;
 
-// Helper to create ProviderTools from methods with [Description] attributes.
+// Helper to create tool definitions and handlers from methods with [Description] attributes.
 public static class ToolHelper
 {
-    // Creates a ProviderTool from a method on the given instance.
-    public static ProviderTool FromMethod(object instance, string methodName, string? overrideName = null)
+    // Adds a tool from a method to the tools list.
+    public static void AddTool(List<Tool> tools, object instance, string methodName)
     {
         Type type = instance.GetType();
         MethodInfo? method = type.GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
@@ -18,13 +18,13 @@ public static class ToolHelper
             throw new ArgumentException($"Method '{methodName}' not found on type '{type.Name}'");
         }
 
-        string toolName = overrideName ?? ToSnakeCase(methodName.Replace("Async", ""));
+        string toolName = ToSnakeCase(methodName.Replace("Async", ""));
         DescriptionAttribute? descAttr = method.GetCustomAttribute<DescriptionAttribute>();
         string description = descAttr?.Description ?? methodName;
 
         JsonObject parameters = BuildParametersSchema(method);
 
-        Func<JsonObject, Task<string>> invoker = async (JsonObject args) =>
+        Func<JsonObject, Task<string>> handler = async (JsonObject args) =>
         {
             object?[] methodArgs = BuildMethodArguments(method, args);
             object? result = method.Invoke(instance, methodArgs);
@@ -44,22 +44,28 @@ public static class ToolHelper
             }
         };
 
-        return new ProviderTool
+        tools.Add(new Tool
         {
-            Name = toolName,
-            Description = description,
-            Parameters = parameters,
-            InvokeAsync = invoker
-        };
+            Definition = new ToolDefinition
+            {
+                Type = "function",
+                Function = new FunctionDefinition
+                {
+                    Name = toolName,
+                    Description = description,
+                    Parameters = parameters
+                }
+            },
+            Handler = handler
+        });
     }
 
-    // Adds multiple tools from methods to a dictionary.
-    public static void AddTools(Dictionary<string, ProviderTool> tools, object instance, params string[] methodNames)
+    // Adds multiple tools from methods.
+    public static void AddTools(List<Tool> tools, object instance, params string[] methodNames)
     {
         foreach (string methodName in methodNames)
         {
-            ProviderTool tool = FromMethod(instance, methodName);
-            tools[tool.Name] = tool;
+            AddTool(tools, instance, methodName);
         }
     }
 
