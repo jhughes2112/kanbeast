@@ -10,28 +10,22 @@ public class LlmProxy
     private readonly int _retryCount;
     private readonly TimeSpan _retryDelay;
     private readonly ICompaction _compaction;
+    private readonly string _logDirectory;
+    private readonly string _logPrefix;
     private int _currentLlmIndex;
-    private string _logDirectory = string.Empty;
-    private string _logPrefix = string.Empty;
 
-    public string LogDirectory
-    {
-        get => _logDirectory;
-        set => _logDirectory = value;
-    }
+    public string LogDirectory => _logDirectory;
 
-    public string LogPrefix
-    {
-        get => _logPrefix;
-        set => _logPrefix = value;
-    }
+    public string LogPrefix => _logPrefix;
 
-    public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds, ICompaction compaction)
+    public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds, ICompaction compaction, string logDirectory, string logPrefix)
     {
         _configs = configs;
         _retryCount = retryCount;
         _retryDelay = TimeSpan.FromSeconds(retryDelaySeconds);
         _compaction = compaction;
+        _logDirectory = logDirectory;
+        _logPrefix = logPrefix;
         _currentLlmIndex = 0;
 
         Console.WriteLine($"LlmProxy initialized with {configs.Count} LLM config(s)");

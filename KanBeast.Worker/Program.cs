@@ -49,13 +49,23 @@ try
         config.LLMConfigs,
         config.GetPrompt("developer-compaction"));
 
-    LlmProxy managerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, managerCompaction);
-    managerProxy.LogDirectory = Path.Combine(Environment.CurrentDirectory, "env", "logs");
-    managerProxy.LogPrefix = $"tik-{config.TicketId}-mgr";
+    string logDirectory = Path.Combine(Environment.CurrentDirectory, "env", "logs");
 
-    LlmProxy developerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, developerCompaction);
-    developerProxy.LogDirectory = Path.Combine(Environment.CurrentDirectory, "env", "logs");
-    developerProxy.LogPrefix = $"tik-{config.TicketId}-dev";
+    LlmProxy managerProxy = new LlmProxy(
+        config.LLMConfigs,
+        config.LlmRetryCount,
+        config.LlmRetryDelaySeconds,
+        managerCompaction,
+        logDirectory,
+        $"tik-{config.TicketId}-mgr");
+
+    LlmProxy developerProxy = new LlmProxy(
+        config.LLMConfigs,
+        config.LlmRetryCount,
+        config.LlmRetryDelaySeconds,
+        developerCompaction,
+        logDirectory,
+        $"tik-{config.TicketId}-dev");
 
     LlmProxy managerLlmService = managerProxy;
     LlmProxy developerLlmService = developerProxy;

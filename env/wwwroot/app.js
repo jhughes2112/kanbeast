@@ -8,6 +8,7 @@ let tickets = [];
 let settings = null;
 let connection = null;
 let currentDetailTicketId = null;
+let activityLogExpanded = false;
 
 // Allowed status transitions
 // Backlog -> Active (start work)
@@ -28,10 +29,23 @@ async function init() {
         setupSignalR();
         setupEventListeners();
         setupDragAndDrop();
+        startTimestampUpdater();
     } catch (error) {
         console.error('Initialization error:', error);
         updateConnectionStatus('disconnected', 'Error');
     }
+}
+
+// Update relative timestamps every second
+function startTimestampUpdater() {
+    setInterval(() => {
+        document.querySelectorAll('.activity-timestamp').forEach(el => {
+            const timestamp = el.dataset.timestamp;
+            if (timestamp) {
+                el.textContent = formatRelativeTime(timestamp);
+            }
+        });
+    }, 1000);
 }
 
 // SignalR connection management
@@ -110,9 +124,11 @@ function toggleActivityLog(button) {
     if (isCollapsed) {
         log.classList.remove('collapsed');
         button.textContent = button.textContent.replace('▼', '▲');
+        activityLogExpanded = true;
     } else {
         log.classList.add('collapsed');
         button.textContent = button.textContent.replace('▲', '▼');
+        activityLogExpanded = false;
     }
 }
 
@@ -311,6 +327,53 @@ function formatDate(dateStr) {
     return date.toLocaleDateString();
 }
 
+function formatRelativeTime(dateStr) {
+    if (!dateStr) {
+        return '';
+    }
+
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffSeconds = Math.floor(diffMs / 1000);
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffSeconds < 60) {
+        return `${diffSeconds} sec ago`;
+    }
+
+    if (diffMinutes < 60) {
+        return `${diffMinutes} min ago`;
+    }
+
+    if (diffHours < 24) {
+        return `${diffHours} hr ago`;
+    }
+
+    if (diffDays < 7) {
+        return `${diffDays} day${diffDays > 1 ? 's' : ''} ago`;
+    }
+
+    return date.toLocaleDateString();
+}
+
+// Parse activity log entry into timestamp and message
+function parseLogEntry(logEntry) {
+    const timestampMatch = logEntry.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)$/);
+    if (timestampMatch) {
+        return {
+            timestamp: timestampMatch[1].replace(' ', 'T') + 'Z',
+            message: timestampMatch[2]
+        };
+    }
+    return {
+        timestamp: null,
+        message: logEntry
+    };
+}
+
 // Ticket details modal
 async function showTicketDetails(ticketId) {
     currentDetailTicketId = ticketId;
@@ -398,28 +461,51 @@ async function showTicketDetails(ticketId) {
 
     if (ticket.activityLog && ticket.activityLog.length > 0) {
         const logCount = ticket.activityLog.length;
-        activityHtml = `
-            <div class="activity-log-container">
-                <button class="activity-log-toggle" onclick="toggleActivityLog(this)">
-                    Show Activity Log (${logCount} entries) ▼
-                </button>
-                <div class="activity-log collapsed">
-        `;
+        const expandIcon = activityLogExpanded ? '▲' : '▼';
+        const collapsedClass = activityLogExpanded ? '' : 'collapsed';
+
         // Show newest first
         const reversedLogs = [...ticket.activityLog].reverse();
+        const latestParsed = parseLogEntry(reversedLogs[0]);
 
-        reversedLogs.forEach(log => {
+        let latestLogClass = '';
+        if (latestParsed.message.includes('Manager:')) {
+            latestLogClass = 'manager';
+        } else if (latestParsed.message.includes('Developer:')) {
+            latestLogClass = 'developer';
+        } else if (latestParsed.message.includes('Worker:')) {
+            latestLogClass = 'worker';
+        }
+
+        activityHtml = `
+            <div class="activity-log-container">
+                <div class="activity-latest ${latestLogClass}">
+                    ${latestParsed.timestamp ? `<span class="activity-timestamp ${latestLogClass}" data-timestamp="${latestParsed.timestamp}">${formatRelativeTime(latestParsed.timestamp)}</span>` : ''}
+                    <span class="activity-message">${escapeHtml(latestParsed.message)}</span>
+                </div>
+                <button class="activity-log-toggle" onclick="toggleActivityLog(this)">
+                    ${logCount > 1 ? `Show ${logCount - 1} more` : 'Activity Log'} ${expandIcon}
+                </button>
+                <div class="activity-log ${collapsedClass}">
+        `;
+
+        reversedLogs.slice(1).forEach(log => {
+            const parsed = parseLogEntry(log);
             let logClass = '';
 
-            if (log.includes('Manager:')) {
+            if (parsed.message.includes('Manager:')) {
                 logClass = 'manager';
-            } else if (log.includes('Developer:')) {
+            } else if (parsed.message.includes('Developer:')) {
                 logClass = 'developer';
-            } else if (log.includes('Worker:')) {
+            } else if (parsed.message.includes('Worker:')) {
                 logClass = 'worker';
             }
 
-            activityHtml += `<div class="activity-item ${logClass}">${escapeHtml(log)}</div>`;
+            activityHtml += `<div class="activity-item ${logClass}">`;
+            if (parsed.timestamp) {
+                activityHtml += `<span class="activity-timestamp ${logClass}" data-timestamp="${parsed.timestamp}">${formatRelativeTime(parsed.timestamp)}</span>`;
+            }
+            activityHtml += `<span class="activity-message">${escapeHtml(parsed.message)}</span></div>`;
         });
 
         activityHtml += '</div></div>';
@@ -508,6 +594,7 @@ async function moveTicket(ticketId, newStatus) {
 
 // Make moveTicket available globally for onclick handlers
 window.moveTicket = moveTicket;
+window.toggleActivityLog = toggleActivityLog;
 
 // Delete ticket
 async function deleteTicket(ticketId) {

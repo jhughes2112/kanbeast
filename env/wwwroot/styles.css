@@ -682,18 +682,31 @@ nav {
 }
 
 .activity-log-container {
-    background: var(--gray-100);
+    background: #0a0a0a;
     border-radius: var(--radius);
     overflow: hidden;
+    border: 1px solid var(--gray-300);
+}
+
+.activity-latest {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    color: var(--gray-700);
+    background: #0a0a0a;
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    line-height: 1.4;
 }
 
 .activity-log-toggle {
     width: 100%;
-    padding: 0.75rem;
+    padding: 0.5rem 0.75rem;
     background: var(--gray-200);
     border: none;
     color: var(--gray-600);
-    font-size: 0.875rem;
+    font-size: 0.75rem;
     font-weight: 500;
     cursor: pointer;
     text-align: left;
@@ -706,10 +719,12 @@ nav {
 
 .activity-log {
     max-height: 400px;
+    overflow-x: auto;
     overflow-y: auto;
-    background: var(--gray-100);
+    background: #0a0a0a;
     padding: 0.5rem;
     transition: max-height 0.3s ease;
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
 }
 
 .activity-log.collapsed {
@@ -719,29 +734,44 @@ nav {
 }
 
 .activity-item {
-    padding: 0.625rem 0.75rem;
-    border-radius: var(--radius);
+    padding: 0.375rem 0.5rem;
     font-size: 0.8125rem;
     color: var(--gray-600);
-    background: var(--gray-50);
-    margin-bottom: 0.375rem;
-    border-left: 3px solid var(--gray-400);
+    background: transparent;
+    margin-bottom: 0.125rem;
+    display: flex;
+    gap: 0.75rem;
+    align-items: flex-start;
+    line-height: 1.4;
+    white-space: nowrap;
 }
 
 .activity-item:last-child {
     margin-bottom: 0;
 }
 
-.activity-item.manager {
-    border-left-color: var(--primary);
+.activity-timestamp {
+    font-weight: 600;
+    min-width: 80px;
+    flex-shrink: 0;
 }
 
-.activity-item.developer {
-    border-left-color: var(--success);
+.activity-timestamp.manager {
+    color: var(--primary-light);
 }
 
-.activity-item.worker {
-    border-left-color: var(--warning);
+.activity-timestamp.developer {
+    color: var(--success);
+}
+
+.activity-timestamp.worker {
+    color: var(--warning);
+}
+
+.activity-message {
+    color: var(--gray-600);
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .settings-section {
