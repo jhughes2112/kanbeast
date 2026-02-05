@@ -20,9 +20,8 @@ public class SettingsService : ISettingsService
 
     public SettingsService()
     {
-        // Use CWD as the base, always
-        _promptDirectory = Path.Combine(Environment.CurrentDirectory, "prompts");
-        _settingsPath = Path.Combine(Environment.CurrentDirectory, "settings.json");
+        _promptDirectory = ResolvePromptDirectory();
+        _settingsPath = ResolveSettingsPath();
 
         if (!File.Exists(_settingsPath))
         {
@@ -135,9 +134,7 @@ public class SettingsService : ISettingsService
         List<PromptTemplate> prompts = new List<PromptTemplate>
         {
             LoadPromptTemplate("manager-system", "Manager: System Prompt"),
-            LoadPromptTemplate("developer-implementation", "Developer: Implement Features"),
-            LoadPromptTemplate("developer-testing", "Developer: Test Changes"),
-            LoadPromptTemplate("developer-write-tests", "Developer: Write Tests"),
+            LoadPromptTemplate("developer", "Developer"),
             LoadPromptTemplate("manager-compaction-summary", "Manager: Compaction Summary Prompt"),
             LoadPromptTemplate("developer-compaction-summary", "Developer: Compaction Summary Prompt")
         };
@@ -148,19 +145,14 @@ public class SettingsService : ISettingsService
     private PromptTemplate LoadPromptTemplate(string key, string displayName)
     {
         string fileName = $"{key}.txt";
-        string filePath = Path.Combine(_promptDirectory, fileName);
-
-        if (!File.Exists(filePath))
-        {
-            throw new FileNotFoundException($"Required prompt file not found: {filePath}", filePath);
-        }
+        string content = LoadPromptFromDisk(_promptDirectory, key);
 
         return new PromptTemplate
         {
             Key = key,
             DisplayName = displayName,
             FileName = fileName,
-            Content = File.ReadAllText(filePath)
+            Content = content
         };
     }
 
@@ -294,5 +286,26 @@ public class SettingsService : ISettingsService
         };
 
         return fileSettings;
+    }
+
+    private static string ResolvePromptDirectory()
+    {
+        return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "prompts"));
+    }
+
+    private static string ResolveSettingsPath()
+    {
+        return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "settings.json"));
+    }
+
+    private static string LoadPromptFromDisk(string promptDirectory, string promptName)
+    {
+        string filePath = Path.Combine(promptDirectory, $"{promptName}.txt");
+        if (!File.Exists(filePath))
+        {
+            throw new FileNotFoundException($"Required prompt file not found: {filePath}", filePath);
+        }
+
+        return File.ReadAllText(filePath);
     }
 }
