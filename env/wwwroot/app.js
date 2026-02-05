@@ -300,6 +300,7 @@ function createTicketElement(ticket) {
         <div class="ticket-footer">
             <div class="ticket-meta">
                 <span>📅 ${formatDate(ticket.createdAt)}</span>
+                ${ticket.llmCost > 0 ? `<span class="cost-badge">💰 $${ticket.llmCost.toFixed(4)}</span>` : ''}
                 ${ticket.workerId ? '<span class="worker-badge">🤖 AI Working</span>' : ''}
             </div>
             ${totalCount > 0 ? `

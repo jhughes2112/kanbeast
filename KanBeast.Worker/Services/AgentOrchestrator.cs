@@ -196,8 +196,13 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         string userPrompt = $"Break down this ticket into tasks and subtasks:\n\nTicket: {ticketHolder.Ticket.Title}\nDescription: {ticketHolder.Ticket.Description}\n\nCreate a task with create_task, then add subtasks to it with create_subtask.";
 
-        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
-        _logger.LogDebug("Manager breakdown response: {Response}", response);
+        LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
+        _logger.LogDebug("Manager breakdown response: {Response}", result.Content);
+
+        if (result.AccumulatedCost > 0)
+        {
+            await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, result.AccumulatedCost);
+        }
 
         if (state.SubtasksCreated)
         {
@@ -230,8 +235,13 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         string userPrompt = $"Assign this subtask to the developer:\n\nSubtask: {subtask.Name}\n\nCall assign_subtask_to_developer with mode and goal.";
 
-        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
-        _logger.LogDebug("Manager assign response: {Response}", response);
+        LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
+        _logger.LogDebug("Manager assign response: {Response}", result.Content);
+
+        if (result.AccumulatedCost > 0)
+        {
+            await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, result.AccumulatedCost);
+        }
 
         if (state.Assigned)
         {
@@ -272,8 +282,13 @@ public class AgentOrchestrator : IAgentOrchestrator
             cancellationToken.ThrowIfCancellationRequested();
             iterations++;
 
-            string response = await _developerLlmService.RunAsync(_developerImplementationPrompt, userPrompt, toolProviders, LlmRole.Developer, cancellationToken);
-            _logger.LogDebug("Developer response ({Iteration}): {Response}", iterations, response.Substring(0, Math.Min(200, response.Length)));
+            LlmResult result = await _developerLlmService.RunAsync(_developerImplementationPrompt, userPrompt, toolProviders, LlmRole.Developer, cancellationToken);
+            _logger.LogDebug("Developer response ({Iteration}): {Response}", iterations, result.Content.Substring(0, Math.Min(200, result.Content.Length)));
+
+            if (result.AccumulatedCost > 0)
+            {
+                await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, result.AccumulatedCost);
+            }
 
             if (!state.DeveloperComplete)
             {
@@ -312,8 +327,13 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         string userPrompt = $"Verify this completed subtask:\n\nSubtask: {subtask.Name}\n\nCall approve_subtask or reject_subtask.";
 
-        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
-        _logger.LogDebug("Manager verify response: {Response}", response);
+        LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
+        _logger.LogDebug("Manager verify response: {Response}", result.Content);
+
+        if (result.AccumulatedCost > 0)
+        {
+            await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, result.AccumulatedCost);
+        }
 
         if (state.SubtaskApproved == true)
         {
@@ -341,8 +361,13 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         string userPrompt = $"All subtasks complete. Finalize this ticket:\n\nTicket: {ticketHolder.Ticket.Title}\n\n1. Use shell to commit any uncommitted changes with git\n2. Use shell to push to the remote branch with git\n3. Call mark_ticket_complete or mark_ticket_blocked";
 
-        string response = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
-        _logger.LogDebug("Manager finalize response: {Response}", response);
+        LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
+        _logger.LogDebug("Manager finalize response: {Response}", result.Content);
+
+        if (result.AccumulatedCost > 0)
+        {
+            await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, result.AccumulatedCost);
+        }
 
         if (state.TicketComplete == false)
         {

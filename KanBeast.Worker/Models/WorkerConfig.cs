@@ -32,6 +32,8 @@ public class LLMConfig
     public required string Model { get; set; }
     public string? Endpoint { get; set; }
     public int ContextLength { get; set; } = 128000;
+    public decimal InputTokenPrice { get; set; } = 0m;
+    public decimal OutputTokenPrice { get; set; } = 0m;
 }
 
 // Stores Git integration settings for worker operations.

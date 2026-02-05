@@ -20,4 +20,5 @@ public class Ticket
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
     public string? WorkerId { get; set; }
+    public decimal LlmCost { get; set; } = 0m;
 }

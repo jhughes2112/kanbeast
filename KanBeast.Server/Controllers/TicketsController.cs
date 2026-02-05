@@ -238,9 +238,22 @@ public class TicketsController : ControllerBase
         await _hubContext.Clients.All.TicketUpdated(ticket);
         return Ok(ticket);
     }
+
+    [HttpPatch("{id}/cost")]
+    public async Task<ActionResult<Ticket>> AddCost(string id, [FromBody] CostUpdate update)
+    {
+        var ticket = await _ticketService.AddLlmCostAsync(id, update.Cost);
+        if (ticket == null)
+            return NotFound();
+
+        await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
+        return Ok(ticket);
+    }
 }
 
 public record TicketStatusUpdate(TicketStatus Status);
 public record SubtaskStatusUpdate(SubtaskStatus Status);
 public record ActivityUpdate(string Message);
 public record BranchUpdate(string BranchName);
+public record CostUpdate(decimal Cost);

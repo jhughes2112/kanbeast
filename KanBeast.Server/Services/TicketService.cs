@@ -19,6 +19,7 @@ public interface ITicketService
     Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskId);
     Task<Ticket?> AddActivityLogAsync(string id, string activity);
     Task<Ticket?> SetBranchNameAsync(string id, string branchName);
+    Task<Ticket?> AddLlmCostAsync(string id, decimal cost);
 }
 
 public class TicketService : ITicketService
@@ -394,6 +395,19 @@ public class TicketService : ITicketService
         }
 
         ticket.BranchName = branchName;
+        ticket.UpdatedAt = DateTime.UtcNow;
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
+    }
+
+    public async Task<Ticket?> AddLlmCostAsync(string id, decimal cost)
+    {
+        if (!_tickets.TryGetValue(id, out Ticket? ticket))
+        {
+            return null;
+        }
+
+        ticket.LlmCost += cost;
         ticket.UpdatedAt = DateTime.UtcNow;
         await SaveTicketToDiskAsync(ticket);
         return ticket;

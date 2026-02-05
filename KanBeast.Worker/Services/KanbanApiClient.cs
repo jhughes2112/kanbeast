@@ -16,6 +16,7 @@ public interface IKanbanApiClient
     Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId);
     Task AddActivityLogAsync(string ticketId, string message);
     Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName);
+    Task AddLlmCostAsync(string ticketId, decimal cost);
 }
 
 public class KanbanApiClient : IKanbanApiClient
@@ -146,5 +147,16 @@ public class KanbanApiClient : IKanbanApiClient
         }
 
         return ticket;
+    }
+
+    public async Task AddLlmCostAsync(string ticketId, decimal cost)
+    {
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/cost", new { cost }, _jsonOptions);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            string error = await response.Content.ReadAsStringAsync();
+            Console.WriteLine($"Failed to add LLM cost: {response.StatusCode} - {error}");
+        }
     }
 }

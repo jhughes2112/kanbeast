@@ -6,15 +6,15 @@ namespace KanBeast.Worker.Services;
 // Defines the contract for context compaction strategies.
 public interface ICompaction
 {
-    Task CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken);
+    Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken);
 }
 
 // Keeps context statements untouched when compaction is disabled.
 public class CompactionNone : ICompaction
 {
-    public Task CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken)
+    public Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken)
     {
-        return Task.CompletedTask;
+        return Task.FromResult(0m);
     }
 }
 
@@ -40,7 +40,7 @@ public class CompactionSummarizer : ICompaction
         }
     }
 
-    public async Task CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken)
+    public async Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken)
     {
         int messageSize = GetMessageSize(conversation.Messages);
 
@@ -50,7 +50,8 @@ public class CompactionSummarizer : ICompaction
             string userPrompt = $"{_compactionPrompt}\n\nConversation:\n{messagesBlock}";
             LlmConversation summaryConversation = new LlmConversation(conversation.Model, string.Empty, userPrompt);
             List<IToolProvider> providers = new List<IToolProvider>();
-            string summary = await llmService.RunAsync(summaryConversation, providers, LlmRole.Compaction, cancellationToken);
+            LlmResult result = await llmService.RunAsync(summaryConversation, providers, LlmRole.Compaction, cancellationToken);
+            string summary = result.Content;
 
             await conversation.WriteLogAsync(logDirectory, logPrefix, "pre-compact", cancellationToken);
 
@@ -69,7 +70,11 @@ public class CompactionSummarizer : ICompaction
             }
 
             conversation.Messages.Add(new ChatMessage { Role = "user", Content = $"[Continuation summary]\n{summary}" });
+
+            return result.AccumulatedCost;
         }
+
+        return 0m;
     }
 
     private static string BuildMessagesBlock(List<ChatMessage> messages)

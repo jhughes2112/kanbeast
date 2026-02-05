@@ -35,10 +35,10 @@ public class LlmProxy
         }
     }
 
-    public async Task<string> RunAsync(string systemPrompt, string userPrompt, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
+    public async Task<LlmResult> RunAsync(string systemPrompt, string userPrompt, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
     {
         string resolvedSystemPrompt = systemPrompt;
-        string result = string.Empty;
+        LlmResult result = new LlmResult();
         bool succeeded = false;
 
         if (_currentLlmIndex >= _configs.Count)
@@ -59,7 +59,9 @@ public class LlmProxy
             {
                 try
                 {
-                    result = await service.RunAsync(conversation, providers, role, cancellationToken);
+                    LlmResult iterationResult = await service.RunAsync(conversation, providers, role, cancellationToken);
+                    result.Content = iterationResult.Content;
+                    result.AccumulatedCost += iterationResult.AccumulatedCost;
                     succeeded = true;
                 }
                 catch (Exception ex)

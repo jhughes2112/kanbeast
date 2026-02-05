@@ -94,6 +94,9 @@ public class ChatCompletionResponse
     [JsonPropertyName("choices")]
     public List<ChatChoice> Choices { get; set; } = new();
 
+    [JsonPropertyName("usage")]
+    public UsageInfo? Usage { get; set; }
+
     [JsonPropertyName("error")]
     public ApiError? Error { get; set; }
 }
@@ -111,6 +114,27 @@ public class ApiError
 {
     [JsonPropertyName("message")]
     public string Message { get; set; } = string.Empty;
+}
+
+public class UsageInfo
+{
+    [JsonPropertyName("prompt_tokens")]
+    public int PromptTokens { get; set; }
+
+    [JsonPropertyName("completion_tokens")]
+    public int CompletionTokens { get; set; }
+
+    [JsonPropertyName("total_tokens")]
+    public int TotalTokens { get; set; }
+
+    [JsonPropertyName("cost")]
+    public decimal? Cost { get; set; }
+}
+
+public class LlmResult
+{
+    public string Content { get; set; } = string.Empty;
+    public decimal AccumulatedCost { get; set; }
 }
 
 // Direct OpenAI-compatible chat completion client with tool calling.
@@ -140,13 +164,11 @@ public class LlmService
 			throw new InvalidOperationException("LLM endpoint is required, such as https://api.openai.com/v1");
 		}
 
-		string baseUrl = config.Endpoint.TrimEnd('/');
-
-		_httpClient = new HttpClient { BaseAddress = new Uri(baseUrl) };
+		_httpClient = new HttpClient();
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<string> RunAsync(LlmConversation conversation, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
+	public async Task<LlmResult> RunAsync(LlmConversation conversation, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
 	{
 		List<Tool> tools = new List<Tool>();
 
@@ -166,16 +188,18 @@ public class LlmService
 			}
 		}
 
-        string finalContent = string.Empty;
-        int maxIterations = 50;
-        int iteration = 0;
+		string finalContent = string.Empty;
+		decimal accumulatedCost = 0m;
+		int maxIterations = 50;
+		int iteration = 0;
 
         while (iteration < maxIterations)
         {
             iteration++;
             cancellationToken.ThrowIfCancellationRequested();
 
-            await _compaction.CompactAsync(conversation, this, _logDirectory, _logPrefix, cancellationToken);
+            decimal compactionCost = await _compaction.CompactAsync(conversation, this, _logDirectory, _logPrefix, cancellationToken);
+            accumulatedCost += compactionCost;
 
             ChatCompletionRequest request = new ChatCompletionRequest
             {
@@ -185,13 +209,20 @@ public class LlmService
                 ToolChoice = toolDefs != null ? "auto" : null
             };
 
-            HttpResponseMessage httpResponse = await _httpClient.PostAsJsonAsync(
-                "/chat/completions",
-                request,
-                JsonOptions,
+            string requestJson = JsonSerializer.Serialize(request, JsonOptions);
+            string fullUrl = $"{_config.Endpoint!.TrimEnd('/')}/chat/completions";
+            Console.WriteLine($"LLM Request to {fullUrl}:");
+            Console.WriteLine(requestJson);
+
+            StringContent content = new StringContent(requestJson, System.Text.Encoding.UTF8, "application/json");
+            HttpResponseMessage httpResponse = await _httpClient.PostAsync(
+                fullUrl,
+                content,
                 cancellationToken);
 
             string responseBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
+            Console.WriteLine($"LLM Response ({httpResponse.StatusCode}):");
+            Console.WriteLine(responseBody);
 
             if (!httpResponse.IsSuccessStatusCode)
             {
@@ -217,6 +248,20 @@ public class LlmService
             if (response.Error != null)
             {
                 throw new InvalidOperationException($"API error: {response.Error.Message}");
+            }
+
+            if (response.Usage != null)
+            {
+                if (response.Usage.Cost.HasValue)
+                {
+                    accumulatedCost += response.Usage.Cost.Value;
+                }
+                else
+                {
+                    decimal inputCost = response.Usage.PromptTokens * _config.InputTokenPrice;
+                    decimal outputCost = response.Usage.CompletionTokens * _config.OutputTokenPrice;
+                    accumulatedCost += inputCost + outputCost;
+                }
             }
 
             ChatChoice choice = response.Choices[0];
@@ -263,6 +308,10 @@ public class LlmService
             }
         }
 
-        return finalContent;
+        return new LlmResult
+        {
+            Content = finalContent,
+            AccumulatedCost = accumulatedCost
+        };
     }
 }
