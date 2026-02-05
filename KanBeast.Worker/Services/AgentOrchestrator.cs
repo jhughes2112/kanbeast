@@ -30,6 +30,7 @@ public class AgentOrchestrator : IAgentOrchestrator
     private readonly string _managerPrompt;
     private readonly string _developerPrompt;
     private readonly int _maxIterationsPerSubtask;
+    private readonly int _stuckPromptingEvery;
 
     private OrchestratorPhase _phase;
 
@@ -40,7 +41,7 @@ public class AgentOrchestrator : IAgentOrchestrator
         LlmProxy developerLlmService,
         string managerPrompt,
         string developerPrompt,
-        int maxIterationsPerSubtask)
+        int maxIterationsPerSubtask, int stuckPromptingEvery)
     {
         _logger = logger;
         _apiClient = apiClient;
@@ -49,6 +50,7 @@ public class AgentOrchestrator : IAgentOrchestrator
         _managerPrompt = managerPrompt;
         _developerPrompt = developerPrompt;
         _maxIterationsPerSubtask = maxIterationsPerSubtask;
+        _stuckPromptingEvery = stuckPromptingEvery;
         _phase = OrchestratorPhase.Planning;
     }
 
@@ -67,7 +69,8 @@ public class AgentOrchestrator : IAgentOrchestrator
             Prompt = _developerPrompt,
             WorkDir = workDir,
             MaxIterationsPerSubtask = _maxIterationsPerSubtask,
-            ToolProvidersFactory = () => new List<IToolProvider>
+			StuckPromptingEvery = _stuckPromptingEvery,
+			ToolProvidersFactory = () => new List<IToolProvider>
             {
                 new ShellTools(),
                 new FileTools(),

@@ -14,6 +14,7 @@ public class WorkerConfig
     public required Dictionary<string, string> Prompts { get; set; }
     public required string PromptDirectory { get; set; }
     public int MaxIterationsPerSubtask { get; set; } = 50;
+    public int StuckPromptingEvery { get; set; } = 10;
     public bool JsonLogging { get; set; }
 
     public string GetPrompt(string key)
@@ -61,6 +62,9 @@ public class WorkerSettings
     public int LlmRetryDelaySeconds { get; set; }
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
+    public int MaxIterationsPerSubtask { get; set; } = 50;
+    public int StuckPromptingEvery { get; set; } = 10;
+    public bool JsonLogging { get; set; }
 }
 
 public class CompactionSettings

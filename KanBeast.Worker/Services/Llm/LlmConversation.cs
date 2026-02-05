@@ -62,6 +62,17 @@ public class LlmConversation
     [JsonPropertyName("messages")]
     public List<ChatMessage> Messages { get; }
 
+    public void AddUserMessage(string content)
+    {
+        ChatMessage message = new ChatMessage
+        {
+            Role = "user",
+            Content = content
+        };
+        Messages.Add(message);
+        AppendMessageToLog(message);
+    }
+
     public void AddAssistantMessage(ChatMessage message)
     {
         Messages.Add(message);

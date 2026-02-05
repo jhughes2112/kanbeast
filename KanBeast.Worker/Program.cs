@@ -91,7 +91,7 @@ public class Program
                         await apiClient.SetBranchNameAsync(ticket.Id, branchName);
                     }
 
-                    AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, managerLlmService, developerLlmService, config.GetPrompt("manager-system"), config.GetPrompt("developer"), config.MaxIterationsPerSubtask);
+                    AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, managerLlmService, developerLlmService, config.GetPrompt("manager-system"), config.GetPrompt("developer"), config.MaxIterationsPerSubtask, config.StuckPromptingEvery);
                     logger.LogInformation("Starting agent orchestrator...");
                     await orchestrator.RunAsync(ticket, workDir, CancellationToken.None);
 

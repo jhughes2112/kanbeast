@@ -74,6 +74,18 @@ public class SettingsService : ISettingsService
             currentSettings.DeveloperCompaction = incomingSettings.DeveloperCompaction;
         }
 
+        if (incomingSettings.MaxIterationsPerSubtask > 0)
+        {
+            currentSettings.MaxIterationsPerSubtask = incomingSettings.MaxIterationsPerSubtask;
+        }
+
+        if (incomingSettings.StuckPromptingEvery > 0)
+        {
+            currentSettings.StuckPromptingEvery = incomingSettings.StuckPromptingEvery;
+        }
+
+        currentSettings.JsonLogging = incomingSettings.JsonLogging;
+
         if (incomingSettings.SystemPrompts.Count > 0)
         {
             currentSettings.SystemPrompts = UpdatePromptFiles(incomingSettings.SystemPrompts);
@@ -266,6 +278,9 @@ public class SettingsService : ISettingsService
             ManagerCompaction = fileSettings.ManagerCompaction,
             DeveloperCompaction = fileSettings.DeveloperCompaction,
             WebSearch = fileSettings.WebSearch,
+            MaxIterationsPerSubtask = fileSettings.MaxIterationsPerSubtask,
+            StuckPromptingEvery = fileSettings.StuckPromptingEvery,
+            JsonLogging = fileSettings.JsonLogging,
             SystemPrompts = LoadPromptTemplates()
         };
 
@@ -282,7 +297,10 @@ public class SettingsService : ISettingsService
             LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds,
             ManagerCompaction = settings.ManagerCompaction,
             DeveloperCompaction = settings.DeveloperCompaction,
-            WebSearch = settings.WebSearch
+            WebSearch = settings.WebSearch,
+            MaxIterationsPerSubtask = settings.MaxIterationsPerSubtask,
+            StuckPromptingEvery = settings.StuckPromptingEvery,
+            JsonLogging = settings.JsonLogging
         };
 
         return fileSettings;

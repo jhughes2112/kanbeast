@@ -444,19 +444,45 @@ public class FileTools : IToolProvider
             }
 
             StringBuilder result = new StringBuilder();
+            result.AppendLine($"Contents of {directoryPath}:");
+
+            List<string> directories = new List<string>();
+            List<(string name, long size)> files = new List<(string, long)>();
+
             foreach (string entry in Directory.EnumerateFileSystemEntries(fullPath, "*", SearchOption.TopDirectoryOnly))
             {
                 string? name = Path.GetFileName(entry);
-                if (!string.IsNullOrEmpty(name))
+                if (string.IsNullOrEmpty(name))
                 {
-                    result.AppendLine(name);
+                    continue;
+                }
+
+                if (Directory.Exists(entry))
+                {
+                    directories.Add(name);
+                }
+                else if (File.Exists(entry))
+                {
+                    FileInfo info = new FileInfo(entry);
+                    files.Add((name, info.Length));
                 }
             }
 
-            string output = result.ToString().TrimEnd();
-            if (string.IsNullOrEmpty(output))
+            foreach (string dir in directories.OrderBy(d => d))
             {
-                return Task.FromResult("Directory is empty");
+                result.AppendLine($"[DIR]  {dir}");
+            }
+
+            foreach ((string name, long size) in files.OrderBy(f => f.name))
+            {
+                string sizeStr = FormatFileSize(size);
+                result.AppendLine($"[FILE] {sizeStr,8}  {name}");
+            }
+
+            string output = result.ToString().TrimEnd();
+            if (directories.Count == 0 && files.Count == 0)
+            {
+                return Task.FromResult($"Contents of {directoryPath}:\nDirectory is empty");
             }
 
             return Task.FromResult(output);
@@ -465,6 +491,21 @@ public class FileTools : IToolProvider
         {
             return Task.FromResult($"Error: Failed to list directory: {ex.Message}");
         }
+    }
+
+    private static string FormatFileSize(long bytes)
+    {
+        string[] suffixes = { "B", "KB", "MB", "GB" };
+        int suffixIndex = 0;
+        double size = bytes;
+
+        while (size >= 1024 && suffixIndex < suffixes.Length - 1)
+        {
+            size /= 1024;
+            suffixIndex++;
+        }
+
+        return $"{size:0.#}{suffixes[suffixIndex]}";
     }
 
     [Description("Search for files by name pattern. Returns matching paths.")]

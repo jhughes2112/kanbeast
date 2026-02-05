@@ -12,6 +12,7 @@ public class DeveloperConfig
     public required string Prompt { get; init; }
     public required string WorkDir { get; init; }
     public required int MaxIterationsPerSubtask { get; init; }
+    public required int StuckPromptingEvery { get; init; }
     public required Func<List<IToolProvider>> ToolProvidersFactory { get; init; }
 }
 
@@ -391,7 +392,7 @@ public class TicketTools : IToolProvider
 
     private async Task<string> RunDeveloperAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string goal, string developerPrompt)
     {
-        string userPrompt = $"""
+        string initialPrompt = $"""
             Complete this subtask:
 
             Task: {task.Name}
@@ -407,14 +408,17 @@ public class TicketTools : IToolProvider
 
         List<IToolProvider> toolProviders = _developerConfig!.ToolProvidersFactory();
         int iterations = 0;
+        int stuckPromptingEvery = _developerConfig.StuckPromptingEvery > 0 ? _developerConfig.StuckPromptingEvery : 10;
 
         _state.Clear();
+
+        LlmConversation conversation = _developerConfig.LlmProxy.CreateConversation(developerPrompt, initialPrompt);
 
         while (!_state.DeveloperComplete && iterations < _developerConfig.MaxIterationsPerSubtask)
         {
             iterations++;
 
-            LlmResult result = await _developerConfig.LlmProxy.RunAsync(developerPrompt, userPrompt, toolProviders, LlmRole.Developer, CancellationToken.None);
+            LlmResult result = await _developerConfig.LlmProxy.ContinueAsync(conversation, toolProviders, LlmRole.Developer, CancellationToken.None);
             _logger?.LogDebug("Developer response ({Iteration}): {Response}", iterations, result.Content.Length > 200 ? result.Content.Substring(0, 200) : result.Content);
 
             if (result.AccumulatedCost > 0)
@@ -424,9 +428,31 @@ public class TicketTools : IToolProvider
 
             if (!_state.DeveloperComplete)
             {
-                userPrompt = "Continue working. When done or blocked, call mark_subtask_complete.";
+                if (iterations % stuckPromptingEvery == 0)
+                {
+                    _logger?.LogInformation("Developer iteration {Iteration}: prompting for stuck check", iterations);
+                    await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Iteration {iterations} - checking progress");
+
+                    conversation.AddUserMessage($"""
+                        You have been working for {iterations} iterations without completing.
+
+                        Take a moment to assess:
+                        - Are you making progress toward the goal?
+                        - Are you stuck in a loop trying the same approaches repeatedly?
+                        - Have build or test errors remained unchanged despite your fixes?
+
+                        If you are stuck, call mark_subtask_complete with status "blocked" and explain what you've tried.
+                        If you are making progress, continue working and call mark_subtask_complete when done.
+                        """);
+                }
+                else
+                {
+                    conversation.AddUserMessage("Continue working. Call mark_subtask_complete when done or blocked.");
+                }
             }
         }
+
+        await _developerConfig.LlmProxy.FinalizeConversationAsync(conversation, CancellationToken.None);
 
         return _state.DeveloperMessage;
     }

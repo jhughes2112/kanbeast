@@ -42,6 +42,9 @@ public class SettingsFile
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();
+    public int MaxIterationsPerSubtask { get; set; } = 50;
+    public int StuckPromptingEvery { get; set; } = 10;
+    public bool JsonLogging { get; set; }
 }
 
 // Configures compaction behavior for agent context handling.
@@ -70,4 +73,7 @@ public class Settings
     public CompactionSettings DeveloperCompaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();
     public List<PromptTemplate> SystemPrompts { get; set; } = new();
+    public int MaxIterationsPerSubtask { get; set; } = 50;
+    public int StuckPromptingEvery { get; set; } = 10;
+    public bool JsonLogging { get; set; }
 }

@@ -55,6 +55,23 @@ You have wide latitude to get the job done. If the straightforward approach does
 - Consult skill files for project-specific guidance
 
 Only mark as "blocked" if you've genuinely exhausted your options and need human help.
+
+RECOGNIZE WHEN YOU'RE STUCK:
+You may be stuck in a loop if:
+- You've edited the same file 3+ times with the same error persisting
+- You've run the same command 3+ times with identical failures
+- Build/test errors are unchanged after multiple fix attempts
+- You're alternating between two approaches without progress
+- You haven't explored new files or approaches in several iterations
+
+If you recognize this pattern:
+1. STOP and explicitly acknowledge you're stuck
+2. Try a COMPLETELY DIFFERENT approach you haven't attempted
+3. Read a different part of the codebase for insights
+4. Check skills folder for patterns you may have missed
+5. If still stuck after trying genuinely new approaches, mark as "blocked"
+
+DO NOT repeat the same failed approach hoping for different results.
 </problem_solving>
 
 <coding_guidelines>

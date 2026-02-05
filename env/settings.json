@@ -32,5 +32,8 @@
     "provider": "duckduckgo",
     "googleApiKey": null,
     "googleSearchEngineId": null
-  }
+  },
+  "maxIterationsPerSubtask": 50,
+  "stuckPromptingEvery": 10,
+  "jsonLogging": false
 }
