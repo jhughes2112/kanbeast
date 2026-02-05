@@ -13,10 +13,10 @@ RUN dotnet publish "/KanBeast.Server/KanBeast.Server.csproj" -c Release -o /app/
 RUN dotnet publish "/KanBeast.Worker/KanBeast.Worker.csproj" -c Release -o /app/publish/worker /p:UseAppHost=false
 
 FROM runtime AS final
-WORKDIR /app
-COPY --from=build /app/publish/server ./server
-COPY --from=build /app/publish/worker ./worker
+COPY --from=build /app/publish/server /app/server
+COPY --from=build /app/publish/worker /app/worker
 COPY --from=build /app/publish/server/appsettings.json ./appsettings.json
-COPY env /app/env
-ENV ASPNETCORE_CONTENTROOT=/app/env
+COPY env /workspace
+ENV ASPNETCORE_CONTENTROOT=/workspace
+WORKDIR /workspace
 ENTRYPOINT ["dotnet", "/app/server/KanBeast.Server.dll"]
