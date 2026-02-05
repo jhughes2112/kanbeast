@@ -164,6 +164,7 @@ nav {
     flex-direction: column;
     transition: background 0.2s ease;
     border: 1px solid var(--gray-200);
+    min-width: 0;
 }
 
 .column.drag-over {
@@ -226,6 +227,8 @@ nav {
     transition: all 0.2s ease;
     box-shadow: var(--shadow-sm);
     position: relative;
+    min-width: 0;
+    max-width: 100%;
 }
 
 .ticket:hover {
@@ -276,6 +279,8 @@ nav {
     font-size: 0.9375rem;
     color: var(--gray-800);
     flex: 1;
+    min-width: 0;
+    word-break: break-word;
 }
 
 .ticket-id {
@@ -319,19 +324,6 @@ nav {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.task-counter {
-    background: var(--primary);
-    color: white;
-    font-size: 0.625rem;
-    padding: 0.125rem 0.375rem;
-    border-radius: var(--radius);
-    font-weight: 600;
-    white-space: nowrap;
 }
 
 .ticket-current-subtask {
@@ -343,19 +335,6 @@ nav {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.subtask-counter {
-    background: var(--gray-300);
-    color: var(--gray-700);
-    font-size: 0.625rem;
-    padding: 0.125rem 0.375rem;
-    border-radius: var(--radius);
-    font-weight: 600;
-    white-space: nowrap;
 }
 
 .ticket-activity-log {
@@ -369,7 +348,7 @@ nav {
     gap: 0.5rem;
     align-items: flex-start;
     line-height: 1.3;
-    overflow: hidden;
+    min-width: 0;
 }
 
 .ticket-activity-log .activity-timestamp {
@@ -381,10 +360,11 @@ nav {
 
 .ticket-activity-log .activity-message {
     color: var(--gray-500);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    overflow-wrap: break-word;
+    word-break: break-word;
     font-size: 0.6875rem;
+    flex: 1;
+    min-width: 0;
 }
 
 .ticket-footer {
@@ -410,35 +390,42 @@ nav {
     gap: 0.25rem;
 }
 
-.ticket-progress {
+.pip-progress-bar {
     display: flex;
-    align-items: center;
-    gap: 0.5rem;
-}
-
-.progress-bar {
-    width: 60px;
-    height: 6px;
-    background: var(--gray-200);
-    border-radius: 999px;
+    height: 2px;
+    width: 100%;
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    border-radius: 0 0 var(--radius) var(--radius);
     overflow: hidden;
 }
 
-.progress-bar-fill {
+.pip {
+    flex: 1;
+    min-width: 1px;
     height: 100%;
-    background: var(--primary);
-    border-radius: 999px;
-    transition: width 0.3s ease;
 }
 
-.progress-bar-fill.complete {
+.pip-incomplete {
+    background: var(--gray-400);
+}
+
+.pip-inprogress {
+    background: var(--primary);
+}
+
+.pip-review {
+    background: var(--warning);
+}
+
+.pip-complete {
     background: var(--success);
 }
 
-.progress-text {
-    font-size: 0.6875rem;
-    color: var(--gray-500);
-    font-weight: 500;
+.pip-rejected {
+    background: var(--danger);
 }
 
 .worker-badge {
@@ -592,7 +579,13 @@ nav {
     justify-content: space-between;
 }
 
-.ticket-detail-header h2 {
+.ticket-detail-right {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.branch-name-spacer {
     flex: 1;
 }
 
@@ -751,6 +744,52 @@ nav {
     color: var(--gray-700);
 }
 
+.task-name-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+}
+
+.task-description-full {
+    margin-top: 0.5rem;
+    padding: 0.75rem;
+    background: var(--gray-50);
+    border-left: 2px solid var(--primary);
+    border-radius: var(--radius);
+    color: var(--gray-600);
+    font-size: 0.8125rem;
+    line-height: 1.5;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.expand-indicator {
+    color: var(--primary);
+    font-size: 1rem;
+    cursor: pointer;
+    padding: 0.25rem;
+    transition: transform 0.2s ease;
+    flex-shrink: 0;
+}
+
+.task-item[data-has-description="true"],
+.subtask-item[data-has-description="true"] {
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+
+.task-item[data-has-description="true"]:hover {
+    background: var(--gray-200);
+}
+
+.subtask-item[data-has-description="true"]:hover {
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: var(--radius);
+    margin: 0 -0.25rem;
+    padding: 0.25rem 0.25rem;
+}
+
 .task-item.completed .task-name {
     text-decoration: line-through;
     color: var(--gray-400);
@@ -766,8 +805,32 @@ nav {
     color: var(--gray-500);
     padding: 0.25rem 0;
     display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.subtask-name-row {
+    display: flex;
     align-items: center;
     gap: 0.5rem;
+}
+
+.subtask-name {
+    flex: 1;
+}
+
+.subtask-description-full {
+    margin-left: 1.75rem;
+    margin-top: 0.25rem;
+    padding: 0.5rem;
+    background: rgba(14, 165, 233, 0.05);
+    border-left: 2px solid var(--primary);
+    border-radius: var(--radius);
+    color: var(--gray-600);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .subtask-item.completed {

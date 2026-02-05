@@ -238,35 +238,41 @@ function createTicketElement(ticket) {
 
     // Statuses: Incomplete=0, InProgress=1, AwaitingReview=2, Complete=3, Rejected=4
     const subtasks = (ticket.tasks || []).flatMap(task => task.subtasks || []);
-    const completedCount = subtasks.filter(s => s.status === 'Complete' || s.status === 3).length;
-    const totalCount = subtasks.length;
-    const progressPercent = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
+
+    // Build pip progress bar HTML (each subtask gets a colored pip)
+    let pipProgressHtml = '';
+    if (subtasks.length > 0) {
+        const pips = subtasks.map(st => {
+            let pipClass = 'pip-incomplete';
+            if (st.status === 'Complete' || st.status === 3) {
+                pipClass = 'pip-complete';
+            } else if (st.status === 'InProgress' || st.status === 1) {
+                pipClass = 'pip-inprogress';
+            } else if (st.status === 'AwaitingReview' || st.status === 2) {
+                pipClass = 'pip-review';
+            } else if (st.status === 'Rejected' || st.status === 4) {
+                pipClass = 'pip-rejected';
+            }
+            return `<div class="pip ${pipClass}"></div>`;
+        }).join('');
+        pipProgressHtml = `<div class="pip-progress-bar">${pips}</div>`;
+    }
 
     // Find current task and current subtask (first task/subtask with a non-complete status)
     let currentTaskName = '';
     let currentSubtaskName = '';
-    let currentTaskIndex = 0;
-    let currentSubtaskIndex = 0;
-    let totalTasks = (ticket.tasks || []).length;
 
     for (let taskIdx = 0; taskIdx < (ticket.tasks || []).length; taskIdx++) {
         const task = ticket.tasks[taskIdx];
-        const incompleteSubtask = (task.subtasks || []).find((s, subIdx) => {
-            if (s.status !== 'Complete' && s.status !== 3) {
-                currentSubtaskIndex = subIdx + 1;
-                return true;
-            }
-            return false;
+        const incompleteSubtask = (task.subtasks || []).find(s => {
+            return s.status !== 'Complete' && s.status !== 3;
         });
         if (incompleteSubtask) {
             currentTaskName = task.name || '';
             currentSubtaskName = incompleteSubtask.name || '';
-            currentTaskIndex = taskIdx + 1;
             break;
         }
     }
-
-    const totalSubtasksInCurrentTask = currentTaskIndex > 0 ? (ticket.tasks[currentTaskIndex - 1].subtasks || []).length : 0;
 
     // Get last activity log entry and parse it
     let lastLogHtml = '';
@@ -307,24 +313,16 @@ function createTicketElement(ticket) {
             <div class="ticket-title">${escapeHtml(ticket.title)}</div>
             <div class="ticket-id">#${ticket.id}</div>
         </div>
-        ${currentTaskName ? `<div class="ticket-current-task"><span class="task-counter">${currentTaskIndex}/${totalTasks}</span> ${escapeHtml(currentTaskName)}</div>` : ''}
-        ${currentSubtaskName ? `<div class="ticket-current-subtask"><span class="subtask-counter">${currentSubtaskIndex}/${totalSubtasksInCurrentTask}</span> ${escapeHtml(currentSubtaskName)}</div>` : ''}
+        ${currentTaskName ? `<div class="ticket-current-task">${escapeHtml(currentTaskName)}</div>` : ''}
+        ${currentSubtaskName ? `<div class="ticket-current-subtask">${escapeHtml(currentSubtaskName)}</div>` : ''}
         ${lastLogHtml}
         <div class="ticket-footer">
             <div class="ticket-meta">
                 <span>📅 ${formatDate(ticket.createdAt)}</span>
                 ${ticket.containerName && status === 'Active' ? `<span class="worker-badge">${escapeHtml(ticket.containerName)}</span>` : ''}
             </div>
-            ${totalCount > 0 ? `
-                <div class="ticket-progress">
-                    <div class="progress-bar">
-                        <div class="progress-bar-fill${progressPercent === 100 ? ' complete' : ''}" 
-                             style="width: ${progressPercent}%"></div>
-                    </div>
-                    <span class="progress-text">${completedCount}/${totalCount}</span>
-                </div>
-            ` : ''}
         </div>
+        ${pipProgressHtml}
     `;
 
     ticketEl.addEventListener('click', (e) => {
@@ -445,7 +443,7 @@ async function showTicketDetails(ticketId) {
     if (ticket.tasks && ticket.tasks.length > 0) {
         tasksHtml = '<ul class="task-list">';
 
-        ticket.tasks.forEach(task => {
+        ticket.tasks.forEach((task, taskIndex) => {
             const subtasks = task.subtasks || [];
             const completedSubtasks = subtasks.filter(s => s.status === 'Complete' || s.status === 3).length;
             const inProgressSubtasks = subtasks.filter(s => 
@@ -462,14 +460,21 @@ async function showTicketDetails(ticketId) {
                 taskIcon = '<span class="task-icon task-icon-inprogress"><span class="spinner"></span></span>';
             }
 
+            const taskDescription = task.description || '';
+            const hasDescription = taskDescription && taskDescription !== task.name;
+
             tasksHtml += `
-                <li class="task-item${isComplete ? ' completed' : ''}">
+                <li class="task-item${isComplete ? ' completed' : ''}" data-task-index="${taskIndex}" data-has-description="${hasDescription}">
                     ${taskIcon}
                     <div class="task-content">
-                        <div class="task-name">${escapeHtml(task.name || task.description || 'Task')}</div>
+                        <div class="task-name-row">
+                            <div class="task-name">${escapeHtml(task.name || task.description || 'Task')}</div>
+                            ${hasDescription ? '<span class="expand-indicator" title="Click to see details">ⓘ</span>' : ''}
+                        </div>
+                        ${hasDescription ? `<div class="task-description-full" style="display: none;">${escapeHtml(taskDescription)}</div>` : ''}
                         ${subtasks.length > 0 ? `
                             <div class="subtask-list">
-                                ${subtasks.map(st => {
+                                ${subtasks.map((st, stIndex) => {
                                     const stStatus = st.status;
                                     let subtaskIcon = '<span class="subtask-icon subtask-icon-incomplete">☐</span>';
                                     let subtaskClass = '';
@@ -485,9 +490,17 @@ async function showTicketDetails(ticketId) {
                                         subtaskIcon = '<span class="subtask-icon subtask-icon-rejected">✗</span>';
                                     }
 
+                                    const stDescription = st.description || '';
+                                    const stHasDescription = stDescription && stDescription !== st.name;
+
                                     return `
-                                        <div class="subtask-item${subtaskClass}">
-                                            ${subtaskIcon} ${escapeHtml(st.name || '')}
+                                        <div class="subtask-item${subtaskClass}" data-subtask-index="${stIndex}" data-has-description="${stHasDescription}">
+                                            <div class="subtask-name-row">
+                                                ${subtaskIcon}
+                                                <span class="subtask-name">${escapeHtml(st.name || '')}</span>
+                                                ${stHasDescription ? '<span class="expand-indicator" title="Click to see details">ⓘ</span>' : ''}
+                                            </div>
+                                            ${stHasDescription ? `<div class="subtask-description-full" style="display: none;">${escapeHtml(stDescription)}</div>` : ''}
                                         </div>
                                     `;
                                 }).join('')}
@@ -577,10 +590,12 @@ async function showTicketDetails(ticketId) {
 
     detailDiv.innerHTML = `
         <div class="ticket-detail-header">
-            ${ticket.llmCost > 0 ? `<span class="cost-badge-detail">$${ticket.llmCost.toFixed(4)}</span>` : ''}
-            ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : ''}
-            <span class="ticket-detail-id">#${ticket.id}</span>
             <span class="status-badge ${status.toLowerCase()}">${status}</span>
+            ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : '<span class="branch-name-spacer"></span>'}
+            <div class="ticket-detail-right">
+                <span class="ticket-detail-id">#${ticket.id}</span>
+                ${ticket.llmCost > 0 ? `<span class="cost-badge-detail">$${ticket.llmCost.toFixed(4)}</span>` : ''}
+            </div>
         </div>
 
         <div class="detail-section">
@@ -599,6 +614,39 @@ async function showTicketDetails(ticketId) {
     `;
 
     modal.classList.add('active');
+
+    // Add click handlers for expandable tasks and subtasks
+    detailDiv.querySelectorAll('.task-item[data-has-description="true"]').forEach(taskItem => {
+        taskItem.addEventListener('click', (e) => {
+            if (e.target.closest('.subtask-item')) {
+                return;
+            }
+            const descDiv = taskItem.querySelector('.task-description-full');
+            if (descDiv) {
+                const isVisible = descDiv.style.display !== 'none';
+                descDiv.style.display = isVisible ? 'none' : 'block';
+                const indicator = taskItem.querySelector('.expand-indicator');
+                if (indicator) {
+                    indicator.textContent = isVisible ? 'ⓘ' : '▼';
+                }
+            }
+        });
+    });
+
+    detailDiv.querySelectorAll('.subtask-item[data-has-description="true"]').forEach(subtaskItem => {
+        subtaskItem.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const descDiv = subtaskItem.querySelector('.subtask-description-full');
+            if (descDiv) {
+                const isVisible = descDiv.style.display !== 'none';
+                descDiv.style.display = isVisible ? 'none' : 'block';
+                const indicator = subtaskItem.querySelector('.expand-indicator');
+                if (indicator) {
+                    indicator.textContent = isVisible ? 'ⓘ' : '▼';
+                }
+            }
+        });
+    });
 
     // Subscribe to updates for this ticket
     if (connection && connection.state === signalR.HubConnectionState.Connected) {
