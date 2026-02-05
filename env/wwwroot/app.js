@@ -12,11 +12,11 @@ let activityLogExpanded = false;
 
 // Allowed status transitions
 // Backlog -> Active (start work)
-// Active/Testing/Done -> Backlog (cancel/reset)
+// Active/Failed/Done -> Backlog (cancel/reset)
 const ALLOWED_TRANSITIONS = {
     'Backlog': ['Active'],
     'Active': ['Backlog'],
-    'Testing': ['Backlog'],
+    'Failed': ['Backlog'],
     'Done': ['Backlog']
 };
 
@@ -172,14 +172,14 @@ function renderAllTickets() {
     const containers = {
         'Backlog': document.getElementById('backlog-container'),
         'Active': document.getElementById('active-container'),
-        'Testing': document.getElementById('testing-container'),
+        'Failed': document.getElementById('failed-container'),
         'Done': document.getElementById('done-container')
     };
 
     const counts = {
         'Backlog': 0,
         'Active': 0,
-        'Testing': 0,
+        'Failed': 0,
         'Done': 0
     };
 
@@ -245,16 +245,28 @@ function createTicketElement(ticket) {
     // Find current task and current subtask (first task/subtask with a non-complete status)
     let currentTaskName = '';
     let currentSubtaskName = '';
-    for (const task of (ticket.tasks || [])) {
-        const incompleteSubtask = (task.subtasks || []).find(s => 
-            s.status !== 'Complete' && s.status !== 3
-        );
+    let currentTaskIndex = 0;
+    let currentSubtaskIndex = 0;
+    let totalTasks = (ticket.tasks || []).length;
+
+    for (let taskIdx = 0; taskIdx < (ticket.tasks || []).length; taskIdx++) {
+        const task = ticket.tasks[taskIdx];
+        const incompleteSubtask = (task.subtasks || []).find((s, subIdx) => {
+            if (s.status !== 'Complete' && s.status !== 3) {
+                currentSubtaskIndex = subIdx + 1;
+                return true;
+            }
+            return false;
+        });
         if (incompleteSubtask) {
             currentTaskName = task.name || '';
             currentSubtaskName = incompleteSubtask.name || '';
+            currentTaskIndex = taskIdx + 1;
             break;
         }
     }
+
+    const totalSubtasksInCurrentTask = currentTaskIndex > 0 ? (ticket.tasks[currentTaskIndex - 1].subtasks || []).length : 0;
 
     // Get last activity log entry and parse it
     let lastLogHtml = '';
@@ -291,17 +303,17 @@ function createTicketElement(ticket) {
     ticketEl.innerHTML = `
         <div class="ticket-status-indicator"></div>
         <div class="ticket-header">
+            ${ticket.llmCost > 0 ? `<span class="cost-badge-inline">$${ticket.llmCost.toFixed(4)}</span>` : ''}
             <div class="ticket-title">${escapeHtml(ticket.title)}</div>
             <div class="ticket-id">#${ticket.id}</div>
         </div>
-        ${currentTaskName ? `<div class="ticket-current-task">📌 ${escapeHtml(currentTaskName)}</div>` : ''}
-        ${currentSubtaskName ? `<div class="ticket-current-subtask">└─ ${escapeHtml(currentSubtaskName)}</div>` : ''}
+        ${currentTaskName ? `<div class="ticket-current-task"><span class="task-counter">${currentTaskIndex}/${totalTasks}</span> ${escapeHtml(currentTaskName)}</div>` : ''}
+        ${currentSubtaskName ? `<div class="ticket-current-subtask"><span class="subtask-counter">${currentSubtaskIndex}/${totalSubtasksInCurrentTask}</span> ${escapeHtml(currentSubtaskName)}</div>` : ''}
         ${lastLogHtml}
         <div class="ticket-footer">
             <div class="ticket-meta">
                 <span>📅 ${formatDate(ticket.createdAt)}</span>
-                ${ticket.llmCost > 0 ? `<span class="cost-badge">💰 $${ticket.llmCost.toFixed(4)}</span>` : ''}
-                ${ticket.workerId ? '<span class="worker-badge">🤖 AI Working</span>' : ''}
+                ${ticket.containerName && status === 'Active' ? `<span class="worker-badge">${escapeHtml(ticket.containerName)}</span>` : ''}
             </div>
             ${totalCount > 0 ? `
                 <div class="ticket-progress">
@@ -328,7 +340,7 @@ function getStatusIcon(status) {
     const icons = {
         'Backlog': '📋',
         'Active': '🚀',
-        'Testing': '🧪',
+        'Failed': '❌',
         'Done': '✅'
     };
 
@@ -441,7 +453,7 @@ async function showTicketDetails(ticketId) {
                 s.status === 'AwaitingReview' || s.status === 2
             ).length;
             const isComplete = subtasks.length > 0 && completedSubtasks === subtasks.length;
-            const isInProgress = inProgressSubtasks > 0;
+            const isInProgress = inProgressSubtasks > 0 && status === 'Active';
 
             let taskIcon = '<span class="task-icon task-icon-incomplete">☐</span>';
             if (isComplete) {
@@ -465,7 +477,7 @@ async function showTicketDetails(ticketId) {
                                     if (stStatus === 'Complete' || stStatus === 3) {
                                         subtaskIcon = '<span class="subtask-icon subtask-icon-complete">✓</span>';
                                         subtaskClass = ' completed';
-                                    } else if (stStatus === 'InProgress' || stStatus === 1) {
+                                    } else if ((stStatus === 'InProgress' || stStatus === 1) && status === 'Active') {
                                         subtaskIcon = '<span class="subtask-icon subtask-icon-inprogress"><span class="spinner-sm"></span></span>';
                                     } else if (stStatus === 'AwaitingReview' || stStatus === 2) {
                                         subtaskIcon = '<span class="subtask-icon subtask-icon-review">👁</span>';
@@ -565,23 +577,21 @@ async function showTicketDetails(ticketId) {
 
     detailDiv.innerHTML = `
         <div class="ticket-detail-header">
+            ${ticket.llmCost > 0 ? `<span class="cost-badge-detail">$${ticket.llmCost.toFixed(4)}</span>` : ''}
+            ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : ''}
             <span class="ticket-detail-id">#${ticket.id}</span>
             <span class="status-badge ${status.toLowerCase()}">${status}</span>
-            ${ticket.branchName ? `<span style="color: var(--gray-500); font-size: 0.875rem;">🌿 ${escapeHtml(ticket.branchName)}</span>` : ''}
         </div>
 
         <div class="detail-section">
-            <h3>Description</h3>
             <p>${escapeHtml(ticket.description || 'No description provided.')}</p>
         </div>
 
         <div class="detail-section">
-            <h3>Tasks</h3>
             ${tasksHtml}
         </div>
 
         <div class="detail-section">
-            <h3>Activity Log</h3>
             ${activityHtml}
         </div>
 

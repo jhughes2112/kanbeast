@@ -227,11 +227,11 @@ public class TicketTools : IToolProvider
         return result;
     }
 
-    [Description("Create a subtask for an existing task.")]
+    [Description("Create a subtask for an existing task. Include clear acceptance criteria in the description so the developer knows exactly what 'done' looks like.")]
     public async Task<string> CreateSubtaskAsync(
         [Description("Name of the task to add the subtask to")] string taskName,
-        [Description("Name of the subtask")] string subtaskName,
-        [Description("Description of the subtask")] string subtaskDescription)
+        [Description("Short name for the subtask")] string subtaskName,
+        [Description("Detailed description including: what to do, acceptance criteria (how to verify it's done), and any constraints or notes")] string subtaskDescription)
     {
         string result = string.Empty;
 
@@ -391,45 +391,6 @@ public class TicketTools : IToolProvider
 
     private async Task<string> RunDeveloperAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string goal, string developerPrompt)
     {
-        string acceptanceCriteria = subtask.AcceptanceCriteria.Count > 0
-            ? $"""
-
-              Acceptance Criteria:
-              {string.Join("\n", subtask.AcceptanceCriteria.Select(c => $"  - {c}"))}
-              """
-            : string.Empty;
-
-        string constraints = subtask.Constraints.Count > 0
-            ? $"""
-
-              Constraints:
-              {string.Join("\n", subtask.Constraints.Select(c => $"  - {c}"))}
-              """
-            : string.Empty;
-
-        string filesToInspect = subtask.FilesToInspect.Count > 0
-            ? $"""
-
-              Files to inspect:
-              {string.Join("\n", subtask.FilesToInspect.Select(f => $"  - {f}"))}
-              """
-            : string.Empty;
-
-        string filesToModify = subtask.FilesToModify.Count > 0
-            ? $"""
-
-              Files to modify:
-              {string.Join("\n", subtask.FilesToModify.Select(f => $"  - {f}"))}
-              """
-            : string.Empty;
-
-        string rejectionNotes = !string.IsNullOrEmpty(subtask.LastRejectionNotes)
-            ? $"""
-
-              Previous rejection feedback: {subtask.LastRejectionNotes}
-              """
-            : string.Empty;
-
         string userPrompt = $"""
             Complete this subtask:
 
@@ -439,7 +400,7 @@ public class TicketTools : IToolProvider
             Subtask: {subtask.Name}
             Subtask Description: {subtask.Description}
 
-            Goal: {goal}{acceptanceCriteria}{constraints}{filesToInspect}{filesToModify}{rejectionNotes}
+            Goal: {goal}
 
             Call mark_subtask_complete when done or blocked.
             """;
@@ -590,7 +551,7 @@ public class TicketTools : IToolProvider
         try
         {
             using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.UpdateSubtaskRejectionAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, reason);
+            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.Rejected);
 
             if (updated == null)
             {
@@ -661,7 +622,7 @@ public class TicketTools : IToolProvider
         try
         {
             using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Blocked");
+            TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Failed");
 
             if (updated == null)
             {

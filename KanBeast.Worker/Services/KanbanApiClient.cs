@@ -12,7 +12,6 @@ public interface IKanbanApiClient
     Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task);
     Task<TicketDto?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask);
     Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
-    Task<TicketDto?> UpdateSubtaskRejectionAsync(string ticketId, string taskId, string subtaskId, string reason);
     Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId);
     Task AddActivityLogAsync(string ticketId, string message);
     Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName);
@@ -101,21 +100,6 @@ public class KanbanApiClient : IKanbanApiClient
         string encodedTaskId = Uri.EscapeDataString(taskId);
         string encodedSubtaskId = Uri.EscapeDataString(subtaskId);
         HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks/{encodedSubtaskId}", new { status }, _jsonOptions);
-
-        if (response.IsSuccessStatusCode)
-        {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
-        }
-
-        return ticket;
-    }
-
-    public async Task<TicketDto?> UpdateSubtaskRejectionAsync(string ticketId, string taskId, string subtaskId, string reason)
-    {
-        TicketDto? ticket = null;
-        string encodedTaskId = Uri.EscapeDataString(taskId);
-        string encodedSubtaskId = Uri.EscapeDataString(subtaskId);
-        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks/{encodedSubtaskId}/rejection", new { reason }, _jsonOptions);
 
         if (response.IsSuccessStatusCode)
         {

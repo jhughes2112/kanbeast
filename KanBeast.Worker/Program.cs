@@ -4,9 +4,9 @@ using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
 using Microsoft.Extensions.Logging;
 
-return await Program.Main(args);
+namespace KanBeast.Worker;
 
-public partial class Program
+public class Program
 {
     public static async Task<int> Main(string[] args)
     {

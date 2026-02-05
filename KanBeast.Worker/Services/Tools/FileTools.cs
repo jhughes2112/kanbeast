@@ -21,8 +21,17 @@ public class FileTools : IToolProvider
 
     private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
     {
-        List<Tool> sharedTools = new List<Tool>();
-        ToolHelper.AddTools(sharedTools, this,
+        List<Tool> readOnlyTools = new List<Tool>();
+        ToolHelper.AddTools(readOnlyTools, this,
+            nameof(ReadFileAsync),
+            nameof(ReadFileLinesAsync),
+            nameof(SearchInFileAsync),
+            nameof(ListFilesAsync),
+            nameof(SearchFilesAsync),
+            nameof(FileExistsAsync));
+
+        List<Tool> developerTools = new List<Tool>();
+        ToolHelper.AddTools(developerTools, this,
             nameof(ReadFileAsync),
             nameof(ReadFileLinesAsync),
             nameof(SearchInFileAsync),
@@ -36,8 +45,8 @@ public class FileTools : IToolProvider
 
         Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
-            [LlmRole.Manager] = sharedTools,
-            [LlmRole.Developer] = sharedTools,
+            [LlmRole.Manager] = readOnlyTools,
+            [LlmRole.Developer] = developerTools,
             [LlmRole.Compaction] = new List<Tool>()
         };
 

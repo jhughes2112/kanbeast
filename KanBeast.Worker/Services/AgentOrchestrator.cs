@@ -7,12 +7,11 @@ namespace KanBeast.Worker.Services;
 // Phases the orchestrator transitions through when processing a ticket.
 public enum OrchestratorPhase
 {
-    Breakdown,
-    Assign,
-    Verify,
-    Finalize,
-    Complete,
-    Blocked
+	Planning,   // Manager converts a ticket into tasks and subtasks. Always includes a final task for git completion.
+	Implement,  // Manager assigns a subtask to the developer, who implements it and tells the manager what they did.
+	Verify,     // Manager verifies the subtask is complete by checking out the code, running tests, and inspecting changes. Manager approves or rejects with feedback.
+	Done,
+	Blocked
 }
 
 // Orchestrates the manager and developer LLMs to complete a ticket.
@@ -21,7 +20,7 @@ public interface IAgentOrchestrator
     Task RunAsync(TicketDto ticket, string workDir, CancellationToken cancellationToken);
 }
 
-// Coordinates LLM-driven phases: breakdown, assign, verify, finalize.
+// Coordinates LLM-driven phases: planning, implement, verify.
 public class AgentOrchestrator : IAgentOrchestrator
 {
     private readonly ILogger<AgentOrchestrator> _logger;
@@ -50,7 +49,7 @@ public class AgentOrchestrator : IAgentOrchestrator
         _managerPrompt = managerPrompt;
         _developerPrompt = developerPrompt;
         _maxIterationsPerSubtask = maxIterationsPerSubtask;
-        _phase = OrchestratorPhase.Breakdown;
+        _phase = OrchestratorPhase.Planning;
     }
 
     // Main entry point that runs the orchestrator loop until complete or blocked.
@@ -96,14 +95,14 @@ public class AgentOrchestrator : IAgentOrchestrator
             _phase = DetermineCurrentPhase(ticketHolder.Ticket, state);
             _logger.LogDebug("Phase: {Phase} (iteration {Iteration})", _phase, totalIterations);
 
-            if (_phase == OrchestratorPhase.Complete)  // exit condition met
+            if (_phase == OrchestratorPhase.Done)
             {
                 _logger.LogInformation("Orchestrator completed successfully");
                 await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Completed successfully");
                 break;
             }
 
-            if (_phase == OrchestratorPhase.Blocked)  // exit condition met
+            if (_phase == OrchestratorPhase.Blocked)
             {
                 _logger.LogWarning("Orchestrator blocked - requires human intervention");
                 await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Blocked - requires human intervention");
@@ -119,20 +118,16 @@ public class AgentOrchestrator : IAgentOrchestrator
 
             switch (_phase)
             {
-                case OrchestratorPhase.Breakdown:
-                    await RunBreakdownPhaseAsync(ticketHolder, state, toolProviders, cancellationToken);
+                case OrchestratorPhase.Planning:
+                    await RunPlanningPhaseAsync(ticketHolder, state, toolProviders, cancellationToken);
                     break;
 
-                case OrchestratorPhase.Assign:
-                    await RunAssignPhaseAsync(ticketHolder, state, toolProviders, workDir, cancellationToken);
+                case OrchestratorPhase.Implement:
+                    await RunImplementPhaseAsync(ticketHolder, state, toolProviders, workDir, cancellationToken);
                     break;
 
                 case OrchestratorPhase.Verify:
                     await RunVerifyPhaseAsync(ticketHolder, state, toolProviders, workDir, cancellationToken);
-                    break;
-
-                case OrchestratorPhase.Finalize:
-                    await RunFinalizePhaseAsync(ticketHolder, state, toolProviders, cancellationToken);
                     break;
             }
         }
@@ -148,7 +143,7 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         if (state.TicketComplete == true)
         {
-            return OrchestratorPhase.Complete;
+            return OrchestratorPhase.Done;
         }
 
         bool hasSubtasks = false;
@@ -175,7 +170,7 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         if (!hasSubtasks)
         {
-            return OrchestratorPhase.Breakdown;
+            return OrchestratorPhase.Planning;
         }
 
         if (hasAwaitingReview)
@@ -185,24 +180,31 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         if (hasIncomplete)
         {
-            return OrchestratorPhase.Assign;
+            return OrchestratorPhase.Implement;
         }
 
-        return OrchestratorPhase.Finalize;
+        return OrchestratorPhase.Done;
     }
 
     // Manager breaks ticket into subtasks.
-    private async Task RunBreakdownPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, CancellationToken cancellationToken)
+    private async Task RunPlanningPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("Manager: Breaking down ticket into subtasks");
-        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Breaking down ticket");
+        _logger.LogInformation("Manager: Planning ticket breakdown into subtasks");
+        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Planning ticket breakdown");
 
         state.Clear();
 
-        string userPrompt = $"Break down this ticket into tasks and subtasks:\n\nTicket: {ticketHolder.Ticket.Title}\nDescription: {ticketHolder.Ticket.Description}\n\nCreate a task with create_task, then add subtasks to it with create_subtask.";
+        string userPrompt = $"""
+            Break down this ticket into tasks and subtasks:
+
+            Ticket: {ticketHolder.Ticket.Title}
+            Description: {ticketHolder.Ticket.Description}
+
+            Create a task with create_task, then add subtasks to it with create_subtask.
+            """;
 
         LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
-        _logger.LogDebug("Manager breakdown response: {Response}", result.Content);
+        _logger.LogDebug("Manager planning response: {Response}", result.Content);
 
         if (result.AccumulatedCost > 0)
         {
@@ -211,18 +213,18 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         if (state.SubtasksCreated)
         {
-            _logger.LogInformation("Breakdown complete: {Count} subtasks created", state.SubtaskCount);
+            _logger.LogInformation("Planning complete: {Count} subtasks created", state.SubtaskCount);
         }
         else
         {
-            _logger.LogWarning("Breakdown failed - no subtasks created");
-            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Failed to break down ticket");
+            _logger.LogWarning("Planning failed - no subtasks created");
+            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Failed to plan ticket");
             state.Blocked = true;
         }
     }
 
     // Manager assigns the next incomplete subtask to the developer.
-    private async Task RunAssignPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, string workDir, CancellationToken cancellationToken)
+    private async Task RunImplementPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, string workDir, CancellationToken cancellationToken)
     {
         (KanbanTaskDto? task, KanbanSubtaskDto? subtask) = FindNextIncompleteSubtaskWithTask(ticketHolder.Ticket);
 
@@ -233,33 +235,23 @@ public class AgentOrchestrator : IAgentOrchestrator
         }
 
         state.SetCurrentSubtask(task.Id, subtask.Id);
+
+        bool isRetry = subtask.Status == SubtaskStatus.Rejected;
+        string logMessage = isRetry
+            ? $"Manager: Re-assigning rejected subtask '{subtask.Name}'"
+            : $"Manager: Assigning subtask '{subtask.Name}'";
+
+        _logger.LogInformation("{Message}", logMessage);
+        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, logMessage);
+
+        string rejectionNotes = !string.IsNullOrEmpty(state.RejectionReason)
+            ? $"""
+
+              Previous rejection feedback (must be addressed): {state.RejectionReason}
+              """
+            : string.Empty;
+
         state.Clear();
-
-        _logger.LogInformation("Manager: Assigning subtask '{Name}'", subtask.Name);
-        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Assigning subtask '{subtask.Name}'");
-
-        string acceptanceCriteria = subtask.AcceptanceCriteria.Count > 0
-            ? $"""
-
-              Acceptance Criteria:
-              {string.Join("\n", subtask.AcceptanceCriteria.Select(c => $"  - {c}"))}
-              """
-            : string.Empty;
-
-        string constraints = subtask.Constraints.Count > 0
-            ? $"""
-
-              Constraints:
-              {string.Join("\n", subtask.Constraints.Select(c => $"  - {c}"))}
-              """
-            : string.Empty;
-
-        string rejectionNotes = !string.IsNullOrEmpty(subtask.LastRejectionNotes)
-            ? $"""
-
-              Previous rejection feedback (must be addressed): {subtask.LastRejectionNotes}
-              """
-            : string.Empty;
 
         string userPrompt = $"""
             Assign this subtask to the developer by calling assign_subtask_to_developer with mode and a clear goal.
@@ -268,7 +260,7 @@ public class AgentOrchestrator : IAgentOrchestrator
             Task Description: {task.Description}
 
             Subtask: {subtask.Name}
-            Subtask Description: {subtask.Description}{acceptanceCriteria}{constraints}{rejectionNotes}
+            Subtask Description: {subtask.Description}{rejectionNotes}
 
             Repository: {workDir}
             """;
@@ -309,14 +301,6 @@ public class AgentOrchestrator : IAgentOrchestrator
         string developerSummary = state.DeveloperMessage;
         state.Clear();
 
-        string acceptanceCriteria = subtask.AcceptanceCriteria.Count > 0
-            ? $"""
-
-              Acceptance Criteria to verify:
-              {string.Join("\n", subtask.AcceptanceCriteria.Select(c => $"  - {c}"))}
-              """
-            : string.Empty;
-
         string developerSummarySection = !string.IsNullOrEmpty(developerSummary)
             ? $"""
 
@@ -325,13 +309,13 @@ public class AgentOrchestrator : IAgentOrchestrator
             : string.Empty;
 
         string userPrompt = $"""
-            Verify this completed subtask. Build the project, run tests, and inspect the changed files to confirm the work meets acceptance criteria.
+            Verify this completed subtask. Build the project, run tests, and inspect the changed files to confirm the work meets the acceptance criteria in the subtask description.
 
             Task: {task.Name}
             Task Description: {task.Description}
 
             Subtask: {subtask.Name}
-            Subtask Description: {subtask.Description}{acceptanceCriteria}{developerSummarySection}
+            Subtask Description: {subtask.Description}{developerSummarySection}
 
             Repository: {workDir}
 
@@ -365,45 +349,6 @@ public class AgentOrchestrator : IAgentOrchestrator
         {
             _logger.LogWarning("Verification failed - no decision made");
             await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Failed to verify '{subtask.Name}'");
-            state.Blocked = true;
-        }
-    }
-
-    // Manager commits, pushes, and marks ticket complete or blocked.
-    private async Task RunFinalizePhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, CancellationToken cancellationToken)
-    {
-        _logger.LogInformation("Manager: Finalizing ticket");
-        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Running final verification and git operations");
-
-        state.Clear();
-
-        string userPrompt = $"""
-            All subtasks complete. Finalize this ticket:
-
-            Ticket: {ticketHolder.Ticket.Title}
-
-            1. Use shell to commit any uncommitted changes with git
-            2. Use shell to push to the remote branch with git
-            3. Call mark_ticket_complete or mark_ticket_blocked
-            """;
-
-        LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
-        _logger.LogDebug("Manager finalize response: {Response}", result.Content);
-
-        if (result.AccumulatedCost > 0)
-        {
-            await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, result.AccumulatedCost);
-        }
-
-        if (state.TicketComplete == false)
-        {
-            _logger.LogWarning("Finalization failed: {Reason}", state.BlockedReason);
-            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Finalization failed - {state.BlockedReason}");
-            state.Blocked = true;
-        }
-        else if (state.TicketComplete == null)
-        {
-            _logger.LogWarning("Finalization failed - no decision made");
             state.Blocked = true;
         }
     }

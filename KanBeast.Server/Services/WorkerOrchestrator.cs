@@ -8,7 +8,7 @@ namespace KanBeast.Server.Services;
 public interface IWorkerOrchestrator
 {
     Task<string> StartWorkerAsync(string ticketId);
-    Task<bool> StopWorkerAsync(string workerId);
+    Task<bool> StopWorkerAsync(string ticketId);
     Task<Dictionary<string, string>> GetActiveWorkersAsync();
 }
 
@@ -55,7 +55,6 @@ public class WorkerOrchestrator : IWorkerOrchestrator
             throw new InvalidOperationException("Container image could not be determined");
         }
 
-        string workerId = $"ticket-{ticketId}";
         string containerName = $"kanbeast-worker-{ticketId}";
 
         _logger.LogInformation("Creating worker container: {ContainerName} from image {Image}", containerName, _containerContext.Image);
@@ -92,24 +91,24 @@ public class WorkerOrchestrator : IWorkerOrchestrator
         await _dockerClient.Containers.StartContainerAsync(containerId, new ContainerStartParameters());
         _logger.LogInformation("Container started successfully");
 
-        // Update ticket with worker ID
-        ticket.WorkerId = workerId;
-        await _ticketService.AddActivityLogAsync(ticketId, $"Worker {workerId} assigned (container {containerName})");
+        // Update ticket with container name
+        ticket.ContainerName = containerName;
+        await _ticketService.AddActivityLogAsync(ticketId, $"Worker assigned (container {containerName})");
 
-        // Store the worker ID and container ID
-        _activeWorkers[workerId] = containerId;
+        // Store the ticket ID and container ID mapping
+        _activeWorkers[ticketId] = containerId;
 
-        return workerId;
+        return containerName;
     }
 
-    public async Task<bool> StopWorkerAsync(string workerId)
+    public async Task<bool> StopWorkerAsync(string ticketId)
     {
-        if (!_activeWorkers.TryGetValue(workerId, out string? containerId))
+        if (!_activeWorkers.TryGetValue(ticketId, out string? containerId))
         {
             return false;
         }
 
-        _logger.LogInformation("Stopping worker {WorkerId}", workerId);
+        _logger.LogInformation("Stopping worker for ticket {TicketId}", ticketId);
 
         try
         {
@@ -117,10 +116,10 @@ public class WorkerOrchestrator : IWorkerOrchestrator
         }
         catch (DockerContainerNotFoundException)
         {
-            _logger.LogInformation("Worker container {WorkerId} already removed", workerId);
+            _logger.LogInformation("Worker container for ticket {TicketId} already removed", ticketId);
         }
 
-        _activeWorkers.Remove(workerId);
+        _activeWorkers.Remove(ticketId);
         return true;
     }
 

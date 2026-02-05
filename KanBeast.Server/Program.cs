@@ -4,54 +4,62 @@ using KanBeast.Server.Services;
 using KanBeast.Server.Hubs;
 using Microsoft.Extensions.Logging.Console;
 
-WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+namespace KanBeast.Server;
 
-// Configure clean console logging - just timestamp and message
-builder.Logging.ClearProviders();
-builder.Logging.AddConsole(options =>
+public class Program
 {
-    options.FormatterName = MinimalConsoleFormatter.FormatterName;
-});
-builder.Logging.AddConsoleFormatter<MinimalConsoleFormatter, ConsoleFormatterOptions>();
-
-// Add services to the container
-builder.Services.AddControllers()
-    .AddJsonOptions(options =>
+    public static async Task Main(string[] args)
     {
-        options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
-    });
-builder.Services.AddSignalR();
-builder.Services.AddOpenApi();
+        WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
-// Initialize container context (detects Docker environment)
-ILoggerFactory loggerFactory = LoggerFactory.Create(b =>
-{
-    b.AddConsole(options => options.FormatterName = MinimalConsoleFormatter.FormatterName);
-    b.AddConsoleFormatter<MinimalConsoleFormatter, ConsoleFormatterOptions>();
-});
-ILogger<ContainerContext> contextLogger = loggerFactory.CreateLogger<ContainerContext>();
-ContainerContext containerContext = await ContainerContext.CreateAsync(contextLogger);
+        // Configure clean console logging - just timestamp and message
+        builder.Logging.ClearProviders();
+        builder.Logging.AddConsole(options =>
+        {
+            options.FormatterName = MinimalConsoleFormatter.FormatterName;
+        });
+        builder.Logging.AddConsoleFormatter<MinimalConsoleFormatter, ConsoleFormatterOptions>();
 
-// Register application services
-builder.Services.AddSingleton<ITicketService, TicketService>();
-builder.Services.AddSingleton<ISettingsService, SettingsService>();
-builder.Services.AddSingleton<IWorkerOrchestrator, WorkerOrchestrator>();
-builder.Services.AddSingleton(containerContext);
+        // Add services to the container
+        builder.Services.AddControllers()
+            .AddJsonOptions(options =>
+            {
+                options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
+            });
+        builder.Services.AddSignalR();
+        builder.Services.AddOpenApi();
 
-WebApplication app = builder.Build();
+        // Initialize container context (detects Docker environment)
+        ILoggerFactory loggerFactory = LoggerFactory.Create(b =>
+        {
+            b.AddConsole(options => options.FormatterName = MinimalConsoleFormatter.FormatterName);
+            b.AddConsoleFormatter<MinimalConsoleFormatter, ConsoleFormatterOptions>();
+        });
+        ILogger<ContainerContext> contextLogger = loggerFactory.CreateLogger<ContainerContext>();
+        ContainerContext containerContext = await ContainerContext.CreateAsync(contextLogger);
 
-// Configure the HTTP request pipeline
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
+        // Register application services
+        builder.Services.AddSingleton<ITicketService, TicketService>();
+        builder.Services.AddSingleton<ISettingsService, SettingsService>();
+        builder.Services.AddSingleton<IWorkerOrchestrator, WorkerOrchestrator>();
+        builder.Services.AddSingleton(containerContext);
+
+        WebApplication app = builder.Build();
+
+        // Configure the HTTP request pipeline
+        if (app.Environment.IsDevelopment())
+        {
+            app.MapOpenApi();
+        }
+
+        app.UseStaticFiles();
+        app.UseRouting();
+        app.MapControllers();
+        app.MapHub<KanbanHub>("/hubs/kanban");
+
+        // Serve the frontend for any unmatched routes
+        app.MapFallbackToFile("index.html");
+
+        app.Run();
+    }
 }
-
-app.UseStaticFiles();
-app.UseRouting();
-app.MapControllers();
-app.MapHub<KanbanHub>("/hubs/kanban");
-
-// Serve the frontend for any unmatched routes
-app.MapFallbackToFile("index.html");
-
-app.Run();

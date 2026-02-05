@@ -100,13 +100,12 @@ public class TicketsController : ControllerBase
         // If moving to Backlog, stop any running worker
         if (update.Status == TicketStatus.Backlog)
         {
-            string workerId = $"ticket-{id}";
             try
             {
-                bool stopped = await _workerOrchestrator.StopWorkerAsync(workerId);
+                bool stopped = await _workerOrchestrator.StopWorkerAsync(id);
                 if (stopped)
                 {
-                    _logger.LogInformation("Stopped worker {WorkerId} for cancelled ticket #{Id}", workerId, id);
+                    _logger.LogInformation("Stopped worker for cancelled ticket #{Id}", id);
                 }
             }
             catch (Exception ex)

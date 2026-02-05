@@ -1,5 +1,5 @@
 ---
-name: Git OneFlow
+name: Finish Branch
 description: High throughput git workflow with feature branches, squash then rebase onto main, and fast forward merges. Linear history. No PRs or reviews.
 dependencies: git
 ---

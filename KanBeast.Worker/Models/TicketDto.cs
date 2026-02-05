@@ -27,12 +27,6 @@ public class KanbanSubtaskDto
     public required string Description { get; set; }
     public SubtaskStatus Status { get; set; }
     public DateTime LastUpdatedAt { get; set; }
-    public int RejectionCount { get; set; }
-    public string? LastRejectionNotes { get; set; }
-    public List<string> FilesToInspect { get; set; } = new List<string>();
-    public List<string> FilesToModify { get; set; } = new List<string>();
-    public List<string> AcceptanceCriteria { get; set; } = new List<string>();
-    public List<string> Constraints { get; set; } = new List<string>();
 }
 
 // For creating new tasks/subtasks (without server-assigned fields)

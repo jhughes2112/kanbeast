@@ -4,7 +4,7 @@ public enum TicketStatus
 {
     Backlog,
     Active,
-    Testing,
+    Failed,
     Done
 }
 
@@ -19,6 +19,6 @@ public class Ticket
     public List<string> ActivityLog { get; set; } = new();
     public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
     public DateTime? UpdatedAt { get; set; }
-    public string? WorkerId { get; set; }
+    public string? ContainerName { get; set; }
     public decimal LlmCost { get; set; } = 0m;
 }
