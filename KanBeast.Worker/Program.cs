@@ -303,6 +303,6 @@ class WorkerOptions
     [Option("server-url", Required = true, HelpText = "Server URL for the worker.")]
     public required string ServerUrl { get; set; }
 
-    [Option("json", Required = false, HelpText = "Output logs in JSON format instead of friendly format.")]
+    [Option("json", Required = false, Default = false, HelpText = "Output logs in JSON format instead of friendly format.")]
     public bool JsonLogging { get; set; }
 }
