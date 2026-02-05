@@ -14,6 +14,7 @@ public class WorkerConfig
     public required Dictionary<string, string> Prompts { get; set; }
     public required string PromptDirectory { get; set; }
     public int MaxIterationsPerSubtask { get; set; } = 50;
+    public bool JsonLogging { get; set; }
 
     public string GetPrompt(string key)
     {

@@ -12,13 +12,14 @@ public class LlmProxy
     private readonly ICompaction _compaction;
     private readonly string _logDirectory;
     private readonly string _logPrefix;
+    private readonly bool _jsonLogging;
     private int _currentLlmIndex;
 
     public string LogDirectory => _logDirectory;
 
     public string LogPrefix => _logPrefix;
 
-    public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds, ICompaction compaction, string logDirectory, string logPrefix)
+    public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds, ICompaction compaction, string logDirectory, string logPrefix, bool jsonLogging)
     {
         _configs = configs;
         _retryCount = retryCount;
@@ -26,6 +27,7 @@ public class LlmProxy
         _compaction = compaction;
         _logDirectory = logDirectory;
         _logPrefix = logPrefix;
+        _jsonLogging = jsonLogging;
         _currentLlmIndex = 0;
 
         Console.WriteLine($"LlmProxy initialized with {configs.Count} LLM config(s)");
@@ -52,7 +54,7 @@ public class LlmProxy
         {
             LLMConfig config = _configs[_currentLlmIndex];
             string modelName = config.Model;
-            LlmService service = new LlmService(config, _compaction, _logDirectory, _logPrefix);
+            LlmService service = new LlmService(config, _compaction, _logDirectory, _logPrefix, _jsonLogging);
 
             int attempt = 0;
             while (attempt <= _retryCount && !succeeded)
@@ -89,7 +91,7 @@ public class LlmProxy
             }
         }
 
-        await conversation.WriteLogAsync(_logDirectory, _logPrefix, "complete", cancellationToken);
+        await conversation.WriteLogAsync(_logDirectory, _logPrefix, "complete", _jsonLogging, cancellationToken);
         if (succeeded)
         {
             conversation.MarkCompleted();

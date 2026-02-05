@@ -55,7 +55,7 @@ public class LlmConversation
         CompletedAt = DateTime.UtcNow.ToString("O");
     }
 
-    public async Task WriteLogAsync(string logDirectory, string logPrefix, string reason, CancellationToken cancellationToken)
+    public async Task WriteLogAsync(string logDirectory, string logPrefix, string reason, bool jsonFormat, CancellationToken cancellationToken)
     {
         if (!string.IsNullOrWhiteSpace(logDirectory))
         {
@@ -63,23 +63,84 @@ public class LlmConversation
 
             long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
             string suffix = reason.Replace(" ", "-");
+            string extension = ".log";
             string filename = !string.IsNullOrEmpty(logPrefix)
-                ? $"{logPrefix}-{timestamp}-{suffix}.json"
-                : $"session-{timestamp}-{suffix}.json";
+                ? $"{logPrefix}-{timestamp}-{suffix}{extension}"
+                : $"session-{timestamp}-{suffix}{extension}";
             string logPath = Path.Combine(logDirectory, filename);
 
             int duplicateIndex = 1;
             while (File.Exists(logPath))
             {
                 string duplicateName = !string.IsNullOrEmpty(logPrefix)
-                    ? $"{logPrefix}-{timestamp}-{suffix}-{duplicateIndex}.json"
-                    : $"session-{timestamp}-{suffix}-{duplicateIndex}.json";
+                    ? $"{logPrefix}-{timestamp}-{suffix}-{duplicateIndex}{extension}"
+                    : $"session-{timestamp}-{suffix}-{duplicateIndex}{extension}";
                 logPath = Path.Combine(logDirectory, duplicateName);
                 duplicateIndex++;
             }
 
-            string json = JsonSerializer.Serialize(this, JsonOptions);
-            await File.WriteAllTextAsync(logPath, json, cancellationToken);
+            string content = jsonFormat ? JsonSerializer.Serialize(this, JsonOptions) : FormatFriendlyLog();
+            await File.WriteAllTextAsync(logPath, content, cancellationToken);
         }
+    }
+
+    private string FormatFriendlyLog()
+    {
+        System.Text.StringBuilder builder = new System.Text.StringBuilder();
+        builder.AppendLine($"# LLM Conversation Log");
+        builder.AppendLine();
+        builder.AppendLine($"**Model:** {Model}");
+        builder.AppendLine($"**Started:** {StartedAt}");
+        if (!string.IsNullOrEmpty(CompletedAt))
+        {
+            builder.AppendLine($"**Completed:** {CompletedAt}");
+        }
+        builder.AppendLine();
+        builder.AppendLine("---");
+        builder.AppendLine();
+
+        foreach (ChatMessage message in Messages)
+        {
+            if (message.Role == "system")
+            {
+                builder.AppendLine($"## System:");
+                builder.AppendLine(message.Content ?? string.Empty);
+                builder.AppendLine();
+            }
+            else if (message.Role == "user")
+            {
+                builder.AppendLine($"## User:");
+                builder.AppendLine(message.Content ?? string.Empty);
+                builder.AppendLine();
+            }
+            else if (message.Role == "assistant")
+            {
+                builder.AppendLine($"## Assistant:");
+                if (!string.IsNullOrEmpty(message.Content))
+                {
+                    builder.AppendLine(message.Content);
+                    builder.AppendLine();
+                }
+
+                if (message.ToolCalls != null && message.ToolCalls.Count > 0)
+                {
+                    foreach (ToolCallMessage toolCall in message.ToolCalls)
+                    {
+                        builder.AppendLine($"**Tool call:** {toolCall.Function.Name} {toolCall.Function.Arguments}");
+                    }
+                    builder.AppendLine();
+                }
+            }
+            else if (message.Role == "tool")
+            {
+                builder.AppendLine($"**Tool result:**");
+                builder.AppendLine("```");
+                builder.AppendLine(message.Content ?? string.Empty);
+                builder.AppendLine("```");
+                builder.AppendLine();
+            }
+        }
+
+        return builder.ToString();
     }
 }

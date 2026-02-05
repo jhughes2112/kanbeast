@@ -6,13 +6,13 @@ namespace KanBeast.Worker.Services;
 // Defines the contract for context compaction strategies.
 public interface ICompaction
 {
-    Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken);
+    Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, bool jsonFormat, CancellationToken cancellationToken);
 }
 
 // Keeps context statements untouched when compaction is disabled.
 public class CompactionNone : ICompaction
 {
-    public Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken)
+    public Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, bool jsonFormat, CancellationToken cancellationToken)
     {
         return Task.FromResult(0m);
     }
@@ -40,7 +40,7 @@ public class CompactionSummarizer : ICompaction
         }
     }
 
-    public async Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, CancellationToken cancellationToken)
+    public async Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, bool jsonFormat, CancellationToken cancellationToken)
     {
         int messageSize = GetMessageSize(conversation.Messages);
 
@@ -53,7 +53,7 @@ public class CompactionSummarizer : ICompaction
             LlmResult result = await llmService.RunAsync(summaryConversation, providers, LlmRole.Compaction, cancellationToken);
             string summary = result.Content;
 
-            await conversation.WriteLogAsync(logDirectory, logPrefix, "pre-compact", cancellationToken);
+            await conversation.WriteLogAsync(logDirectory, logPrefix, "pre-compact", jsonFormat, cancellationToken);
 
             // Keep system message, replace everything else with summary as a user message
             ChatMessage? systemMessage = null;

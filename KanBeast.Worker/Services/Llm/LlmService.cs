@@ -151,13 +151,15 @@ public class LlmService
 	private readonly ICompaction _compaction;
 	private readonly string _logDirectory;
 	private readonly string _logPrefix;
+	private readonly bool _jsonLogging;
 
-	public LlmService(LLMConfig config, ICompaction compaction, string logDirectory, string logPrefix)
+	public LlmService(LLMConfig config, ICompaction compaction, string logDirectory, string logPrefix, bool jsonLogging)
 	{
 		_config = config;
 		_compaction = compaction;
 		_logDirectory = logDirectory;
 		_logPrefix = logPrefix;
+		_jsonLogging = jsonLogging;
 
 		if (string.IsNullOrWhiteSpace(config.Endpoint))
 		{
@@ -198,7 +200,7 @@ public class LlmService
             iteration++;
             cancellationToken.ThrowIfCancellationRequested();
 
-            decimal compactionCost = await _compaction.CompactAsync(conversation, this, _logDirectory, _logPrefix, cancellationToken);
+            decimal compactionCost = await _compaction.CompactAsync(conversation, this, _logDirectory, _logPrefix, _jsonLogging, cancellationToken);
             accumulatedCost += compactionCost;
 
             ChatCompletionRequest request = new ChatCompletionRequest

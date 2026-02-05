@@ -57,7 +57,8 @@ try
         config.LlmRetryDelaySeconds,
         managerCompaction,
         logDirectory,
-        $"tik-{config.TicketId}-mgr");
+        $"tik-{config.TicketId}-mgr",
+        config.JsonLogging);
 
     LlmProxy developerProxy = new LlmProxy(
         config.LLMConfigs,
@@ -65,7 +66,8 @@ try
         config.LlmRetryDelaySeconds,
         developerCompaction,
         logDirectory,
-        $"tik-{config.TicketId}-dev");
+        $"tik-{config.TicketId}-dev",
+        config.JsonLogging);
 
     LlmProxy managerLlmService = managerProxy;
     LlmProxy developerLlmService = developerProxy;
@@ -214,7 +216,8 @@ static WorkerConfig BuildConfiguration(WorkerOptions options)
         ManagerCompaction = settings.ManagerCompaction,
         DeveloperCompaction = settings.DeveloperCompaction,
         Prompts = prompts,
-        PromptDirectory = resolvedPromptDirectory
+        PromptDirectory = resolvedPromptDirectory,
+        JsonLogging = options.JsonLogging
     };
 
     return config;
@@ -299,4 +302,7 @@ class WorkerOptions
 
     [Option("server-url", Required = true, HelpText = "Server URL for the worker.")]
     public required string ServerUrl { get; set; }
+
+    [Option("json", Required = false, HelpText = "Output logs in JSON format instead of friendly format.")]
+    public bool JsonLogging { get; set; }
 }
