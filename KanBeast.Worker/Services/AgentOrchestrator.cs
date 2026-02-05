@@ -9,7 +9,6 @@ public enum OrchestratorPhase
 {
     Breakdown,
     Assign,
-    Develop,
     Verify,
     Finalize,
     Complete,
@@ -22,7 +21,7 @@ public interface IAgentOrchestrator
     Task RunAsync(TicketDto ticket, string workDir, CancellationToken cancellationToken);
 }
 
-// Coordinates LLM-driven phases: breakdown, assign, develop, verify, finalize.
+// Coordinates LLM-driven phases: breakdown, assign, verify, finalize.
 public class AgentOrchestrator : IAgentOrchestrator
 {
     private readonly ILogger<AgentOrchestrator> _logger;
@@ -30,7 +29,7 @@ public class AgentOrchestrator : IAgentOrchestrator
     private readonly LlmProxy _managerLlmService;
     private readonly LlmProxy _developerLlmService;
     private readonly string _managerPrompt;
-    private readonly string _developerImplementationPrompt;
+    private readonly string _developerPrompt;
     private readonly int _maxIterationsPerSubtask;
 
     private OrchestratorPhase _phase;
@@ -41,7 +40,7 @@ public class AgentOrchestrator : IAgentOrchestrator
         LlmProxy managerLlmService,
         LlmProxy developerLlmService,
         string managerPrompt,
-        string developerImplementationPrompt,
+        string developerPrompt,
         int maxIterationsPerSubtask)
     {
         _logger = logger;
@@ -49,7 +48,7 @@ public class AgentOrchestrator : IAgentOrchestrator
         _managerLlmService = managerLlmService;
         _developerLlmService = developerLlmService;
         _managerPrompt = managerPrompt;
-        _developerImplementationPrompt = developerImplementationPrompt;
+        _developerPrompt = developerPrompt;
         _maxIterationsPerSubtask = maxIterationsPerSubtask;
         _phase = OrchestratorPhase.Breakdown;
     }
@@ -62,7 +61,22 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         TicketHolder ticketHolder = new TicketHolder(ticket);
         TaskState state = new TaskState();
-        TicketTools ticketTools = new TicketTools(_apiClient, ticketHolder, state);
+
+        DeveloperConfig developerConfig = new DeveloperConfig
+        {
+            LlmProxy = _developerLlmService,
+            Prompt = _developerPrompt,
+            WorkDir = workDir,
+            MaxIterationsPerSubtask = _maxIterationsPerSubtask,
+            ToolProvidersFactory = () => new List<IToolProvider>
+            {
+                new ShellTools(workDir),
+                new FileTools(workDir),
+                new TicketTools(_apiClient, ticketHolder, state)
+            }
+        };
+
+        TicketTools ticketTools = new TicketTools(_logger, _apiClient, ticketHolder, state, developerConfig);
 
         List<IToolProvider> toolProviders = new List<IToolProvider>
         {
@@ -110,15 +124,11 @@ public class AgentOrchestrator : IAgentOrchestrator
                     break;
 
                 case OrchestratorPhase.Assign:
-                    await RunAssignPhaseAsync(ticketHolder, state, toolProviders, cancellationToken);
-                    break;
-
-                case OrchestratorPhase.Develop:
-                    await RunDevelopPhaseAsync(ticketHolder, state, toolProviders, cancellationToken);
+                    await RunAssignPhaseAsync(ticketHolder, state, toolProviders, workDir, cancellationToken);
                     break;
 
                 case OrchestratorPhase.Verify:
-                    await RunVerifyPhaseAsync(ticketHolder, state, toolProviders, cancellationToken);
+                    await RunVerifyPhaseAsync(ticketHolder, state, toolProviders, workDir, cancellationToken);
                     break;
 
                 case OrchestratorPhase.Finalize:
@@ -173,11 +183,6 @@ public class AgentOrchestrator : IAgentOrchestrator
             return OrchestratorPhase.Verify;
         }
 
-        if (state.Assigned)
-        {
-            return OrchestratorPhase.Develop;
-        }
-
         if (hasIncomplete)
         {
             return OrchestratorPhase.Assign;
@@ -217,23 +222,56 @@ public class AgentOrchestrator : IAgentOrchestrator
     }
 
     // Manager assigns the next incomplete subtask to the developer.
-    private async Task RunAssignPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, CancellationToken cancellationToken)
+    private async Task RunAssignPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, string workDir, CancellationToken cancellationToken)
     {
-        (string? taskId, string? subtaskId, KanbanSubtaskDto? subtask) = FindNextIncompleteSubtask(ticketHolder.Ticket);
+        (KanbanTaskDto? task, KanbanSubtaskDto? subtask) = FindNextIncompleteSubtaskWithTask(ticketHolder.Ticket);
 
-        if (subtask == null)
+        if (task == null || subtask == null)
         {
             _logger.LogInformation("No incomplete subtasks");
             return;
         }
 
-        state.SetCurrentSubtask(taskId!, subtaskId!);
+        state.SetCurrentSubtask(task.Id, subtask.Id);
         state.Clear();
 
         _logger.LogInformation("Manager: Assigning subtask '{Name}'", subtask.Name);
         await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Assigning subtask '{subtask.Name}'");
 
-        string userPrompt = $"Assign this subtask to the developer:\n\nSubtask: {subtask.Name}\n\nCall assign_subtask_to_developer with mode and goal.";
+        string acceptanceCriteria = subtask.AcceptanceCriteria.Count > 0
+            ? $"""
+
+              Acceptance Criteria:
+              {string.Join("\n", subtask.AcceptanceCriteria.Select(c => $"  - {c}"))}
+              """
+            : string.Empty;
+
+        string constraints = subtask.Constraints.Count > 0
+            ? $"""
+
+              Constraints:
+              {string.Join("\n", subtask.Constraints.Select(c => $"  - {c}"))}
+              """
+            : string.Empty;
+
+        string rejectionNotes = !string.IsNullOrEmpty(subtask.LastRejectionNotes)
+            ? $"""
+
+              Previous rejection feedback (must be addressed): {subtask.LastRejectionNotes}
+              """
+            : string.Empty;
+
+        string userPrompt = $"""
+            Assign this subtask to the developer by calling assign_subtask_to_developer with mode and a clear goal.
+
+            Task: {task.Name}
+            Task Description: {task.Description}
+
+            Subtask: {subtask.Name}
+            Subtask Description: {subtask.Description}{acceptanceCriteria}{constraints}{rejectionNotes}
+
+            Repository: {workDir}
+            """;
 
         LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
         _logger.LogDebug("Manager assign response: {Response}", result.Content);
@@ -245,7 +283,7 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         if (state.Assigned)
         {
-            _logger.LogInformation("Assignment ready: mode={Mode}", state.AssignedMode);
+            _logger.LogInformation("Assignment complete");
         }
         else
         {
@@ -255,66 +293,11 @@ public class AgentOrchestrator : IAgentOrchestrator
         }
     }
 
-    // Developer implements the assigned subtask.
-    private async Task RunDevelopPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, CancellationToken cancellationToken)
-    {
-        KanbanSubtaskDto? subtask = FindSubtask(ticketHolder.Ticket, state.CurrentTaskId, state.CurrentSubtaskId);
-        if (subtask == null)
-        {
-            _logger.LogWarning("Current subtask not found");
-            return;
-        }
-
-        _logger.LogInformation("Developer: Working on '{Name}'", subtask.Name);
-        await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Developer: Starting work on '{subtask.Name}'");
-
-        TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(ticketHolder.Ticket.Id, state.CurrentTaskId!, state.CurrentSubtaskId!, SubtaskStatus.InProgress);
-        ticketHolder.Update(updated);
-
-        state.Clear();
-
-        string userPrompt = $"Complete this subtask:\n\nSubtask: {subtask.Name}\n\nCall mark_subtask_complete when done or blocked.";
-
-        int iterations = 0;
-
-        while (!state.DeveloperComplete && iterations < _maxIterationsPerSubtask)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            iterations++;
-
-            LlmResult result = await _developerLlmService.RunAsync(_developerImplementationPrompt, userPrompt, toolProviders, LlmRole.Developer, cancellationToken);
-            _logger.LogDebug("Developer response ({Iteration}): {Response}", iterations, result.Content.Substring(0, Math.Min(200, result.Content.Length)));
-
-            if (result.AccumulatedCost > 0)
-            {
-                await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, result.AccumulatedCost);
-            }
-
-            if (!state.DeveloperComplete)
-            {
-                userPrompt = "Continue working. When done or blocked, call mark_subtask_complete.";
-            }
-        }
-
-        if (state.DeveloperComplete)
-        {
-            updated = await _apiClient.UpdateSubtaskStatusAsync(ticketHolder.Ticket.Id, state.CurrentTaskId!, state.CurrentSubtaskId!, SubtaskStatus.AwaitingReview);
-            ticketHolder.Update(updated);
-            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Developer: Completed work on '{subtask.Name}'");
-        }
-        else
-        {
-            _logger.LogWarning("Developer exceeded max iterations ({Max})", _maxIterationsPerSubtask);
-            await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Developer: Exceeded max iterations");
-            state.Blocked = true;
-        }
-    }
-
     // Manager verifies the developer's work and approves or rejects.
-    private async Task RunVerifyPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, CancellationToken cancellationToken)
+    private async Task RunVerifyPhaseAsync(TicketHolder ticketHolder, TaskState state, List<IToolProvider> toolProviders, string workDir, CancellationToken cancellationToken)
     {
-        KanbanSubtaskDto? subtask = FindSubtask(ticketHolder.Ticket, state.CurrentTaskId, state.CurrentSubtaskId);
-        if (subtask == null)
+        (KanbanTaskDto? task, KanbanSubtaskDto? subtask) = FindTaskAndSubtask(ticketHolder.Ticket, state.CurrentTaskId, state.CurrentSubtaskId);
+        if (task == null || subtask == null)
         {
             _logger.LogWarning("Subtask to verify not found");
             return;
@@ -323,9 +306,44 @@ public class AgentOrchestrator : IAgentOrchestrator
         _logger.LogInformation("Manager: Verifying '{Name}'", subtask.Name);
         await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager: Verifying '{subtask.Name}'");
 
+        string developerSummary = state.DeveloperMessage;
         state.Clear();
 
-        string userPrompt = $"Verify this completed subtask:\n\nSubtask: {subtask.Name}\n\nCall approve_subtask or reject_subtask.";
+        string acceptanceCriteria = subtask.AcceptanceCriteria.Count > 0
+            ? $"""
+
+              Acceptance Criteria to verify:
+              {string.Join("\n", subtask.AcceptanceCriteria.Select(c => $"  - {c}"))}
+              """
+            : string.Empty;
+
+        string developerSummarySection = !string.IsNullOrEmpty(developerSummary)
+            ? $"""
+
+              Developer's completion summary: {developerSummary}
+              """
+            : string.Empty;
+
+        string userPrompt = $"""
+            Verify this completed subtask. Build the project, run tests, and inspect the changed files to confirm the work meets acceptance criteria.
+
+            Task: {task.Name}
+            Task Description: {task.Description}
+
+            Subtask: {subtask.Name}
+            Subtask Description: {subtask.Description}{acceptanceCriteria}{developerSummarySection}
+
+            Repository: {workDir}
+
+            Verification steps:
+            1. Ensure the project builds successfully
+            2. Run and ensure all tests pass
+            3. Inspect the files the developer claims to have modified
+            4. Verify each acceptance criterion is met
+
+            Call approve_subtask if all criteria are met and tests pass.
+            Call reject_subtask with specific feedback if any criteria are not met or tests fail.
+            """;
 
         LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
         _logger.LogDebug("Manager verify response: {Response}", result.Content);
@@ -359,7 +377,15 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         state.Clear();
 
-        string userPrompt = $"All subtasks complete. Finalize this ticket:\n\nTicket: {ticketHolder.Ticket.Title}\n\n1. Use shell to commit any uncommitted changes with git\n2. Use shell to push to the remote branch with git\n3. Call mark_ticket_complete or mark_ticket_blocked";
+        string userPrompt = $"""
+            All subtasks complete. Finalize this ticket:
+
+            Ticket: {ticketHolder.Ticket.Title}
+
+            1. Use shell to commit any uncommitted changes with git
+            2. Use shell to push to the remote branch with git
+            3. Call mark_ticket_complete or mark_ticket_blocked
+            """;
 
         LlmResult result = await _managerLlmService.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
         _logger.LogDebug("Manager finalize response: {Response}", result.Content);
@@ -382,8 +408,8 @@ public class AgentOrchestrator : IAgentOrchestrator
         }
     }
 
-    // Finds the next subtask that needs work.
-    private (string?, string?, KanbanSubtaskDto?) FindNextIncompleteSubtask(TicketDto ticket)
+    // Finds the next subtask that needs work, along with its parent task.
+    private (KanbanTaskDto?, KanbanSubtaskDto?) FindNextIncompleteSubtaskWithTask(TicketDto ticket)
     {
         foreach (KanbanTaskDto task in ticket.Tasks)
         {
@@ -393,20 +419,20 @@ public class AgentOrchestrator : IAgentOrchestrator
                     subtask.Status == SubtaskStatus.Rejected ||
                     subtask.Status == SubtaskStatus.InProgress)
                 {
-                    return (task.Id, subtask.Id, subtask);
+                    return (task, subtask);
                 }
             }
         }
 
-        return (null, null, null);
+        return (null, null);
     }
 
-    // Looks up a subtask by task and subtask ID.
-    private KanbanSubtaskDto? FindSubtask(TicketDto ticket, string? taskId, string? subtaskId)
+    // Looks up a task and subtask by their IDs.
+    private (KanbanTaskDto?, KanbanSubtaskDto?) FindTaskAndSubtask(TicketDto ticket, string? taskId, string? subtaskId)
     {
         if (taskId == null || subtaskId == null)
         {
-            return null;
+            return (null, null);
         }
 
         foreach (KanbanTaskDto task in ticket.Tasks)
@@ -417,12 +443,12 @@ public class AgentOrchestrator : IAgentOrchestrator
                 {
                     if (subtask.Id == subtaskId)
                     {
-                        return subtask;
+                        return (task, subtask);
                     }
                 }
             }
         }
 
-        return null;
+        return (null, null);
     }
 }

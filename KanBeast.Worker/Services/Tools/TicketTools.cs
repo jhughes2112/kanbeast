@@ -1,23 +1,49 @@
 using System.ComponentModel;
+using System.Text;
 using KanBeast.Worker.Models;
+using Microsoft.Extensions.Logging;
 
 namespace KanBeast.Worker.Services.Tools;
+
+// Configuration for running the developer LLM from within TicketTools.
+public class DeveloperConfig
+{
+    public required LlmProxy LlmProxy { get; init; }
+    public required string Prompt { get; init; }
+    public required string WorkDir { get; init; }
+    public required int MaxIterationsPerSubtask { get; init; }
+    public required Func<List<IToolProvider>> ToolProvidersFactory { get; init; }
+}
 
 // Tools for LLM to interact with the ticket system: logging, subtasks, status updates.
 public class TicketTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 
+    private readonly ILogger? _logger;
     private readonly IKanbanApiClient _apiClient;
     private readonly TicketHolder _ticketHolder;
     private readonly TaskState _state;
+    private readonly DeveloperConfig? _developerConfig;
     private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
 
     public TicketTools(IKanbanApiClient apiClient, TicketHolder ticketHolder, TaskState state)
+        : this(null, apiClient, ticketHolder, state, null)
     {
+    }
+
+    public TicketTools(
+        ILogger? logger,
+        IKanbanApiClient apiClient,
+        TicketHolder ticketHolder,
+        TaskState state,
+        DeveloperConfig? developerConfig)
+    {
+        _logger = logger;
         _apiClient = apiClient;
         _ticketHolder = ticketHolder;
         _state = state;
+        _developerConfig = developerConfig;
         _toolsByRole = BuildToolsByRole();
     }
 
@@ -289,10 +315,10 @@ public class TicketTools : IToolProvider
         return sb.ToString();
     }
 
-    [Description("Assign the current subtask to the developer with specific instructions.")]
+    [Description("Assign the current subtask to the developer and run the developer agent to complete it.")]
     public async Task<string> AssignSubtaskToDeveloperAsync(
         [Description("Mode: 'implementation', 'testing', or 'write-tests'")] string mode,
-        [Description("Clear goal statement for the developer")] string goal)
+        [Description("Clear goal statement for the developer including acceptance criteria")] string goal)
     {
         if (string.IsNullOrWhiteSpace(mode))
         {
@@ -309,36 +335,158 @@ public class TicketTools : IToolProvider
             return "Error: No subtask selected for assignment";
         }
 
+        if (_developerConfig == null)
+        {
+            return "Error: Developer configuration not available";
+        }
+
+        (KanbanTaskDto? task, KanbanSubtaskDto? subtask) = FindTaskAndSubtask(_ticketHolder.Ticket, _state.CurrentTaskId, _state.CurrentSubtaskId);
+        if (task == null || subtask == null)
+        {
+            return "Error: Could not find task or subtask";
+        }
+
         try
         {
-            _state.AssignedMode = mode.ToLowerInvariant() switch
-            {
-                "testing" => DeveloperMode.Testing,
-                "write-tests" or "writetests" => DeveloperMode.WriteTests,
-                _ => DeveloperMode.Implementation
-            };
-
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-
             TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.InProgress);
             if (updated != null)
             {
                 _ticketHolder.Update(updated);
             }
 
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Assigned to developer: {goal}");
+            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Starting work on '{subtask.Name}'");
+            _logger?.LogInformation("Developer: Working on '{Name}'", subtask.Name);
+
+            string developerResult = await RunDeveloperAsync(task, subtask, goal, _developerConfig.Prompt);
             _state.Assigned = true;
 
-            return $"Subtask assigned to developer in {_state.AssignedMode} mode";
+            if (_state.DeveloperComplete)
+            {
+                updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.AwaitingReview);
+                if (updated != null)
+                {
+                    _ticketHolder.Update(updated);
+                }
+
+                await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Completed work on '{subtask.Name}'");
+                return $"Developer completed subtask. Status: {_state.DeveloperStatus}. Summary: {_state.DeveloperMessage}";
+            }
+            else
+            {
+                _logger?.LogWarning("Developer exceeded max iterations ({Max})", _developerConfig.MaxIterationsPerSubtask);
+                await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, "Developer: Exceeded max iterations without completion");
+                _state.Blocked = true;
+                return "Developer exceeded max iterations without signaling completion. Subtask is blocked.";
+            }
         }
         catch (TaskCanceledException)
         {
-            return "Error: Request timed out while assigning to developer";
+            return "Error: Request timed out while running developer";
         }
         catch (Exception ex)
         {
-            return $"Error: Failed to assign to developer: {ex.Message}";
+            return $"Error: Failed to run developer: {ex.Message}";
         }
+    }
+
+    private async Task<string> RunDeveloperAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string goal, string developerPrompt)
+    {
+        string acceptanceCriteria = subtask.AcceptanceCriteria.Count > 0
+            ? $"""
+
+              Acceptance Criteria:
+              {string.Join("\n", subtask.AcceptanceCriteria.Select(c => $"  - {c}"))}
+              """
+            : string.Empty;
+
+        string constraints = subtask.Constraints.Count > 0
+            ? $"""
+
+              Constraints:
+              {string.Join("\n", subtask.Constraints.Select(c => $"  - {c}"))}
+              """
+            : string.Empty;
+
+        string filesToInspect = subtask.FilesToInspect.Count > 0
+            ? $"""
+
+              Files to inspect:
+              {string.Join("\n", subtask.FilesToInspect.Select(f => $"  - {f}"))}
+              """
+            : string.Empty;
+
+        string filesToModify = subtask.FilesToModify.Count > 0
+            ? $"""
+
+              Files to modify:
+              {string.Join("\n", subtask.FilesToModify.Select(f => $"  - {f}"))}
+              """
+            : string.Empty;
+
+        string rejectionNotes = !string.IsNullOrEmpty(subtask.LastRejectionNotes)
+            ? $"""
+
+              Previous rejection feedback: {subtask.LastRejectionNotes}
+              """
+            : string.Empty;
+
+        string userPrompt = $"""
+            Complete this subtask:
+
+            Task: {task.Name}
+            Task Description: {task.Description}
+
+            Subtask: {subtask.Name}
+            Subtask Description: {subtask.Description}
+
+            Goal: {goal}{acceptanceCriteria}{constraints}{filesToInspect}{filesToModify}{rejectionNotes}
+
+            Call mark_subtask_complete when done or blocked.
+            """;
+
+        List<IToolProvider> toolProviders = _developerConfig!.ToolProvidersFactory();
+        int iterations = 0;
+
+        _state.Clear();
+
+        while (!_state.DeveloperComplete && iterations < _developerConfig.MaxIterationsPerSubtask)
+        {
+            iterations++;
+
+            LlmResult result = await _developerConfig.LlmProxy.RunAsync(developerPrompt, userPrompt, toolProviders, LlmRole.Developer, CancellationToken.None);
+            _logger?.LogDebug("Developer response ({Iteration}): {Response}", iterations, result.Content.Length > 200 ? result.Content.Substring(0, 200) : result.Content);
+
+            if (result.AccumulatedCost > 0)
+            {
+                await _apiClient.AddLlmCostAsync(_ticketHolder.Ticket.Id, result.AccumulatedCost);
+            }
+
+            if (!_state.DeveloperComplete)
+            {
+                userPrompt = "Continue working. When done or blocked, call mark_subtask_complete.";
+            }
+        }
+
+        return _state.DeveloperMessage;
+    }
+
+    private (KanbanTaskDto?, KanbanSubtaskDto?) FindTaskAndSubtask(TicketDto ticket, string taskId, string subtaskId)
+    {
+        foreach (KanbanTaskDto task in ticket.Tasks)
+        {
+            if (task.Id == taskId)
+            {
+                foreach (KanbanSubtaskDto subtask in task.Subtasks)
+                {
+                    if (subtask.Id == subtaskId)
+                    {
+                        return (task, subtask);
+                    }
+                }
+            }
+        }
+
+        return (null, null);
     }
 
     [Description("Call when the developer has completed the subtask or is blocked.")]

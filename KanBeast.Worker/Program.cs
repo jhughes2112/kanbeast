@@ -49,7 +49,7 @@ try
         config.LLMConfigs,
         config.GetPrompt("developer-compaction"));
 
-    string logDirectory = Path.Combine(Environment.CurrentDirectory, "env", "logs");
+    string logDirectory = Path.Combine(Environment.CurrentDirectory, "logs");
 
     LlmProxy managerProxy = new LlmProxy(
         config.LLMConfigs,
@@ -108,7 +108,7 @@ try
                 managerLlmService,
                 developerLlmService,
                 config.GetPrompt("manager-system"),
-                config.GetPrompt("developer-implementation"),
+                config.GetPrompt("developer"),
                 config.MaxIterationsPerSubtask);
 
             logger.LogInformation("Starting agent orchestrator...");
@@ -145,8 +145,7 @@ static WorkerConfig BuildConfiguration(WorkerOptions options)
 
     WorkerSettings settings = LoadWorkerSettings();
 
-    string promptDirectory = "env/prompts";
-    string resolvedPromptDirectory = ResolvePromptDirectory(promptDirectory);
+    string resolvedPromptDirectory = ResolvePromptDirectory();
 
     if (!Directory.Exists(resolvedPromptDirectory))
     {
@@ -157,9 +156,7 @@ static WorkerConfig BuildConfiguration(WorkerOptions options)
     Dictionary<string, string> prompts = new Dictionary<string, string>
     {
         ["manager-system"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-system"),
-        ["developer-implementation"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-implementation"),
-        ["developer-testing"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-testing"),
-        ["developer-write-tests"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-write-tests"),
+        ["developer"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer"),
         ["manager-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-compaction-summary"),
         ["developer-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-compaction-summary")
     };
@@ -228,15 +225,14 @@ static WorkerSettings LoadWorkerSettings()
 
 static string ResolveSettingsPath()
 {
-    string configFile = "env/settings.json";
-    string resolvedPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, configFile));
+    string resolvedPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "settings.json"));
 
     return resolvedPath;
 }
 
-static string ResolvePromptDirectory(string promptDirectory)
+static string ResolvePromptDirectory()
 {
-    return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, promptDirectory));
+    return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "prompts"));
 }
 
 static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> llmConfigs, string compactionPrompt)

@@ -89,10 +89,10 @@ public class LlmProxy
             }
         }
 
+        await conversation.WriteLogAsync(_logDirectory, _logPrefix, "complete", cancellationToken);
         if (succeeded)
         {
             conversation.MarkCompleted();
-            await conversation.WriteLogAsync(_logDirectory, _logPrefix, "complete", cancellationToken);
         }
         else
         {

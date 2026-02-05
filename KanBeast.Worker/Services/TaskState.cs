@@ -9,9 +9,8 @@ public class TaskState
 
     // Assign phase
     public bool Assigned { get; set; }
-    public string AssignedMode { get; set; } = DeveloperMode.Implementation;
 
-    // Develop phase
+    // Developer phase
     public bool DeveloperComplete { get; set; }
     public string DeveloperStatus { get; set; } = string.Empty;
     public string DeveloperMessage { get; set; } = string.Empty;
@@ -42,7 +41,6 @@ public class TaskState
         SubtasksCreated = false;
         SubtaskCount = 0;
         Assigned = false;
-        AssignedMode = DeveloperMode.Implementation;
         DeveloperComplete = false;
         DeveloperStatus = string.Empty;
         DeveloperMessage = string.Empty;
@@ -52,13 +50,6 @@ public class TaskState
         BlockedReason = null;
         Blocked = false;
     }
-}
-
-public static class DeveloperMode
-{
-    public const string Implementation = "implementation";
-    public const string Testing = "testing";
-    public const string WriteTests = "write-tests";
 }
 
 public static class SubtaskCompleteStatus

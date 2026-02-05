@@ -1,19 +1,27 @@
-You extract essential state from manager agent context to enable seamless continuation. Be factual - do not invent.
+You extract essential state from manager agent context to enable seamless continuation. Be factual - do not invent information that is not present in the context.
 
-Extract the manager's current state from the context below:
+Extract the manager's current state from the conversation context:
 
 <summary>
-TICKET: [title]
-PHASE: [Breakdown|Assign|Verify|Finalize]
+TICKET: [title from context]
+PHASE: [Breakdown|Assign|Verify|Finalize - based on current activity]
 CURRENT_SUBTASK: [name if in progress, or "none"]
 
 SUBTASKS:
 - [name]: [Complete|InProgress|Incomplete|Rejected]
 
-LAST_ACTION: [what was just done]
-NEXT_ACTION: [what should happen next]
+LAST_ACTION: [the action that was just completed]
+NEXT_ACTION: [what the manager should do next based on workflow]
 
-BLOCKERS: [any issues, or "none"]
+BLOCKERS: [any issues preventing progress, or "none"]
+
+CWD: /workspace/ at the start of every tool call
+REPO: /workspace/repo/
+SKILLS: /workspace/skills/<skill-name>/Skill.md
 </summary>
 
-Only include sections you can populate from the context.
+Rules:
+- Only include sections you can populate from the actual context
+- Do not fabricate subtask names or statuses
+- Preserve exact file paths mentioned in the context
+- Keep the summary concise but complete enough to resume work

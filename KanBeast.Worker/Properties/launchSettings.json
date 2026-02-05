@@ -3,7 +3,7 @@
     "KanBeast.Worker": {
       "commandName": "Project",
       "commandLineArgs": "--ticket-id 1\r\n--server-url http://localhost:8080/",
-      "workingDirectory": "D:\\kanbeast\\"
+      "workingDirectory": "D:\\kanbeast\\env"
     }
   }
 }
