@@ -1,11 +1,13 @@
 {
   "llmConfigs": [
     {
-      "id": "",
+      "id": "9ca5c9ad-4291-47a5-8924-f621154d5512",
       "apiKey": "sk-YOUR_API_KEY_HERE",
       "model": "gpt-5.2",
       "endpoint": "https://api.openai.com/v1",
-      "contextLength": 128000
+      "contextLength": 128000,
+      "inputTokenPrice": 0,
+      "outputTokenPrice": 0
     }
   ],
   "gitConfig": {
