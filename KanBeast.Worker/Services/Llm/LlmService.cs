@@ -149,16 +149,12 @@ public class LlmService
 	private readonly LLMConfig _config;
 	private readonly HttpClient _httpClient;
 	private readonly ICompaction _compaction;
-	private readonly string _logDirectory;
-	private readonly string _logPrefix;
 	private readonly bool _jsonLogging;
 
-	public LlmService(LLMConfig config, ICompaction compaction, string logDirectory, string logPrefix, bool jsonLogging)
+	public LlmService(LLMConfig config, ICompaction compaction, bool jsonLogging)
 	{
 		_config = config;
 		_compaction = compaction;
-		_logDirectory = logDirectory;
-		_logPrefix = logPrefix;
 		_jsonLogging = jsonLogging;
 
 		if (string.IsNullOrWhiteSpace(config.Endpoint))
@@ -195,125 +191,121 @@ public class LlmService
 		int maxIterations = 50;
 		int iteration = 0;
 
-        while (iteration < maxIterations)
-        {
-            iteration++;
-            cancellationToken.ThrowIfCancellationRequested();
+		while (iteration < maxIterations)
+		{
+			iteration++;
+			cancellationToken.ThrowIfCancellationRequested();
 
-            decimal compactionCost = await _compaction.CompactAsync(conversation, this, _logDirectory, _logPrefix, _jsonLogging, cancellationToken);
-            accumulatedCost += compactionCost;
+			decimal compactionCost = await _compaction.CompactAsync(conversation, this, _jsonLogging, cancellationToken);
+			accumulatedCost += compactionCost;
 
-            ChatCompletionRequest request = new ChatCompletionRequest
-            {
-                Model = _config.Model,
-                Messages = conversation.Messages,
-                Tools = toolDefs,
-                ToolChoice = toolDefs != null ? "auto" : null
-            };
+			ChatCompletionRequest request = new ChatCompletionRequest
+			{
+				Model = _config.Model,
+				Messages = conversation.Messages,
+				Tools = toolDefs,
+				ToolChoice = toolDefs != null ? "auto" : null
+			};
 
-            string requestJson = JsonSerializer.Serialize(request, JsonOptions);
-            string fullUrl = $"{_config.Endpoint!.TrimEnd('/')}/chat/completions";
-            Console.WriteLine($"LLM Request to {fullUrl}:");
-            Console.WriteLine(requestJson);
+			string requestJson = JsonSerializer.Serialize(request, JsonOptions);
+			string fullUrl = $"{_config.Endpoint!.TrimEnd('/')}/chat/completions";
 
-            StringContent content = new StringContent(requestJson, System.Text.Encoding.UTF8, "application/json");
-            HttpResponseMessage httpResponse = await _httpClient.PostAsync(
-                fullUrl,
-                content,
-                cancellationToken);
+			StringContent content = new StringContent(requestJson, System.Text.Encoding.UTF8, "application/json");
+			HttpResponseMessage httpResponse = await _httpClient.PostAsync(
+				fullUrl,
+				content,
+				cancellationToken);
 
-            string responseBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
-            Console.WriteLine($"LLM Response ({httpResponse.StatusCode}):");
-            Console.WriteLine(responseBody);
+			string responseBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
 
-            if (!httpResponse.IsSuccessStatusCode)
-            {
-                throw new InvalidOperationException($"API error {httpResponse.StatusCode}: {responseBody}");
-            }
+			if (!httpResponse.IsSuccessStatusCode)
+			{
+				throw new InvalidOperationException($"API error {httpResponse.StatusCode}: {responseBody}");
+			}
 
-            ChatCompletionResponse? response = null;
+			ChatCompletionResponse? response = null;
 
-            try
-            {
-                response = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions);
-            }
-            catch (JsonException ex)
-            {
-                throw new InvalidOperationException($"Invalid JSON response: {ex.Message}. Body: {responseBody}");
-            }
+			try
+			{
+				response = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions);
+			}
+			catch (JsonException ex)
+			{
+				throw new InvalidOperationException($"Invalid JSON response: {ex.Message}. Body: {responseBody}");
+			}
 
-            if (response == null || response.Choices.Count == 0)
-            {
-                throw new InvalidOperationException($"Empty response from API: {responseBody}");
-            }
+			if (response == null || response.Choices.Count == 0)
+			{
+				throw new InvalidOperationException($"Empty response from API: {responseBody}");
+			}
 
-            if (response.Error != null)
-            {
-                throw new InvalidOperationException($"API error: {response.Error.Message}");
-            }
+			if (response.Error != null)
+			{
+				throw new InvalidOperationException($"API error: {response.Error.Message}");
+			}
 
-            if (response.Usage != null)
-            {
-                if (response.Usage.Cost.HasValue)
-                {
-                    accumulatedCost += response.Usage.Cost.Value;
-                }
-                else
-                {
-                    decimal inputCost = response.Usage.PromptTokens * _config.InputTokenPrice;
-                    decimal outputCost = response.Usage.CompletionTokens * _config.OutputTokenPrice;
-                    accumulatedCost += inputCost + outputCost;
-                }
-            }
+			if (response.Usage != null)
+			{
+				if (response.Usage.Cost.HasValue)
+				{
+					accumulatedCost += response.Usage.Cost.Value;
+				}
+				else
+				{
+					decimal inputCost = response.Usage.PromptTokens * _config.InputTokenPrice;
+					decimal outputCost = response.Usage.CompletionTokens * _config.OutputTokenPrice;
+					accumulatedCost += inputCost + outputCost;
+				}
+			}
 
-            ChatChoice choice = response.Choices[0];
-            ChatMessage assistantMessage = choice.Message;
-            conversation.AddAssistantMessage(assistantMessage);
+			ChatChoice choice = response.Choices[0];
+			ChatMessage assistantMessage = choice.Message;
+			conversation.AddAssistantMessage(assistantMessage);
 
-            if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
-            {
-                finalContent = assistantMessage.Content ?? string.Empty;
-                break;
-            }
+			if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
+			{
+				finalContent = assistantMessage.Content ?? string.Empty;
+				break;
+			}
 
-            foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
-            {
-                string toolResult = $"Error: Unknown tool '{toolCall.Function.Name}'";
+			foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
+			{
+				string toolResult = $"Error: Unknown tool '{toolCall.Function.Name}'";
 
-                foreach (Tool tool in tools)
-                {
-                    if (tool.Definition.Function.Name == toolCall.Function.Name)
-                    {
-                        JsonObject args;
-                        try
-                        {
-                            args = JsonNode.Parse(toolCall.Function.Arguments)?.AsObject() ?? new JsonObject();
-                        }
-                        catch
-                        {
-                            args = new JsonObject();
-                        }
+				foreach (Tool tool in tools)
+				{
+					if (tool.Definition.Function.Name == toolCall.Function.Name)
+					{
+						JsonObject args;
+						try
+						{
+							args = JsonNode.Parse(toolCall.Function.Arguments)?.AsObject() ?? new JsonObject();
+						}
+						catch
+						{
+							args = new JsonObject();
+						}
 
-                        try
-                        {
-                            toolResult = await tool.Handler(args);
-                        }
-                        catch (Exception ex)
-                        {
-                            toolResult = $"Error: {ex.Message}";
-                        }
-                        break;
-                    }
-                }
+						try
+						{
+							toolResult = await tool.Handler(args);
+						}
+						catch (Exception ex)
+						{
+							toolResult = $"Error: {ex.Message}";
+						}
+						break;
+					}
+				}
 
-                conversation.AddToolMessage(toolCall.Id, toolResult);
-            }
-        }
+				conversation.AddToolMessage(toolCall.Id, toolResult);
+			}
+		}
 
-        return new LlmResult
-        {
-            Content = finalContent,
-            AccumulatedCost = accumulatedCost
-        };
-    }
+		return new LlmResult
+		{
+			Content = finalContent,
+			AccumulatedCost = accumulatedCost
+		};
+	}
 }

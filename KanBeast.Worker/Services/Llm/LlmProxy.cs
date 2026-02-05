@@ -14,10 +14,13 @@ public class LlmProxy
     private readonly string _logPrefix;
     private readonly bool _jsonLogging;
     private int _currentLlmIndex;
+    private int _conversationIndex;
 
     public string LogDirectory => _logDirectory;
 
     public string LogPrefix => _logPrefix;
+
+    public bool JsonLogging => _jsonLogging;
 
     public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds, ICompaction compaction, string logDirectory, string logPrefix, bool jsonLogging)
     {
@@ -29,12 +32,7 @@ public class LlmProxy
         _logPrefix = logPrefix;
         _jsonLogging = jsonLogging;
         _currentLlmIndex = 0;
-
-        Console.WriteLine($"LlmProxy initialized with {configs.Count} LLM config(s)");
-        foreach (LLMConfig config in configs)
-        {
-            Console.WriteLine($"  - Model: {config.Model}, Endpoint: {config.Endpoint ?? "default"}, ContextLength: {config.ContextLength}");
-        }
+        _conversationIndex = 0;
     }
 
     public async Task<LlmResult> RunAsync(string systemPrompt, string userPrompt, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
@@ -48,13 +46,21 @@ public class LlmProxy
             throw new InvalidOperationException("All configured LLMs are unavailable.");
         }
 
-        LlmConversation conversation = new LlmConversation(_configs[_currentLlmIndex].Model, resolvedSystemPrompt, userPrompt);
+        _conversationIndex++;
+        string logPath = string.Empty;
+        if (!string.IsNullOrWhiteSpace(_logDirectory) && !string.IsNullOrWhiteSpace(_logPrefix))
+        {
+            long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            logPath = Path.Combine(_logDirectory, $"{_logPrefix}-{timestamp}-{_conversationIndex:D3}.log");
+        }
+
+        LlmConversation conversation = new LlmConversation(_configs[_currentLlmIndex].Model, resolvedSystemPrompt, userPrompt, logPath);
 
         while (_currentLlmIndex < _configs.Count && !succeeded)
         {
             LLMConfig config = _configs[_currentLlmIndex];
             string modelName = config.Model;
-            LlmService service = new LlmService(config, _compaction, _logDirectory, _logPrefix, _jsonLogging);
+            LlmService service = new LlmService(config, _compaction, _jsonLogging);
 
             int attempt = 0;
             while (attempt <= _retryCount && !succeeded)
@@ -91,10 +97,13 @@ public class LlmProxy
             }
         }
 
-        await conversation.WriteLogAsync(_logDirectory, _logPrefix, "complete", _jsonLogging, cancellationToken);
         if (succeeded)
         {
             conversation.MarkCompleted();
+			if (_jsonLogging)
+			{
+				await conversation.WriteLogAsync("-complete", cancellationToken);
+			}
         }
         else
         {

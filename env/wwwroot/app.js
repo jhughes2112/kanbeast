@@ -404,16 +404,30 @@ function formatRelativeTime(dateStr) {
 
 // Parse activity log entry into timestamp and message
 function parseLogEntry(logEntry) {
-    const timestampMatch = logEntry.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)$/);
+    if (!logEntry || typeof logEntry !== 'string') {
+        return {
+            timestamp: null,
+            message: logEntry || ''
+        };
+    }
+
+    const trimmed = logEntry.trim();
+    const timestampMatch = trimmed.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\] (.+)$/);
     if (timestampMatch) {
         return {
             timestamp: timestampMatch[1].replace(' ', 'T') + 'Z',
             message: timestampMatch[2]
         };
     }
+
+    // If no timestamp found, log it for debugging (only in console, not visible to user)
+    if (trimmed.startsWith('[')) {
+        console.debug('Failed to parse timestamp from log entry:', trimmed.substring(0, 50));
+    }
+
     return {
         timestamp: null,
-        message: logEntry
+        message: trimmed
     };
 }
 

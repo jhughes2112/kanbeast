@@ -6,13 +6,13 @@ namespace KanBeast.Worker.Services;
 // Defines the contract for context compaction strategies.
 public interface ICompaction
 {
-    Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, bool jsonFormat, CancellationToken cancellationToken);
+    Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, CancellationToken cancellationToken);
 }
 
 // Keeps context statements untouched when compaction is disabled.
 public class CompactionNone : ICompaction
 {
-    public Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, bool jsonFormat, CancellationToken cancellationToken)
+    public Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, CancellationToken cancellationToken)
     {
         return Task.FromResult(0m);
     }
@@ -40,20 +40,25 @@ public class CompactionSummarizer : ICompaction
         }
     }
 
-    public async Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, string logDirectory, string logPrefix, bool jsonFormat, CancellationToken cancellationToken)
+    public async Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, CancellationToken cancellationToken)
     {
         int messageSize = GetMessageSize(conversation.Messages);
 
         if (messageSize > _effectiveThreshold)
         {
+            Console.WriteLine($"[Compaction] Context size {messageSize} exceeds threshold {_effectiveThreshold}, summarizing...");
+
+            if (jsonFormat)
+            {
+                await conversation.WriteLogAsync("-pre-compact", cancellationToken);
+            }
+
             string messagesBlock = BuildMessagesBlock(conversation.Messages);
             string userPrompt = $"{_compactionPrompt}\n\nConversation:\n{messagesBlock}";
-            LlmConversation summaryConversation = new LlmConversation(conversation.Model, string.Empty, userPrompt);
+            LlmConversation summaryConversation = new LlmConversation(conversation.Model, string.Empty, userPrompt, string.Empty);
             List<IToolProvider> providers = new List<IToolProvider>();
             LlmResult result = await llmService.RunAsync(summaryConversation, providers, LlmRole.Compaction, cancellationToken);
             string summary = result.Content;
-
-            await conversation.WriteLogAsync(logDirectory, logPrefix, "pre-compact", jsonFormat, cancellationToken);
 
             // Keep system message, replace everything else with summary as a user message
             ChatMessage? systemMessage = null;
@@ -70,6 +75,8 @@ public class CompactionSummarizer : ICompaction
             }
 
             conversation.Messages.Add(new ChatMessage { Role = "user", Content = $"[Continuation summary]\n{summary}" });
+
+            Console.WriteLine($"[Compaction] Reduced to {GetMessageSize(conversation.Messages)} chars");
 
             return result.AccumulatedCost;
         }
