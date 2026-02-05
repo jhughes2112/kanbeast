@@ -70,8 +70,8 @@ public class AgentOrchestrator : IAgentOrchestrator
             MaxIterationsPerSubtask = _maxIterationsPerSubtask,
             ToolProvidersFactory = () => new List<IToolProvider>
             {
-                new ShellTools(workDir),
-                new FileTools(workDir),
+                new ShellTools(),
+                new FileTools(),
                 new TicketTools(_apiClient, ticketHolder, state)
             }
         };
@@ -80,8 +80,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 
         List<IToolProvider> toolProviders = new List<IToolProvider>
         {
-            new ShellTools(workDir),
-            new FileTools(workDir),
+            new ShellTools(),
+            new FileTools(),
             ticketTools
         };
 

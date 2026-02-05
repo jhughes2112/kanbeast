@@ -5,17 +5,17 @@ using System.Text.Json;
 namespace KanBeast.Worker.Services.Tools;
 
 // Tools for LLM to read and write files within allowed directories.
+// CWD is /workspace/, repo is at /workspace/repo/, skills at /workspace/skills/<skill-name>/Skill.md
+// File operations are restricted to /workspace/ or the user's home folder.
 public class FileTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
-    private static readonly string[] AllowedPrefixes = { "/app", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
+    private static readonly string[] AllowedPrefixes = { "/workspace", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
 
-    private readonly string _workDir;
     private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
 
-    public FileTools(string workDir)
+    public FileTools()
     {
-        _workDir = workDir;
         _toolsByRole = BuildToolsByRole();
     }
 
@@ -56,18 +56,19 @@ public class FileTools : IToolProvider
         }
     }
 
-    // Validates that a path is within allowed directories.
-    private string? ValidatePath(string path)
+    // Validates that a path is within allowed directories (/workspace or user home).
+    private static string? ValidatePath(string path, out string fullPath)
     {
+        fullPath = string.Empty;
+
         if (string.IsNullOrWhiteSpace(path))
         {
             return "Error: Path cannot be empty";
         }
 
-        string fullPath;
         try
         {
-            fullPath = Path.GetFullPath(Path.Combine(_workDir, path));
+            fullPath = Path.GetFullPath(path);
         }
         catch (Exception ex)
         {
@@ -84,29 +85,19 @@ public class FileTools : IToolProvider
             }
         }
 
-        if (!allowed && fullPath.StartsWith(_workDir, StringComparison.OrdinalIgnoreCase))
-        {
-            allowed = true;
-        }
-
         if (!allowed)
         {
-            return $"Error: Access denied. Path must be within working directory or /app";
+            return "Error: Access denied. Path must be within /workspace or user home folder";
         }
 
         return null;
     }
 
-    private string GetFullPath(string path)
-    {
-        return Path.GetFullPath(Path.Combine(_workDir, path));
-    }
-
     [Description("Read the entire contents of a file.")]
     public async Task<string> ReadFileAsync(
-        [Description("Path to the file")] string filePath)
+        [Description("Path to the file (absolute or relative to /workspace)")] string filePath)
     {
-        string? error = ValidatePath(filePath);
+        string? error = ValidatePath(filePath, out string fullPath);
         if (error != null)
         {
             return error;
@@ -114,7 +105,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(filePath);
             if (!File.Exists(fullPath))
             {
                 return $"Error: File not found: {filePath}";
@@ -142,11 +132,11 @@ public class FileTools : IToolProvider
 
     [Description("Read specific line ranges from a file with line number prefixes. Lines are 1-based.")]
     public async Task<string> ReadFileLinesAsync(
-        [Description("Path to the file")] string filePath,
+        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
         [Description("Starting line number (1-based)")] int startLine,
         [Description("Ending line number (inclusive)")] int endLine)
     {
-        string? error = ValidatePath(filePath);
+        string? error = ValidatePath(filePath, out string fullPath);
         if (error != null)
         {
             return error;
@@ -154,7 +144,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(filePath);
             if (!File.Exists(fullPath))
             {
                 return $"Error: File not found: {filePath}";
@@ -202,13 +191,13 @@ public class FileTools : IToolProvider
         }
     }
 
-    [Description("Search for a pattern in a file and return matching lines with context. Returns line numbers and surrounding lines.")]
+    [Description("Search for a pattern in a file and return matching lines with context.")]
     public async Task<string> SearchInFileAsync(
-        [Description("Path to the file")] string filePath,
+        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
         [Description("Text pattern to search for (case-insensitive)")] string pattern,
         [Description("Number of context lines above and below each match")] int contextLines)
     {
-        string? error = ValidatePath(filePath);
+        string? error = ValidatePath(filePath, out string fullPath);
         if (error != null)
         {
             return error;
@@ -231,7 +220,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(filePath);
             if (!File.Exists(fullPath))
             {
                 return $"Error: File not found: {filePath}";
@@ -304,10 +292,10 @@ public class FileTools : IToolProvider
 
     [Description("Write content to a file, creating or overwriting as needed.")]
     public async Task<string> WriteFileAsync(
-        [Description("Path to the file")] string filePath,
+        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
         [Description("Content to write")] string content)
     {
-        string? error = ValidatePath(filePath);
+        string? error = ValidatePath(filePath, out string fullPath);
         if (error != null)
         {
             return error;
@@ -315,7 +303,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(filePath);
             string? directory = Path.GetDirectoryName(fullPath);
             if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
             {
@@ -339,10 +326,10 @@ public class FileTools : IToolProvider
 
     [Description("Create a new file. Fails if file already exists.")]
     public async Task<string> CreateFileAsync(
-        [Description("Path to the file")] string filePath,
+        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
         [Description("Content to write")] string content)
     {
-        string? error = ValidatePath(filePath);
+        string? error = ValidatePath(filePath, out string fullPath);
         if (error != null)
         {
             return error;
@@ -350,7 +337,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(filePath);
             if (File.Exists(fullPath))
             {
                 return $"Error: File already exists: {filePath}. Use write_file to overwrite.";
@@ -379,11 +365,11 @@ public class FileTools : IToolProvider
 
     [Description("Replace a single exact block of text in a file. oldContent must match exactly once.")]
     public async Task<string> EditFileAsync(
-        [Description("Path to the file")] string filePath,
+        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
         [Description("Exact text to find and replace")] string oldContent,
         [Description("Replacement text")] string newContent)
     {
-        string? error = ValidatePath(filePath);
+        string? error = ValidatePath(filePath, out string fullPath);
         if (error != null)
         {
             return error;
@@ -396,7 +382,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(filePath);
             if (!File.Exists(fullPath))
             {
                 return $"Error: File not found: {filePath}";
@@ -434,9 +419,9 @@ public class FileTools : IToolProvider
 
     [Description("List files and directories in a directory.")]
     public Task<string> ListFilesAsync(
-        [Description("Path to the directory")] string directoryPath)
+        [Description("Path to the directory (absolute or relative to /workspace)")] string directoryPath)
     {
-        string? error = ValidatePath(directoryPath);
+        string? error = ValidatePath(directoryPath, out string fullPath);
         if (error != null)
         {
             return Task.FromResult(error);
@@ -444,7 +429,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(directoryPath);
             if (!Directory.Exists(fullPath))
             {
                 return Task.FromResult($"Error: Directory not found: {directoryPath}");
@@ -476,11 +460,11 @@ public class FileTools : IToolProvider
 
     [Description("Search for files by name pattern. Returns matching paths.")]
     public Task<string> SearchFilesAsync(
-        [Description("Directory to search in")] string directoryPath,
+        [Description("Path to directory to search in (absolute or relative to /workspace)")] string directoryPath,
         [Description("Pattern to search for in file names")] string searchPattern,
         [Description("Maximum results to return")] int maxResults)
     {
-        string? error = ValidatePath(directoryPath);
+        string? error = ValidatePath(directoryPath, out string fullPath);
         if (error != null)
         {
             return Task.FromResult(error);
@@ -493,7 +477,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(directoryPath);
             if (!Directory.Exists(fullPath))
             {
                 return Task.FromResult($"Error: Directory not found: {directoryPath}");
@@ -537,24 +520,23 @@ public class FileTools : IToolProvider
 
     [Description("Check if a file exists.")]
     public Task<string> FileExistsAsync(
-        [Description("Path to the file")] string filePath)
+        [Description("Path to the file (absolute or relative to /workspace)")] string filePath)
     {
-        string? error = ValidatePath(filePath);
+        string? error = ValidatePath(filePath, out string fullPath);
         if (error != null)
         {
             return Task.FromResult(error);
         }
 
-        string fullPath = GetFullPath(filePath);
         bool exists = File.Exists(fullPath);
         return Task.FromResult(exists ? "true" : "false");
     }
 
     [Description("Delete a file.")]
     public Task<string> RemoveFileAsync(
-        [Description("Path to the file")] string filePath)
+        [Description("Path to the file (absolute or relative to /workspace)")] string filePath)
     {
-        string? error = ValidatePath(filePath);
+        string? error = ValidatePath(filePath, out string fullPath);
         if (error != null)
         {
             return Task.FromResult(error);
@@ -562,7 +544,6 @@ public class FileTools : IToolProvider
 
         try
         {
-            string fullPath = GetFullPath(filePath);
             if (!File.Exists(fullPath))
             {
                 return Task.FromResult($"Error: File not found: {filePath}");

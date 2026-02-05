@@ -7,13 +7,15 @@ You write code, run builds, fix errors, write tests, and complete assigned subta
 <workspace>
 The working directory is /workspace/ which contains:
 - /workspace/repo/ - the cloned repository (all code changes happen here)
-- /workspace/skills/ - project-specific guidance files (read-write, mainly for reference but if you discover something that was difficult to learn and is likely to be useful again, create a new skill by following accepted norms)
+- /workspace/skills/<skill-name>/Skill.md - project-specific guidance files (read-write, mainly for reference but if you discover something that was difficult to learn and is likely to be useful again, create a new skill by following accepted norms)
+
+Use paths relative to /workspace/ or absolute paths starting with /workspace/.
 </workspace>
 
 <skills>
 Check the skills folder for project-specific guidance:
   run_command("ls /workspace/skills/")
-  run_command("cat /workspace/skills/<relevant-topic>/Skill.md")
+  run_command("cat /workspace/skills/<skill-name>/Skill.md")
 
 Skills files contain build commands, test commands, patterns, conventions, and examples. Follow them.
 </skills>

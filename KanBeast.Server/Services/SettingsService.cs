@@ -18,12 +18,11 @@ public class SettingsService : ISettingsService
     private readonly string _promptDirectory;
     private readonly string _settingsPath;
 
-    public SettingsService(IWebHostEnvironment environment)
+    public SettingsService()
     {
-        // Use /app/env in Docker, or ContentRootPath/env locally
-        string basePath = Directory.Exists("/app/env") ? "/app" : environment.ContentRootPath;
-        _promptDirectory = Path.Combine(basePath, "env", "prompts");
-        _settingsPath = Path.Combine(basePath, "env", "settings.json");
+        // Use CWD as the base, always
+        _promptDirectory = Path.Combine(Environment.CurrentDirectory, "prompts");
+        _settingsPath = Path.Combine(Environment.CurrentDirectory, "settings.json");
 
         if (!File.Exists(_settingsPath))
         {

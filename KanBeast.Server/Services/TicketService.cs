@@ -31,13 +31,11 @@ public class TicketService : ITicketService
     private readonly object _idLock = new();
     private int _nextTicketId = 1;
 
-    public TicketService(IWebHostEnvironment environment, ILogger<TicketService> logger)
+    public TicketService(ILogger<TicketService> logger)
     {
         _logger = logger;
 
-        // Use /app/env in Docker, or ContentRootPath/env locally
-        string basePath = Directory.Exists("/app/env") ? "/app" : environment.ContentRootPath;
-        _ticketsDirectory = Path.Combine(basePath, "env", "tickets");
+        _ticketsDirectory = Path.Combine(Environment.CurrentDirectory, "tickets");
         Directory.CreateDirectory(_ticketsDirectory);
 
         _logger.LogInformation("Tickets directory: {Path}", _ticketsDirectory);

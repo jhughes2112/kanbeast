@@ -4,17 +4,17 @@ using System.Diagnostics;
 namespace KanBeast.Worker.Services.Tools;
 
 // Tools for LLM to execute shell commands within allowed directories.
+// CWD is /workspace/, repo is at /workspace/repo/, skills at /workspace/skills/<skill-name>/Skill.md
+// File operations are restricted to /workspace/ or the user's home folder.
 public class ShellTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
-    private static readonly string[] AllowedPrefixes = { "/app", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
+    private static readonly string[] AllowedPrefixes = { "/workspace", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
 
-    private readonly string _workDir;
     private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
 
-    public ShellTools(string workDir)
+    public ShellTools()
     {
-        _workDir = workDir;
         _toolsByRole = BuildToolsByRole();
     }
 
@@ -45,8 +45,8 @@ public class ShellTools : IToolProvider
         }
     }
 
-    // Validates that a working directory is within allowed paths.
-    private string? ValidateWorkDir(string workDir)
+    // Validates that a working directory is within allowed paths (/workspace or user home).
+    private static string? ValidateWorkDir(string workDir)
     {
         if (string.IsNullOrWhiteSpace(workDir))
         {
@@ -73,14 +73,9 @@ public class ShellTools : IToolProvider
             }
         }
 
-        if (!allowed && fullPath.StartsWith(_workDir, StringComparison.OrdinalIgnoreCase))
-        {
-            allowed = true;
-        }
-
         if (!allowed)
         {
-            return $"Error: Access denied. Working directory must be within allowed paths.";
+            return "Error: Access denied. Working directory must be within /workspace or user home folder";
         }
 
         if (!Directory.Exists(fullPath))
@@ -91,10 +86,10 @@ public class ShellTools : IToolProvider
         return null;
     }
 
-    [Description("Execute a shell command in the specified working directory.")]
+    [Description("Execute a shell command.")]
     public async Task<string> RunCommandAsync(
         [Description("Command to execute")] string command,
-        [Description("Working directory for the command")] string workDir)
+        [Description("Working directory (absolute or relative to /workspace)")] string workDir)
     {
         if (string.IsNullOrWhiteSpace(command))
         {
