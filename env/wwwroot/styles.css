@@ -631,6 +631,17 @@ nav {
     margin-bottom: 1.5rem;
 }
 
+.detail-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--gray-800);
+    margin-bottom: 0.75rem;
+}
+
+#ticketDetailModal .modal-header {
+    display: none;
+}
+
 .detail-section h3 {
     font-size: 0.875rem;
     font-weight: 600;
@@ -749,6 +760,15 @@ nav {
     align-items: center;
     justify-content: space-between;
     gap: 0.5rem;
+    transition: background 0.2s ease;
+    border-radius: var(--radius);
+    padding: 0.25rem;
+    margin: -0.25rem;
+}
+
+.task-item[data-has-description="true"] .task-name-row:hover {
+    background: var(--gray-200);
+    cursor: pointer;
 }
 
 .task-description-full {
@@ -771,23 +791,6 @@ nav {
     padding: 0.25rem;
     transition: transform 0.2s ease;
     flex-shrink: 0;
-}
-
-.task-item[data-has-description="true"],
-.subtask-item[data-has-description="true"] {
-    cursor: pointer;
-    transition: background 0.2s ease;
-}
-
-.task-item[data-has-description="true"]:hover {
-    background: var(--gray-200);
-}
-
-.subtask-item[data-has-description="true"]:hover {
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: var(--radius);
-    margin: 0 -0.25rem;
-    padding: 0.25rem 0.25rem;
 }
 
 .task-item.completed .task-name {
@@ -813,6 +816,15 @@ nav {
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    transition: background 0.2s ease;
+    border-radius: var(--radius);
+    padding: 0.25rem;
+    margin: -0.25rem;
+}
+
+.subtask-item[data-has-description="true"] .subtask-name-row:hover {
+    background: rgba(255, 255, 255, 0.05);
+    cursor: pointer;
 }
 
 .subtask-name {

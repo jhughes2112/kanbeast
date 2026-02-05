@@ -36,7 +36,15 @@ public class LlmConversation
             }
 
             string header = $"# LLM Conversation Log\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
+            Console.Write(header);
             File.WriteAllText(_logPath, header);
+            AppendMessageToLog(systemMessage);
+            AppendMessageToLog(userMessage);
+        }
+        else
+        {
+            string header = $"# LLM Conversation Log\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
+            Console.Write(header);
             AppendMessageToLog(systemMessage);
             AppendMessageToLog(userMessage);
         }
@@ -76,17 +84,23 @@ public class LlmConversation
     {
         CompletedAt = DateTime.UtcNow.ToString("O");
 
+        string completionMessage = $"\n---\n**Completed:** {CompletedAt}\n";
+        Console.Write(completionMessage);
+
         if (!string.IsNullOrWhiteSpace(_logPath))
         {
-            File.AppendAllText(_logPath, $"\n---\n**Completed:** {CompletedAt}\n");
+            File.AppendAllText(_logPath, completionMessage);
         }
     }
 
     private void AppendMessageToLog(ChatMessage message)
     {
+        string formattedMessage = FormatMessage(message);
+        Console.Write(formattedMessage);
+
         if (!string.IsNullOrWhiteSpace(_logPath))
         {
-            File.AppendAllText(_logPath, FormatMessage(message));
+            File.AppendAllText(_logPath, formattedMessage);
         }
     }
 

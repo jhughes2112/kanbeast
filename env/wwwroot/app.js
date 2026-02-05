@@ -9,6 +9,7 @@ let settings = null;
 let connection = null;
 let currentDetailTicketId = null;
 let activityLogExpanded = false;
+let expandedDescriptions = { tasks: {}, subtasks: {} };
 
 // Allowed status transitions
 // Backlog -> Active (start work)
@@ -433,7 +434,12 @@ function parseLogEntry(logEntry) {
 
 // Ticket details modal
 async function showTicketDetails(ticketId) {
+    const wasOpen = currentDetailTicketId === ticketId;
     currentDetailTicketId = ticketId;
+
+    if (!wasOpen) {
+        expandedDescriptions = { tasks: {}, subtasks: {} };
+    }
 
     const response = await fetch(`${API_BASE}/tickets/${ticketId}`);
 
@@ -448,7 +454,7 @@ async function showTicketDetails(ticketId) {
     const detailDiv = document.getElementById('ticketDetail');
     const status = ticket.status || 'Backlog';
 
-    titleEl.textContent = ticket.title;
+    // Title will be placed in the detail section below
 
     // Build task/subtask HTML with status icons
     // Statuses: Incomplete=0, InProgress=1, AwaitingReview=2, Complete=3, Rejected=4
@@ -613,6 +619,7 @@ async function showTicketDetails(ticketId) {
         </div>
 
         <div class="detail-section">
+            <h2 class="detail-title">${escapeHtml(ticket.title)}</h2>
             <p>${escapeHtml(ticket.description || 'No description provided.')}</p>
         </div>
 
@@ -629,35 +636,85 @@ async function showTicketDetails(ticketId) {
 
     modal.classList.add('active');
 
-    // Add click handlers for expandable tasks and subtasks
+    // Add click handlers for expandable tasks and subtasks with single expansion and state preservation
     detailDiv.querySelectorAll('.task-item[data-has-description="true"]').forEach(taskItem => {
+        const taskIndex = taskItem.dataset.taskIndex;
+        const descDiv = taskItem.querySelector('.task-description-full');
+        const indicator = taskItem.querySelector('.expand-indicator');
+
+        if (expandedDescriptions.tasks[taskIndex]) {
+            descDiv.style.display = 'block';
+            if (indicator) indicator.textContent = '▼';
+        }
+
         taskItem.addEventListener('click', (e) => {
             if (e.target.closest('.subtask-item')) {
                 return;
             }
-            const descDiv = taskItem.querySelector('.task-description-full');
-            if (descDiv) {
-                const isVisible = descDiv.style.display !== 'none';
-                descDiv.style.display = isVisible ? 'none' : 'block';
-                const indicator = taskItem.querySelector('.expand-indicator');
-                if (indicator) {
-                    indicator.textContent = isVisible ? 'ⓘ' : '▼';
-                }
+            const isVisible = descDiv.style.display !== 'none';
+
+            if (!isVisible) {
+                Object.keys(expandedDescriptions.tasks).forEach(key => {
+                    expandedDescriptions.tasks[key] = false;
+                });
+                Object.keys(expandedDescriptions.subtasks).forEach(key => {
+                    expandedDescriptions.subtasks[key] = false;
+                });
+                detailDiv.querySelectorAll('.task-description-full, .subtask-description-full').forEach(div => {
+                    div.style.display = 'none';
+                });
+                detailDiv.querySelectorAll('.expand-indicator').forEach(ind => {
+                    ind.textContent = 'ⓘ';
+                });
+
+                descDiv.style.display = 'block';
+                if (indicator) indicator.textContent = '▼';
+                expandedDescriptions.tasks[taskIndex] = true;
+            } else {
+                descDiv.style.display = 'none';
+                if (indicator) indicator.textContent = 'ⓘ';
+                expandedDescriptions.tasks[taskIndex] = false;
             }
         });
     });
 
     detailDiv.querySelectorAll('.subtask-item[data-has-description="true"]').forEach(subtaskItem => {
+        const taskIndex = subtaskItem.closest('.task-item').dataset.taskIndex;
+        const subtaskIndex = subtaskItem.dataset.subtaskIndex;
+        const stKey = `${taskIndex}-${subtaskIndex}`;
+        const descDiv = subtaskItem.querySelector('.subtask-description-full');
+        const indicator = subtaskItem.querySelector('.expand-indicator');
+
+        if (expandedDescriptions.subtasks[stKey]) {
+            descDiv.style.display = 'block';
+            if (indicator) indicator.textContent = '▼';
+        }
+
         subtaskItem.addEventListener('click', (e) => {
             e.stopPropagation();
-            const descDiv = subtaskItem.querySelector('.subtask-description-full');
-            if (descDiv) {
-                const isVisible = descDiv.style.display !== 'none';
-                descDiv.style.display = isVisible ? 'none' : 'block';
-                const indicator = subtaskItem.querySelector('.expand-indicator');
-                if (indicator) {
-                    indicator.textContent = isVisible ? 'ⓘ' : '▼';
-                }
+            const isVisible = descDiv.style.display !== 'none';
+
+            if (!isVisible) {
+                Object.keys(expandedDescriptions.tasks).forEach(key => {
+                    expandedDescriptions.tasks[key] = false;
+                });
+                Object.keys(expandedDescriptions.subtasks).forEach(key => {
+                    expandedDescriptions.subtasks[key] = false;
+                });
+                detailDiv.querySelectorAll('.task-description-full, .subtask-description-full').forEach(div => {
+                    div.style.display = 'none';
+                });
+                detailDiv.querySelectorAll('.expand-indicator').forEach(ind => {
+                    ind.textContent = 'ⓘ';
+                });
+
+                descDiv.style.display = 'block';
+                if (indicator) indicator.textContent = '▼';
+                expandedDescriptions.subtasks[stKey] = true;
+            } else {
+                descDiv.style.display = 'none';
+                if (indicator) indicator.textContent = 'ⓘ';
+                expandedDescriptions.subtasks[stKey] = false;
             }
         });
     });
