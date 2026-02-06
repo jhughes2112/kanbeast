@@ -746,6 +746,46 @@ nav {
     margin-bottom: 0.75rem;
 }
 
+.editable-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.edit-title-input {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: var(--gray-800);
+    background: var(--gray-100);
+    border: 1px solid var(--gray-300);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    width: 100%;
+}
+
+.edit-title-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
+.edit-description-input {
+    font-size: 1rem;
+    color: var(--gray-700);
+    background: var(--gray-100);
+    border: 1px solid var(--gray-300);
+    border-radius: var(--radius);
+    padding: 0.5rem 0.75rem;
+    width: 100%;
+    resize: vertical;
+    font-family: inherit;
+    line-height: 1.6;
+}
+
+.edit-description-input:focus {
+    outline: none;
+    border-color: var(--primary);
+}
+
 #ticketDetailModal .modal-header {
     display: none;
 }
@@ -762,6 +802,7 @@ nav {
 .detail-section p {
     color: var(--gray-700);
     line-height: 1.6;
+    white-space: pre-wrap;
 }
 
 .task-list {
