@@ -357,14 +357,7 @@ public class TicketTools : IToolProvider
 
                 if (_developerConfig.Conversation == null)
                 {
-                    string initialPrompt = $"""
-                        You are a developer working on this repository: {_developerConfig.WorkDir}
-
-                        The manager will give you instructions. When you have completed the work or need to respond, call tell_manager with your response.
-
-                        Manager says: {message}
-                        """;
-
+                    string initialPrompt = $"Manager says: {message}";
                     _developerConfig.Conversation = _developerConfig.LlmProxy.CreateConversation(_developerConfig.Prompt, initialPrompt);
                 }
                 else

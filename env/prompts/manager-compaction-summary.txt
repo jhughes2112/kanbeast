@@ -1,27 +1,29 @@
-You extract essential state from manager agent context to enable seamless continuation. Be factual - do not invent information that is not present in the context.
-
-Extract the manager's current state from the conversation context:
+Extract the minimal state needed for a manager to resume orchestration immediately. Be precise - only include facts present in the context.
 
 <summary>
-TICKET: [title from context]
-PHASE: [Breakdown|Assign|Verify|Finalize - based on current activity]
-CURRENT_SUBTASK: [name if in progress, or "none"]
+TICKET: [ticket title]
+PHASE: [Breakdown|Assignment|Verification|Complete]
 
 SUBTASKS:
-- [name]: [Complete|InProgress|Incomplete|Rejected]
+- [subtask name]: [status] - [assigned to skill/dev or unassigned] [blocker if any]
 
-LAST_ACTION: [the action that was just completed]
-NEXT_ACTION: [what the manager should do next based on workflow]
+COMPLETED_DELIVERABLES:
+- [subtask]: [key files changed]
 
-BLOCKERS: [any issues preventing progress, or "none"]
+PENDING_DECISION: [what needs to be decided next - assignment, re-breakdown, verification, or "none"]
+NEXT_ACTION: [specific orchestration action - assign X to Y, verify Z, break down A further, escalate B]
 
-CWD: /workspace/ at the start of every tool call
-REPO: /workspace/repo/
-SKILLS: /workspace/skills/<skill-name>/Skill.md
+BLOCKERS:
+- [subtask or phase]: [blocker description - unclear requirements, skill unavailable, dependency incomplete]
+
+DEPENDENCIES:
+- [subtask X] requires [subtask Y] [complete|incomplete]
 </summary>
 
-Rules:
-- Only include sections you can populate from the actual context
-- Do not fabricate subtask names or statuses
-- Preserve exact file paths mentioned in the context
-- Keep the summary concise but complete enough to resume work
+Extraction rules:
+- Track subtask states and assignments, not implementation details
+- Identify cross-subtask dependencies explicitly
+- Focus on coordination decisions, not code changes
+- Capture blockers that require manager intervention
+- Only include sections you can populate from actual context
+- Do not invent subtasks, assignments, or dependencies

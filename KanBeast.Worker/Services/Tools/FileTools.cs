@@ -4,44 +4,40 @@ using System.Text.Json;
 
 namespace KanBeast.Worker.Services.Tools;
 
-// Tools for LLM to read and write files within allowed directories.
-// CWD is /workspace/, repo is at /workspace/repo/, skills at /workspace/skills/<skill-name>/Skill.md
-// File operations are restricted to /workspace/ or the user's home folder.
+// Tools for LLM to read and write files.
+// Default CWD is the git repository folder.
 public class FileTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
-    private static readonly string[] AllowedPrefixes = { "/workspace", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
 
+    private readonly string _workDir;
     private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
 
-    public FileTools()
+    public FileTools(string workDir)
     {
+        _workDir = workDir;
         _toolsByRole = BuildToolsByRole();
+    }
+
+    private string ResolvePath(string path)
+    {
+        if (Path.IsPathRooted(path))
+        {
+            return Path.GetFullPath(path);
+        }
+
+        return Path.GetFullPath(Path.Combine(_workDir, path));
     }
 
     private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
     {
         List<Tool> readOnlyTools = new List<Tool>();
-        ToolHelper.AddTools(readOnlyTools, this,
-            nameof(ReadFileAsync),
-            nameof(ReadFileLinesAsync),
-            nameof(SearchInFileAsync),
-            nameof(ListFilesAsync),
-            nameof(SearchFilesAsync),
-            nameof(FileExistsAsync));
+        ToolHelper.AddTools(readOnlyTools, this);  // empty, read only does not get edit tools
 
         List<Tool> developerTools = new List<Tool>();
         ToolHelper.AddTools(developerTools, this,
-            nameof(ReadFileAsync),
-            nameof(ReadFileLinesAsync),
-            nameof(SearchInFileAsync),
-            nameof(WriteFileAsync),
-            nameof(CreateFileAsync),
-            nameof(EditFileAsync),
-            nameof(ListFilesAsync),
-            nameof(SearchFilesAsync),
-            nameof(FileExistsAsync),
-            nameof(RemoveFileAsync));
+            nameof(WriteFileAsync),  // this helps with dumb models, mostly
+            nameof(EditFileAsync));  // this one helps with file editing a lot
 
         Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
@@ -65,250 +61,17 @@ public class FileTools : IToolProvider
         }
     }
 
-    // Validates that a path is within allowed directories (/workspace or user home).
-    private static string? ValidatePath(string path, out string fullPath)
+    [Description("Write content to a file, creating or overwriting as needed.")]
+    public async Task<string> WriteFileAsync(
+        [Description("Path to the file (absolute or relative to repository)")] string filePath,
+        [Description("Content to write")] string content)
     {
-        fullPath = string.Empty;
-
-        if (string.IsNullOrWhiteSpace(path))
+        if (string.IsNullOrWhiteSpace(filePath))
         {
             return "Error: Path cannot be empty";
         }
 
-        try
-        {
-            fullPath = Path.GetFullPath(path);
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Invalid path: {ex.Message}";
-        }
-
-        bool allowed = false;
-        foreach (string prefix in AllowedPrefixes)
-        {
-            if (!string.IsNullOrEmpty(prefix) && fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                allowed = true;
-                break;
-            }
-        }
-
-        if (!allowed)
-        {
-            return "Error: Access denied. Path must be within /workspace or user home folder";
-        }
-
-        return null;
-    }
-
-    [Description("Read the entire contents of a file.")]
-    public async Task<string> ReadFileAsync(
-        [Description("Path to the file (absolute or relative to /workspace)")] string filePath)
-    {
-        string? error = ValidatePath(filePath, out string fullPath);
-        if (error != null)
-        {
-            return error;
-        }
-
-        try
-        {
-            if (!File.Exists(fullPath))
-            {
-                return $"Error: File not found: {filePath}";
-            }
-
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            string content = await File.ReadAllTextAsync(fullPath, cts.Token);
-
-            if (content.Length > 100000)
-            {
-                return content.Substring(0, 100000) + "\n\n[Content truncated at 100000 characters. Use read_file_lines for specific sections.]";
-            }
-
-            return content;
-        }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Timed out reading file: {filePath}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to read file: {ex.Message}";
-        }
-    }
-
-    [Description("Read specific line ranges from a file with line number prefixes. Lines are 1-based.")]
-    public async Task<string> ReadFileLinesAsync(
-        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
-        [Description("Starting line number (1-based)")] int startLine,
-        [Description("Ending line number (inclusive)")] int endLine)
-    {
-        string? error = ValidatePath(filePath, out string fullPath);
-        if (error != null)
-        {
-            return error;
-        }
-
-        try
-        {
-            if (!File.Exists(fullPath))
-            {
-                return $"Error: File not found: {filePath}";
-            }
-
-            if (startLine < 1)
-            {
-                startLine = 1;
-            }
-
-            if (endLine < startLine)
-            {
-                endLine = startLine;
-            }
-
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            string[] allLines = await File.ReadAllLinesAsync(fullPath, cts.Token);
-            int maxLine = allLines.Length;
-
-            if (startLine > maxLine)
-            {
-                return $"Error: Start line {startLine} exceeds file length of {maxLine} lines";
-            }
-
-            if (endLine > maxLine)
-            {
-                endLine = maxLine;
-            }
-
-            StringBuilder result = new StringBuilder();
-            for (int i = startLine - 1; i < endLine; i++)
-            {
-                result.AppendLine($"{i + 1}: {allLines[i]}");
-            }
-
-            return result.ToString().TrimEnd();
-        }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Timed out reading file: {filePath}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to read file: {ex.Message}";
-        }
-    }
-
-    [Description("Search for a pattern in a file and return matching lines with context.")]
-    public async Task<string> SearchInFileAsync(
-        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
-        [Description("Text pattern to search for (case-insensitive)")] string pattern,
-        [Description("Number of context lines above and below each match")] int contextLines)
-    {
-        string? error = ValidatePath(filePath, out string fullPath);
-        if (error != null)
-        {
-            return error;
-        }
-
-        if (string.IsNullOrWhiteSpace(pattern))
-        {
-            return "Error: Search pattern cannot be empty";
-        }
-
-        if (contextLines < 0)
-        {
-            contextLines = 0;
-        }
-
-        if (contextLines > 20)
-        {
-            contextLines = 20;
-        }
-
-        try
-        {
-            if (!File.Exists(fullPath))
-            {
-                return $"Error: File not found: {filePath}";
-            }
-
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            string[] allLines = await File.ReadAllLinesAsync(fullPath, cts.Token);
-
-            List<int> matchingLines = new List<int>();
-            for (int i = 0; i < allLines.Length; i++)
-            {
-                if (allLines[i].Contains(pattern, StringComparison.OrdinalIgnoreCase))
-                {
-                    matchingLines.Add(i);
-                }
-            }
-
-            if (matchingLines.Count == 0)
-            {
-                return $"No matches found for: {pattern}";
-            }
-
-            HashSet<int> linesToInclude = new HashSet<int>();
-            foreach (int matchLine in matchingLines)
-            {
-                int start = Math.Max(0, matchLine - contextLines);
-                int end = Math.Min(allLines.Length - 1, matchLine + contextLines);
-                for (int i = start; i <= end; i++)
-                {
-                    linesToInclude.Add(i);
-                }
-            }
-
-            StringBuilder result = new StringBuilder();
-            result.AppendLine($"Found {matchingLines.Count} match(es) for '{pattern}':");
-            result.AppendLine();
-
-            List<int> sortedLines = linesToInclude.OrderBy(x => x).ToList();
-            int lastLine = -2;
-
-            foreach (int lineIndex in sortedLines)
-            {
-                if (lastLine >= 0 && lineIndex > lastLine + 1)
-                {
-                    result.AppendLine("...");
-                }
-
-                string marker = matchingLines.Contains(lineIndex) ? ">" : " ";
-                result.AppendLine($"{marker}{lineIndex + 1}: {allLines[lineIndex]}");
-                lastLine = lineIndex;
-            }
-
-            string output = result.ToString().TrimEnd();
-            if (output.Length > 50000)
-            {
-                output = output.Substring(0, 50000) + "\n[Output truncated - too many matches. Use a more specific pattern.]";
-            }
-
-            return output;
-        }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Timed out searching file: {filePath}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to search file: {ex.Message}";
-        }
-    }
-
-    [Description("Write content to a file, creating or overwriting as needed.")]
-    public async Task<string> WriteFileAsync(
-        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
-        [Description("Content to write")] string content)
-    {
-        string? error = ValidatePath(filePath, out string fullPath);
-        if (error != null)
-        {
-            return error;
-        }
+        string fullPath = ResolvePath(filePath);
 
         try
         {
@@ -333,56 +96,18 @@ public class FileTools : IToolProvider
         }
     }
 
-    [Description("Create a new file. Fails if file already exists.")]
-    public async Task<string> CreateFileAsync(
-        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
-        [Description("Content to write")] string content)
-    {
-        string? error = ValidatePath(filePath, out string fullPath);
-        if (error != null)
-        {
-            return error;
-        }
-
-        try
-        {
-            if (File.Exists(fullPath))
-            {
-                return $"Error: File already exists: {filePath}. Use write_file to overwrite.";
-            }
-
-            string? directory = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-            {
-                Directory.CreateDirectory(directory);
-            }
-
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            await File.WriteAllTextAsync(fullPath, content ?? string.Empty, cts.Token);
-
-            return $"File created: {filePath}";
-        }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Timed out creating file: {filePath}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to create file: {ex.Message}";
-        }
-    }
-
     [Description("Replace a single exact block of text in a file. oldContent must match exactly once.")]
     public async Task<string> EditFileAsync(
-        [Description("Path to the file (absolute or relative to /workspace)")] string filePath,
+        [Description("Path to the file (absolute or relative to repository)")] string filePath,
         [Description("Exact text to find and replace")] string oldContent,
         [Description("Replacement text")] string newContent)
     {
-        string? error = ValidatePath(filePath, out string fullPath);
-        if (error != null)
+        if (string.IsNullOrWhiteSpace(filePath))
         {
-            return error;
+            return "Error: Path cannot be empty";
         }
+
+        string fullPath = ResolvePath(filePath);
 
         if (string.IsNullOrEmpty(oldContent))
         {
@@ -423,188 +148,6 @@ public class FileTools : IToolProvider
         catch (Exception ex)
         {
             return $"Error: Failed to edit file: {ex.Message}";
-        }
-    }
-
-    [Description("List files and directories in a directory.")]
-    public Task<string> ListFilesAsync(
-        [Description("Path to the directory (absolute or relative to /workspace)")] string directoryPath)
-    {
-        string? error = ValidatePath(directoryPath, out string fullPath);
-        if (error != null)
-        {
-            return Task.FromResult(error);
-        }
-
-        try
-        {
-            if (!Directory.Exists(fullPath))
-            {
-                return Task.FromResult($"Error: Directory not found: {directoryPath}");
-            }
-
-            StringBuilder result = new StringBuilder();
-            result.AppendLine($"Contents of {directoryPath}:");
-
-            List<string> directories = new List<string>();
-            List<(string name, long size)> files = new List<(string, long)>();
-
-            foreach (string entry in Directory.EnumerateFileSystemEntries(fullPath, "*", SearchOption.TopDirectoryOnly))
-            {
-                string? name = Path.GetFileName(entry);
-                if (string.IsNullOrEmpty(name))
-                {
-                    continue;
-                }
-
-                if (Directory.Exists(entry))
-                {
-                    directories.Add(name);
-                }
-                else if (File.Exists(entry))
-                {
-                    FileInfo info = new FileInfo(entry);
-                    files.Add((name, info.Length));
-                }
-            }
-
-            foreach (string dir in directories.OrderBy(d => d))
-            {
-                result.AppendLine($"[DIR]  {dir}");
-            }
-
-            foreach ((string name, long size) in files.OrderBy(f => f.name))
-            {
-                string sizeStr = FormatFileSize(size);
-                result.AppendLine($"[FILE] {sizeStr,8}  {name}");
-            }
-
-            string output = result.ToString().TrimEnd();
-            if (directories.Count == 0 && files.Count == 0)
-            {
-                return Task.FromResult($"Contents of {directoryPath}:\nDirectory is empty");
-            }
-
-            return Task.FromResult(output);
-        }
-        catch (Exception ex)
-        {
-            return Task.FromResult($"Error: Failed to list directory: {ex.Message}");
-        }
-    }
-
-    private static string FormatFileSize(long bytes)
-    {
-        string[] suffixes = { "B", "KB", "MB", "GB" };
-        int suffixIndex = 0;
-        double size = bytes;
-
-        while (size >= 1024 && suffixIndex < suffixes.Length - 1)
-        {
-            size /= 1024;
-            suffixIndex++;
-        }
-
-        return $"{size:0.#}{suffixes[suffixIndex]}";
-    }
-
-    [Description("Search for files by name pattern. Returns matching paths.")]
-    public Task<string> SearchFilesAsync(
-        [Description("Path to directory to search in (absolute or relative to /workspace)")] string directoryPath,
-        [Description("Pattern to search for in file names")] string searchPattern,
-        [Description("Maximum results to return")] int maxResults)
-    {
-        string? error = ValidatePath(directoryPath, out string fullPath);
-        if (error != null)
-        {
-            return Task.FromResult(error);
-        }
-
-        if (string.IsNullOrWhiteSpace(searchPattern))
-        {
-            return Task.FromResult("Error: Search pattern cannot be empty");
-        }
-
-        try
-        {
-            if (!Directory.Exists(fullPath))
-            {
-                return Task.FromResult($"Error: Directory not found: {directoryPath}");
-            }
-
-            if (maxResults <= 0)
-            {
-                maxResults = 50;
-            }
-
-            StringBuilder result = new StringBuilder();
-            int count = 0;
-
-            foreach (string file in Directory.EnumerateFiles(fullPath, "*", SearchOption.AllDirectories))
-            {
-                string relativePath = Path.GetRelativePath(fullPath, file);
-                if (relativePath.Contains(searchPattern, StringComparison.OrdinalIgnoreCase))
-                {
-                    result.AppendLine(relativePath);
-                    count++;
-                    if (count >= maxResults)
-                    {
-                        break;
-                    }
-                }
-            }
-
-            string output = result.ToString().TrimEnd();
-            if (string.IsNullOrEmpty(output))
-            {
-                return Task.FromResult($"No files found matching: {searchPattern}");
-            }
-
-            return Task.FromResult(output);
-        }
-        catch (Exception ex)
-        {
-            return Task.FromResult($"Error: Failed to search files: {ex.Message}");
-        }
-    }
-
-    [Description("Check if a file exists.")]
-    public Task<string> FileExistsAsync(
-        [Description("Path to the file (absolute or relative to /workspace)")] string filePath)
-    {
-        string? error = ValidatePath(filePath, out string fullPath);
-        if (error != null)
-        {
-            return Task.FromResult(error);
-        }
-
-        bool exists = File.Exists(fullPath);
-        return Task.FromResult(exists ? "true" : "false");
-    }
-
-    [Description("Delete a file.")]
-    public Task<string> RemoveFileAsync(
-        [Description("Path to the file (absolute or relative to /workspace)")] string filePath)
-    {
-        string? error = ValidatePath(filePath, out string fullPath);
-        if (error != null)
-        {
-            return Task.FromResult(error);
-        }
-
-        try
-        {
-            if (!File.Exists(fullPath))
-            {
-                return Task.FromResult($"Error: File not found: {filePath}");
-            }
-
-            File.Delete(fullPath);
-            return Task.FromResult($"File deleted: {filePath}");
-        }
-        catch (Exception ex)
-        {
-            return Task.FromResult($"Error: Failed to delete file: {ex.Message}");
         }
     }
 }

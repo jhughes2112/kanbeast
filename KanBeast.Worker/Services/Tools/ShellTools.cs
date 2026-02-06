@@ -3,19 +3,29 @@ using System.Diagnostics;
 
 namespace KanBeast.Worker.Services.Tools;
 
-// Tools for LLM to execute shell commands within allowed directories.
-// CWD is /workspace/, repo is at /workspace/repo/, skills at /workspace/skills/<skill-name>/Skill.md
-// File operations are restricted to /workspace/ or the user's home folder.
+// Tools for LLM to execute shell commands.
+// Default CWD is the git repository folder. Uses bash (via WSL on Windows).
 public class ShellTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
-    private static readonly string[] AllowedPrefixes = { "/workspace", Environment.GetFolderPath(Environment.SpecialFolder.UserProfile) };
 
+    private readonly string _workDir;
     private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
 
-    public ShellTools()
+    public ShellTools(string workDir)
     {
+        _workDir = workDir;
         _toolsByRole = BuildToolsByRole();
+    }
+
+    private string ResolvePath(string path)
+    {
+        if (Path.IsPathRooted(path))
+        {
+            return Path.GetFullPath(path);
+        }
+
+        return Path.GetFullPath(Path.Combine(_workDir, path));
     }
 
     private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
@@ -45,83 +55,58 @@ public class ShellTools : IToolProvider
         }
     }
 
-    // Validates that a working directory is within allowed paths (/workspace or user home).
-    private static string? ValidateWorkDir(string workDir)
-    {
-        if (string.IsNullOrWhiteSpace(workDir))
-        {
-            return "Error: Working directory cannot be empty";
-        }
+	[Description("Execute a shell command.")]
+	public async Task<string> RunCommandAsync(
+		[Description("Command to execute")] string command,
+		[Description("Working directory (or empty for repository root)")] string workDir)
+	{
+		if (string.IsNullOrWhiteSpace(command))
+		{
+			return "Error: Command cannot be empty";
+		}
 
-        string fullPath;
-        try
-        {
-            fullPath = Path.GetFullPath(workDir);
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Invalid working directory: {ex.Message}";
-        }
+		string effectiveWorkDir = string.IsNullOrWhiteSpace(workDir) ? _workDir : ResolvePath(workDir);
 
-        bool allowed = false;
-        foreach (string prefix in AllowedPrefixes)
-        {
-            if (!string.IsNullOrEmpty(prefix) && fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-            {
-                allowed = true;
-                break;
-            }
-        }
+		if (!Directory.Exists(effectiveWorkDir))
+		{
+			return $"Error: Working directory does not exist: {workDir}";
+		}
 
-        if (!allowed)
-        {
-            return "Error: Access denied. Working directory must be within /workspace or user home folder";
-        }
+		try
+		{
+			string shellPath;
+			string shellArgs;
 
-        if (!Directory.Exists(fullPath))
-        {
-            return $"Error: Working directory does not exist: {workDir}";
-        }
+			if (OperatingSystem.IsWindows())
+			{
+				string wslPath = effectiveWorkDir.Replace("\\", "/");
+				if (wslPath.Length >= 2 && wslPath[1] == ':')
+				{
+					wslPath = $"/mnt/{char.ToLower(wslPath[0])}{wslPath.Substring(2)}";
+				}
 
-        return null;
-    }
+				shellPath = "wsl";
+				shellArgs = $"bash -c \"cd '{wslPath}' && {command.Replace("\"", "\\\"")}\"";
+			}
+			else
+			{
+				shellPath = "/bin/bash";
+				shellArgs = $"-c \"{command.Replace("\"", "\\\"")}\"";
+			}
 
-    [Description("Execute a shell command.")]
-    public async Task<string> RunCommandAsync(
-        [Description("Command to execute")] string command,
-        [Description("Working directory (absolute or relative to /workspace)")] string workDir)
-    {
-        if (string.IsNullOrWhiteSpace(command))
-        {
-            return "Error: Command cannot be empty";
-        }
-
-        string? error = ValidateWorkDir(workDir);
-        if (error != null)
-        {
-            return error;
-        }
-
-        try
-        {
-            string shellPath = OperatingSystem.IsWindows() ? "cmd.exe" : "/bin/bash";
-            string shellArgs = OperatingSystem.IsWindows()
-                ? $"/c {command}"
-                : $"-c \"{command.Replace("\"", "\\\"")}\"";
-
-            Process process = new Process
-            {
-                StartInfo = new ProcessStartInfo
-                {
-                    FileName = shellPath,
-                    Arguments = shellArgs,
-                    WorkingDirectory = Path.GetFullPath(workDir),
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                }
-            };
+			Process process = new Process
+			{
+				StartInfo = new ProcessStartInfo
+				{
+					FileName = shellPath,
+					Arguments = shellArgs,
+					WorkingDirectory = OperatingSystem.IsWindows() ? null : effectiveWorkDir,
+					RedirectStandardOutput = true,
+					RedirectStandardError = true,
+					UseShellExecute = false,
+					CreateNoWindow = true
+				}
+			};
 
             process.Start();
 

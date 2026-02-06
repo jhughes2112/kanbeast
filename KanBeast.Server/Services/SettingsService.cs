@@ -125,7 +125,7 @@ public class SettingsService : ISettingsService
 
         List<PromptTemplate> prompts = new List<PromptTemplate>
         {
-            LoadPromptTemplate("manager-system", "Manager: System Prompt"),
+            LoadPromptTemplate("manager", "Manager: System Prompt"),
             LoadPromptTemplate("developer", "Developer"),
             LoadPromptTemplate("manager-compaction-summary", "Manager: Compaction Summary Prompt"),
             LoadPromptTemplate("developer-compaction-summary", "Developer: Compaction Summary Prompt")

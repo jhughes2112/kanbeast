@@ -34,22 +34,29 @@ public class Program
         catch (Exception ex)
         {
             logger.LogError(ex, "Command line parsing error: {Message}", ex.Message);
-            logger.LogInformation("Usage: KanBeast.Worker --ticket-id <id> --server-url <url>");
+            logger.LogInformation("Usage: KanBeast.Worker --ticket-id <id> --server-url <url> [--repo <path>]");
             logger.LogInformation("Sleeping 100 seconds before exit to allow log inspection...");
             await Task.Delay(TimeSpan.FromSeconds(100));
             return 1;
         }
 
-        KanbanApiClient apiClient = new KanbanApiClient(options.ServerUrl);
+		KanbanApiClient apiClient = new KanbanApiClient(options.ServerUrl);
 
-        try
-        {
-            WorkerConfig config = BuildConfiguration(options);
-            logger.LogInformation("Worker initialized for ticket: {TicketId}", config.TicketId);
+		try
+		{
+			WorkerConfig config = BuildConfiguration(options);
+			logger.LogInformation("Worker initialized for ticket: {TicketId}", config.TicketId);
+
+			string workDir = Path.GetFullPath(options.RepoPath);
+
+			string managerPrompt = config.GetPrompt("manager").Replace("{repoDir}", workDir);
+			string developerPrompt = config.GetPrompt("developer").Replace("{repoDir}", workDir);
+			string managerCompactionPrompt = config.GetPrompt("manager-compaction").Replace("{repoDir}", workDir);
+			string developerCompactionPrompt = config.GetPrompt("developer-compaction").Replace("{repoDir}", workDir);
 
 			GitService gitService = new GitService(config.GitConfig);
-			ICompaction managerCompaction = BuildCompaction(config.ManagerCompaction, config.LLMConfigs, config.GetPrompt("manager-compaction")); 
-			ICompaction developerCompaction = BuildCompaction(config.DeveloperCompaction, config.LLMConfigs, config.GetPrompt("developer-compaction"));
+			ICompaction managerCompaction = BuildCompaction(config.ManagerCompaction, config.LLMConfigs, managerCompactionPrompt); 
+			ICompaction developerCompaction = BuildCompaction(config.DeveloperCompaction, config.LLMConfigs, developerCompactionPrompt);
 
 			string logDirectory = Path.Combine(Environment.CurrentDirectory, "logs");
 
@@ -66,8 +73,6 @@ public class Program
             {
                 logger.LogInformation("Ticket: {Title}", ticket.Title);
                 await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work");
-
-                string workDir = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "repo"));
                 if (Directory.Exists(workDir))
                 {
                     Directory.Delete(workDir, true);
@@ -91,9 +96,21 @@ public class Program
                         await apiClient.SetBranchNameAsync(ticket.Id, branchName);
                     }
 
-                    AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, managerLlmService, developerLlmService, config.GetPrompt("manager-system"), config.GetPrompt("developer"));
+                    AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, managerLlmService, developerLlmService, managerPrompt, developerPrompt);
                     logger.LogInformation("Starting agent orchestrator...");
-                    await orchestrator.RunAsync(ticket, workDir, CancellationToken.None);
+
+                    try
+                    {
+                        await orchestrator.RunAsync(ticket, workDir, CancellationToken.None);
+                    }
+                    finally
+                    {
+                        bool pushed = await gitService.CommitAndPushAsync(workDir, $"[KanBeast] Work on ticket {ticket.Id}");
+                        if (pushed)
+                        {
+                            logger.LogInformation("Changes committed and pushed to feature branch");
+                        }
+                    }
 
                     logger.LogInformation("Worker completed");
                     return 0;
@@ -170,7 +187,7 @@ public class Program
 
         Dictionary<string, string> prompts = new Dictionary<string, string>
         {
-            ["manager-system"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-system"),
+            ["manager"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager"),
             ["developer"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer"),
             ["manager-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-compaction-summary"),
             ["developer-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-compaction-summary")
@@ -272,6 +289,9 @@ public class Program
 
     [Option("server-url", Required = true, HelpText = "Server URL for the worker.")]
     public required string ServerUrl { get; set; }
+
+    [Option("repo", Required = false, Default = "./repo", HelpText = "Path where the git repository will be cloned.")]
+    public string RepoPath { get; set; } = "./repo";
 
     [Option("json", Required = false, Default = false, HelpText = "Output logs in JSON format instead of friendly format.")]
     public bool JsonLogging { get; set; }

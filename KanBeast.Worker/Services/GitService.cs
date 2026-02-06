@@ -9,6 +9,7 @@ public interface IGitService
     Task<string> CloneRepositoryAsync(string repoUrl, string workDir);
     Task<string> CreateOrCheckoutBranchAsync(string branchName, string workDir);
     Task ConfigureGitAsync(string username, string email, string workDir);
+    Task<bool> CommitAndPushAsync(string workDir, string message);
 }
 
 // Handles git operations using command-line git with SSH/HTTPS auth support.
@@ -293,7 +294,7 @@ public class GitService : IGitService
     {
         // For HTTPS URLs, inject credentials if available
         string effectiveUrl = GetEffectiveUrl(repoUrl);
-        string result = await ExecuteGitCommandAsync($"clone {effectiveUrl} {workDir}", Directory.GetCurrentDirectory());
+        string result = await ExecuteGitCommandAsync($"clone {effectiveUrl} {workDir}", workDir);
         return result;
     }
 
@@ -352,6 +353,41 @@ public class GitService : IGitService
     {
         await ExecuteGitCommandAsync($"config user.name \"{username}\"", workDir);
         await ExecuteGitCommandAsync($"config user.email \"{email}\"", workDir);
+    }
+
+    // Commits all changes and pushes to the current branch if on a feature branch.
+    // Returns true if changes were pushed, false if nothing to push or not on a feature branch.
+    public async Task<bool> CommitAndPushAsync(string workDir, string message)
+    {
+        try
+        {
+            string currentBranch = (await ExecuteGitCommandAsync("rev-parse --abbrev-ref HEAD", workDir)).Trim();
+
+            if (!currentBranch.StartsWith("feature/", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.WriteLine($"Not on a feature branch ({currentBranch}), skipping commit and push");
+                return false;
+            }
+
+            string status = await ExecuteGitCommandAsync("status --porcelain", workDir);
+            if (string.IsNullOrWhiteSpace(status))
+            {
+                Console.WriteLine("No changes to commit");
+                return false;
+            }
+
+            await ExecuteGitCommandAsync("add -A", workDir);
+            await ExecuteGitCommandAsync($"commit -m \"{message.Replace("\"", "\\\"")}\"" , workDir);
+            await ExecuteGitCommandAsync($"push -u origin {currentBranch}", workDir);
+
+            Console.WriteLine($"Committed and pushed changes to {currentBranch}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Failed to commit and push: {ex.Message}");
+            return false;
+        }
     }
 
     private async Task<string> ExecuteGitCommandAsync(string command, string workDir)

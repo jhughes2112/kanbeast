@@ -1,6 +1,7 @@
 # KanBeast
-env/tickets
-repo/
+env/tickets/
+env/settings.json
+env/logs/
 
 # Build results
 [Dd]ebug/

@@ -70,7 +70,8 @@ public class WorkerOrchestrator : IWorkerOrchestrator
                 "dotnet",
                 "/app/worker/KanBeast.Worker.dll",
                 "--ticket-id", ticketId,
-                "--server-url", _containerContext.ServerUrl
+                "--server-url", _containerContext.ServerUrl,
+                "--repo", "/repo"
             },
             HostConfig = new HostConfig
             {

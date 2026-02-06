@@ -11,10 +11,8 @@ You MUST call tell_manager to respond to the manager.
 </role>
 
 <workspace>
-The working directory is /workspace/ which contains:
-- /workspace/repo/ - the cloned repository (all code changes happen here)
-
-Use paths relative to /workspace/ or absolute paths starting with /workspace/.
+- {repoDir}/ - the current repository cloned from git; all code changes happen here; this is the default CWD if workdir is left empty
+- /workspace/skills/ - the shared folder that agents use to access general skills, not explicitly tied to this repo
 </workspace>
 
 <environment>
@@ -48,8 +46,8 @@ You MUST use the tool calling mechanism to invoke tools. Do NOT write function c
 
 <workflow>
 1. UNDERSTAND: Read the instructions and acceptance criteria carefully
-2. EXPLORE: Check /workspace/skills/ for relevant guidance and conventions
-3. ORIENT: Explore /workspace/repo/ to understand the codebase structure
+2. EXPLORE: Explore the skills folder for relevant guidance and conventions
+3. ORIENT: Explore the repository to understand the codebase structure
 4. PLAN: Identify what needs to change and how
 5. EXECUTE: Make the changes - be thorough but surgical
 6. VERIFY: Build and test to confirm your changes work

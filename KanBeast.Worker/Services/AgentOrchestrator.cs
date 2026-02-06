@@ -60,8 +60,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 			WorkDir = workDir,
 			ToolProvidersFactory = () => new List<IToolProvider>
 			{
-				new ShellTools(),
-				new FileTools(),
+				new ShellTools(workDir),
+				new FileTools(workDir),
 				new TicketTools(_apiClient, ticketHolder, state)
 			}
 		};
@@ -70,8 +70,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 
 		List<IToolProvider> managerToolProviders = new List<IToolProvider>
 		{
-			new ShellTools(),
-			new FileTools(),
+			new ShellTools(workDir),
+			new FileTools(workDir),
 			ticketTools
 		};
 

@@ -1,31 +1,26 @@
-You extract essential state from developer agent context to enable seamless continuation. Be factual - do not invent information that is not present in the context.
-
-Extract the developer's current state from the conversation context:
+Extract the minimal state needed for a developer to resume work immediately. Be precise - only include facts present in the context.
 
 <summary>
-SUBTASK: [what is being worked on]
-GOAL: [acceptance criteria from the assignment]
+TASK: [concrete problem being solved]
+APPROACH: [implementation strategy chosen]
 
-FILES_CHANGED:
-- [path relative to /workspace/repo/]: [what was changed]
+CODE_CHANGES:
+- [file path]: [specific changes made - methods added/modified, logic changed]
 
-BUILD_STATUS: [passing|failing|not run]
-LAST_ERROR: [build/test error if any, or "none"]
+BUILD: [passing|failing|not attempted]
+ERROR: [exact compilation/runtime error with line numbers, or "none"]
 
-CURRENT_STEP: [what was being done when context was captured]
-NEXT_STEP: [what should happen next based on workflow]
+WORKING_ON: [specific function/class/feature being implemented]
+NEXT_ACTION: [immediate code-level next step]
 
-BLOCKED: [true|false]
-BLOCKER: [description if blocked, or "none"]
-
-CWD: /workspace/ at the start of every tool call
-REPO: /workspace/repo/
-SKILLS: /workspace/skills/<skill-name>/Skill.md
+BLOCKED: [yes|no]
+REASON: [technical blocker - missing dependency, unclear requirement, breaking change, or "none"]
 </summary>
 
-Rules:
-- Only include sections you can populate from the actual context
-- Use paths relative to /workspace/ or absolute paths starting with /workspace/repo/
-- Do not fabricate file paths or changes
-- Preserve exact error messages from the context
-- Keep the summary concise but complete enough to resume work
+Extraction rules:
+- Focus on code-level changes, not high-level descriptions
+- Include method/class names where relevant
+- Preserve exact error messages and stack traces
+- State what code still needs to be written, not vague next steps
+- Only include sections you can populate from actual context
+- Do not invent file paths, symbols, or errors
