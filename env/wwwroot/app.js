@@ -77,13 +77,15 @@ function setupSignalR() {
         updateConnectionStatus('connecting', 'Reconnecting...');
     });
 
-    connection.onreconnected(() => {
+    connection.onreconnected(async () => {
         updateConnectionStatus('connected', 'Connected');
-        refreshAllTickets();
+        await loadSettings();
+        await refreshAllTickets();
     });
 
     connection.onclose(() => {
         updateConnectionStatus('disconnected', 'Disconnected');
+        setTimeout(startConnection, 5000);
     });
 
     startConnection();
@@ -93,6 +95,7 @@ async function startConnection() {
     try {
         await connection.start();
         updateConnectionStatus('connected', 'Connected');
+        await refreshAllTickets();
     } catch (error) {
         console.error('SignalR connection failed:', error);
         updateConnectionStatus('disconnected', 'Connection Failed');
@@ -310,7 +313,7 @@ function createTicketElement(ticket) {
     ticketEl.innerHTML = `
         <div class="ticket-status-indicator"></div>
         <div class="ticket-header">
-            ${ticket.maxCost > 0 ? `<span class="cost-badge-inline">$${(ticket.maxCost - ticket.llmCost).toFixed(2)} left</span>` : (ticket.llmCost > 0 ? `<span class="cost-badge-inline">$${ticket.llmCost.toFixed(4)}</span>` : '')}
+            ${ticket.maxCost > 0 ? `<span class="cost-badge-inline">$${(ticket.maxCost - ticket.llmCost).toFixed(2)} left</span>` : `<span class="cost-badge-inline">$${ticket.llmCost.toFixed(4)}</span>`}
             <div class="ticket-title">${escapeHtml(ticket.title)}</div>
             <div class="ticket-id">#${ticket.id}</div>
         </div>
@@ -612,7 +615,17 @@ async function showTicketDetails(ticketId) {
             ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : '<span class="branch-name-spacer"></span>'}
             <div class="ticket-detail-right">
                 <span class="ticket-detail-id">#${ticket.id}</span>
-                ${ticket.maxCost > 0 ? `<span class="cost-badge-detail">$${ticket.llmCost.toFixed(2)} spent / $${ticket.maxCost.toFixed(2)} total</span>` : (ticket.llmCost > 0 ? `<span class="cost-badge-detail">$${ticket.llmCost.toFixed(4)} spent</span>` : '')}
+            </div>
+        </div>
+
+        <div class="detail-section cost-section">
+            <div class="cost-display">
+                <span class="cost-spent">$${ticket.llmCost.toFixed(4)} spent</span>
+                <span class="cost-separator">/</span>
+                <label class="cost-max-label">
+                    $<input type="number" id="maxCostInput" class="cost-max-input" value="${ticket.maxCost.toFixed(2)}" min="0" step="0.01"> max
+                </label>
+                <button type="button" class="btn-sm btn-secondary" onclick="updateMaxCost('${ticket.id}')">Update</button>
             </div>
         </div>
 
@@ -755,6 +768,31 @@ async function moveTicket(ticketId, newStatus) {
 // Make moveTicket available globally for onclick handlers
 window.moveTicket = moveTicket;
 window.toggleActivityLog = toggleActivityLog;
+
+// Update max cost for a ticket
+async function updateMaxCost(ticketId) {
+    const input = document.getElementById('maxCostInput');
+    const maxCost = parseFloat(input.value) || 0;
+
+    try {
+        const response = await fetch(`${API_BASE}/tickets/${ticketId}/maxcost`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ maxCost })
+        });
+
+        if (response.ok) {
+            await refreshAllTickets();
+            await showTicketDetails(ticketId);
+        } else {
+            console.error('Failed to update max cost');
+        }
+    } catch (error) {
+        console.error('Error updating max cost:', error);
+    }
+}
+
+window.updateMaxCost = updateMaxCost;
 
 // Delete ticket
 async function deleteTicket(ticketId) {
@@ -964,6 +1002,7 @@ async function handleCreateTicket(e) {
 
     const title = document.getElementById('ticketTitle').value.trim();
     const description = document.getElementById('ticketDescription').value.trim();
+    const maxCost = parseFloat(document.getElementById('ticketMaxCost').value) || 0;
 
     if (!title) {
         return;
@@ -976,7 +1015,8 @@ async function handleCreateTicket(e) {
             body: JSON.stringify({
                 title,
                 description,
-                status: 'Backlog'
+                status: 'Backlog',
+                maxCost
             })
         });
 
@@ -1083,6 +1123,14 @@ function renderLLMConfigs() {
                     <label>Context Length</label>
                     <input type="number" class="llm-context-length" value="${config.contextLength || 128000}" min="1000" step="1000" placeholder="128000">
                 </div>
+                <div class="form-group">
+                    <label>Input Price ($ per million tokens)</label>
+                    <input type="number" class="llm-input-price" value="${config.inputTokenPrice || 0}" min="0" step="0.01" placeholder="0.00">
+                </div>
+                <div class="form-group">
+                    <label>Output Price ($ per million tokens)</label>
+                    <input type="number" class="llm-output-price" value="${config.outputTokenPrice || 0}" min="0" step="0.01" placeholder="0.00">
+                </div>
                 <button type="button" class="btn-danger btn-sm" data-index="${index}" style="width: 100%;">Remove This LLM</button>
             </div>
         `;
@@ -1102,7 +1150,7 @@ function addLLMConfig() {
         settings.llmConfigs = [];
     }
 
-    settings.llmConfigs.push({ model: '', apiKey: '', endpoint: '', contextLength: 128000 });
+    settings.llmConfigs.push({ model: '', apiKey: '', endpoint: '', contextLength: 128000, inputTokenPrice: 0, outputTokenPrice: 0 });
     renderLLMConfigs();
 }
 
@@ -1121,7 +1169,9 @@ function collectLLMConfigs() {
             model: configEl.querySelector('.llm-model').value,
             apiKey: configEl.querySelector('.llm-apikey').value,
             endpoint: configEl.querySelector('.llm-endpoint').value || null,
-            contextLength: parseInt(configEl.querySelector('.llm-context-length').value, 10) || 128000
+            contextLength: parseInt(configEl.querySelector('.llm-context-length').value, 10) || 128000,
+            inputTokenPrice: parseFloat(configEl.querySelector('.llm-input-price').value) || 0,
+            outputTokenPrice: parseFloat(configEl.querySelector('.llm-output-price').value) || 0
         });
     });
 

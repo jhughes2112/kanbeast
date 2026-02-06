@@ -1,7 +1,7 @@
 {
   "llmConfigs": [
     {
-      "id": "9ca5c9ad-4291-47a5-8924-f621154d5512",
+      "id": "1aa2e431-1a83-4091-8cbd-f661245e20c0",
       "apiKey": "sk-YOUR_API_KEY_HERE",
       "model": "gpt-5.2",
       "endpoint": "https://api.openai.com/v1",
@@ -31,7 +31,5 @@
     "googleApiKey": null,
     "googleSearchEngineId": null
   },
-  "maxIterationsPerSubtask": 50,
-  "stuckPromptingEvery": 10,
   "jsonLogging": false
 }

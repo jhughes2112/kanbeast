@@ -8,7 +8,10 @@
 </head>
 <body>
 	<header>
-		<h1>🦁 <span>KanBeast</span></h1>
+		<h1>
+			<img src="kanbeast.png" alt="KanBeast Logo" class="logo-icon">
+			<img src="kanbeast.jpg" alt="KanBeast" class="logo-text">
+		</h1>
 		<nav>
 			<div id="connectionStatus" class="connecting">
 				<span class="status-dot"></span>
@@ -65,6 +68,11 @@
 				<div class="form-group">
 					<label for="ticketDescription">Description</label>
 					<textarea id="ticketDescription" rows="4" placeholder="Describe what needs to be done..." required></textarea>
+				</div>
+				<div class="form-group">
+					<label for="ticketMaxCost">Max Cost ($)</label>
+					<input type="number" id="ticketMaxCost" min="0" step="0.01" placeholder="0.00 = unlimited">
+					<small style="color: var(--gray-500);">Maximum LLM spend for this ticket. 0 = no limit.</small>
 				</div>
 				<button type="submit" class="btn-primary" style="width: 100%;">Create Ticket</button>
 			</form>

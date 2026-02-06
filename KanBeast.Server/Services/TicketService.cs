@@ -20,6 +20,7 @@ public interface ITicketService
     Task<Ticket?> AddActivityLogAsync(string id, string activity);
     Task<Ticket?> SetBranchNameAsync(string id, string branchName);
     Task<Ticket?> AddLlmCostAsync(string id, decimal cost);
+    Task<Ticket?> SetMaxCostAsync(string id, decimal maxCost);
 }
 
 public class TicketService : ITicketService
@@ -406,6 +407,19 @@ public class TicketService : ITicketService
         }
 
         ticket.LlmCost += cost;
+        ticket.UpdatedAt = DateTime.UtcNow;
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
+    }
+
+    public async Task<Ticket?> SetMaxCostAsync(string id, decimal maxCost)
+    {
+        if (!_tickets.TryGetValue(id, out Ticket? ticket))
+        {
+            return null;
+        }
+
+        ticket.MaxCost = maxCost;
         ticket.UpdatedAt = DateTime.UtcNow;
         await SaveTicketToDiskAsync(ticket);
         return ticket;

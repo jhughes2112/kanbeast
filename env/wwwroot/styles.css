@@ -38,7 +38,7 @@ body {
 
 header {
     background: #18181b;
-    padding: 1rem 2rem;
+    padding: 0.5rem 2rem;
     box-shadow: var(--shadow-md);
     display: flex;
     justify-content: space-between;
@@ -53,13 +53,19 @@ header h1 {
     font-size: 1.75rem;
     font-weight: 700;
     color: var(--gray-800);
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
 }
 
-header h1 span {
-    background: linear-gradient(135deg, var(--primary) 0%, #06b6d4 100%);
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-    background-clip: text;
+header h1 .logo-icon {
+    height: 80px;
+    width: auto;
+}
+
+header h1 .logo-text {
+    height: 32px;
+    width: auto;
 }
 
 nav {
@@ -610,6 +616,53 @@ nav {
     border-radius: 999px;
     font-weight: 600;
     white-space: nowrap;
+}
+
+.cost-section {
+    background: var(--gray-100);
+    border-radius: var(--radius);
+    padding: 0.75rem 1rem;
+    margin-bottom: 1rem;
+}
+
+.cost-display {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+.cost-spent {
+    color: var(--success);
+    font-weight: 600;
+    font-size: 0.95rem;
+}
+
+.cost-separator {
+    color: var(--gray-400);
+}
+
+.cost-max-label {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    color: var(--gray-500);
+    font-size: 0.95rem;
+}
+
+.cost-max-input {
+    width: 80px;
+    padding: 0.25rem 0.5rem;
+    background: var(--gray-200);
+    border: 1px solid var(--gray-300);
+    border-radius: var(--radius);
+    color: var(--gray-800);
+    font-size: 0.875rem;
+}
+
+.cost-max-input:focus {
+    outline: none;
+    border-color: var(--primary);
 }
 
 .branch-name {

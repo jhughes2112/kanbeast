@@ -249,6 +249,21 @@ public class TicketsController : ControllerBase
         await _hubContext.Clients.All.TicketUpdated(ticket);
         return Ok(ticket);
     }
+
+    [HttpPatch("{id}/maxcost")]
+    public async Task<ActionResult<Ticket>> SetMaxCost(string id, [FromBody] MaxCostUpdate update)
+    {
+        Ticket? ticket = await _ticketService.SetMaxCostAsync(id, update.MaxCost);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+
+        _logger.LogInformation("PATCH /tickets/{Id}/maxcost - set to ${MaxCost:F2}", id, update.MaxCost);
+        await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
+        return Ok(ticket);
+    }
 }
 
 public record TicketStatusUpdate(TicketStatus Status);
@@ -256,3 +271,4 @@ public record SubtaskStatusUpdate(SubtaskStatus Status);
 public record ActivityUpdate(string Message);
 public record BranchUpdate(string BranchName);
 public record CostUpdate(decimal Cost);
+public record MaxCostUpdate(decimal MaxCost);
