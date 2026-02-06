@@ -222,37 +222,52 @@ public class Program
     }
 
     private static WorkerSettings LoadWorkerSettings()
-{
-    string resolvedPath = ResolveSettingsPath();
-
-    if (!File.Exists(resolvedPath))
     {
-        Console.WriteLine($"Error: Required settings file not found: {resolvedPath}");
-        throw new FileNotFoundException($"Required settings file not found: {resolvedPath}", resolvedPath);
-    }
+        string resolvedPath = ResolveSettingsPath();
 
-    string json = File.ReadAllText(resolvedPath);
-    JsonSerializerOptions options = new JsonSerializerOptions
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
-    WorkerSettings? settings = JsonSerializer.Deserialize<WorkerSettings>(json, options);
-
-    if (settings == null)
-    {
-        Console.WriteLine($"Error: Failed to deserialize settings from: {resolvedPath}");
-        throw new InvalidOperationException($"Failed to deserialize settings from: {resolvedPath}");
-    }
-
-    if (settings.LLMConfigs.Count == 0)
-    {
-        Console.WriteLine("Error: No LLM configurations found in settings");
-        throw new InvalidOperationException("No LLM configurations found in settings. At least one LLM config is required.");
-    }
-
-            return settings;
+        if (!File.Exists(resolvedPath))
+        {
+            Console.WriteLine($"Settings file not found at {resolvedPath}, creating default settings...");
+            WorkerSettings defaultSettings = new WorkerSettings();
+            SaveWorkerSettings(defaultSettings, resolvedPath);
+            Console.WriteLine("Default settings file created. Please configure LLM and Git settings.");
+            throw new InvalidOperationException($"Default settings file created at {resolvedPath}. Please configure LLM and Git settings before running.");
         }
+
+        string json = File.ReadAllText(resolvedPath);
+        JsonSerializerOptions options = new JsonSerializerOptions
+        {
+            PropertyNameCaseInsensitive = true
+        };
+
+        WorkerSettings? settings = JsonSerializer.Deserialize<WorkerSettings>(json, options);
+
+        if (settings == null)
+        {
+            Console.WriteLine($"Error: Failed to deserialize settings from: {resolvedPath}");
+            throw new InvalidOperationException($"Failed to deserialize settings from: {resolvedPath}");
+        }
+
+        if (settings.LLMConfigs.Count == 0)
+        {
+            Console.WriteLine("Error: No LLM configurations found in settings");
+            throw new InvalidOperationException("No LLM configurations found in settings. At least one LLM config is required.");
+        }
+
+        return settings;
+    }
+
+    private static void SaveWorkerSettings(WorkerSettings settings, string path)
+    {
+        JsonSerializerOptions options = new JsonSerializerOptions
+        {
+            WriteIndented = true,
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        };
+
+        string json = JsonSerializer.Serialize(settings, options);
+        File.WriteAllText(path, json);
+    }
 
         private static string ResolveSettingsPath()
         {

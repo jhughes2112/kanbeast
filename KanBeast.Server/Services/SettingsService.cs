@@ -25,7 +25,10 @@ public class SettingsService : ISettingsService
 
         if (!File.Exists(_settingsPath))
         {
-            throw new FileNotFoundException($"Settings file not found: {_settingsPath}. Create this file with valid configuration.", _settingsPath);
+            Console.WriteLine($"Settings file not found at {_settingsPath}, creating default settings...");
+            SettingsFile defaultSettings = new SettingsFile();
+            SaveSettingsFile(defaultSettings);
+            Console.WriteLine("Default settings file created. Please configure LLM and Git settings via the UI.");
         }
     }
 
@@ -198,7 +201,8 @@ public class SettingsService : ISettingsService
             errors.Add("ManagerCompaction.Type is required");
         }
 
-        if (settings.ManagerCompaction.ContextSizePercent <= 0 || settings.ManagerCompaction.ContextSizePercent > 1)
+        if (string.Equals(settings.ManagerCompaction.Type, "summarize", StringComparison.OrdinalIgnoreCase) &&
+            (settings.ManagerCompaction.ContextSizePercent <= 0 || settings.ManagerCompaction.ContextSizePercent > 1))
         {
             errors.Add("ManagerCompaction.ContextSizePercent must be between 0 and 1");
         }
@@ -208,7 +212,8 @@ public class SettingsService : ISettingsService
             errors.Add("DeveloperCompaction.Type is required");
         }
 
-        if (settings.DeveloperCompaction.ContextSizePercent <= 0 || settings.DeveloperCompaction.ContextSizePercent > 1)
+        if (string.Equals(settings.DeveloperCompaction.Type, "summarize", StringComparison.OrdinalIgnoreCase) &&
+            (settings.DeveloperCompaction.ContextSizePercent <= 0 || settings.DeveloperCompaction.ContextSizePercent > 1))
         {
             errors.Add("DeveloperCompaction.ContextSizePercent must be between 0 and 1");
         }
