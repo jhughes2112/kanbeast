@@ -107,23 +107,6 @@
 					</div>
 					<div class="accordion-content" id="worker-section">
 						<div class="form-group">
-							<label for="llmRetryCount">LLM Retry Count</label>
-							<input type="number" id="llmRetryCount" min="0" step="1" placeholder="3">
-						</div>
-						<div class="form-group">
-							<label for="llmRetryDelaySeconds">LLM Retry Delay (seconds)</label>
-							<input type="number" id="llmRetryDelaySeconds" min="0" step="1" placeholder="5">
-						</div>
-						<div class="form-group">
-							<label for="maxIterationsPerSubtask">Max Iterations Per Subtask</label>
-							<input type="number" id="maxIterationsPerSubtask" min="1" step="1" placeholder="50">
-						</div>
-						<div class="form-group">
-							<label for="stuckPromptingEvery">Stuck Check Every N Iterations</label>
-							<input type="number" id="stuckPromptingEvery" min="1" step="1" placeholder="10">
-							<small style="color: var(--gray-500);">Prompts developer to self-assess if stuck after this many iterations.</small>
-						</div>
-						<div class="form-group">
 							<label class="checkbox-label">
 								<input type="checkbox" id="jsonLogging">
 								<span>Enable JSON Logging</span>

@@ -1016,10 +1016,6 @@ function showSettings() {
     updateCompactionVisibility();
 
     // Populate worker settings
-    document.getElementById('llmRetryCount').value = (settings && settings.llmRetryCount) || 3;
-    document.getElementById('llmRetryDelaySeconds').value = (settings && settings.llmRetryDelaySeconds) || 5;
-    document.getElementById('maxIterationsPerSubtask').value = (settings && settings.maxIterationsPerSubtask) || 50;
-    document.getElementById('stuckPromptingEvery').value = (settings && settings.stuckPromptingEvery) || 10;
     document.getElementById('jsonLogging').checked = (settings && settings.jsonLogging) || false;
 
     // Populate LLM configs
@@ -1158,10 +1154,6 @@ async function saveSettings() {
             type: document.getElementById('developerCompactionType').value,
             contextSizeThreshold: parseInt(document.getElementById('developerContextThreshold').value, 10) || 0
         },
-        llmRetryCount: parseInt(document.getElementById('llmRetryCount').value, 10) || 3,
-        llmRetryDelaySeconds: parseInt(document.getElementById('llmRetryDelaySeconds').value, 10) || 5,
-        maxIterationsPerSubtask: parseInt(document.getElementById('maxIterationsPerSubtask').value, 10) || 50,
-        stuckPromptingEvery: parseInt(document.getElementById('stuckPromptingEvery').value, 10) || 10,
         jsonLogging: document.getElementById('jsonLogging').checked
     };
 

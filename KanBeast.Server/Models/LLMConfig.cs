@@ -40,8 +40,6 @@ public class SettingsFile
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();
-    public int MaxIterationsPerSubtask { get; set; } = 50;
-    public int StuckPromptingEvery { get; set; } = 10;
     public bool JsonLogging { get; set; }
 }
 
@@ -65,13 +63,9 @@ public class Settings
 {
     public List<LLMConfig> LLMConfigs { get; set; } = new();
     public GitConfig GitConfig { get; set; } = new();
-    public int LlmRetryCount { get; set; }
-    public int LlmRetryDelaySeconds { get; set; }
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();
     public List<PromptTemplate> SystemPrompts { get; set; } = new();
-    public int MaxIterationsPerSubtask { get; set; } = 50;
-    public int StuckPromptingEvery { get; set; } = 10;
     public bool JsonLogging { get; set; }
 }
