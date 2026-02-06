@@ -131,31 +131,33 @@
 					</div>
 					<div class="accordion-content" id="compaction-section">
 						<div class="form-group">
-							<label for="managerCompactionType">Manager Compaction</label>
-							<select id="managerCompactionType">
-								<option value="disabled">Disabled</option>
-								<option value="summarize">Summarize</option>
-							</select>
-						</div>
-						<div id="managerCompactionOptions" class="compaction-options" style="display: none;">
-							<div class="form-group">
-								<label for="managerContextThreshold">Context Size Threshold (0 = use LLM limit only)</label>
-								<input type="number" id="managerContextThreshold" min="0" step="1000" placeholder="100000">
+								<label for="managerCompactionType">Manager Compaction</label>
+								<select id="managerCompactionType">
+									<option value="disabled">Disabled</option>
+									<option value="summarize">Summarize</option>
+								</select>
 							</div>
-						</div>
-						<div class="form-group">
-							<label for="developerCompactionType">Developer Compaction</label>
-							<select id="developerCompactionType">
-								<option value="disabled">Disabled</option>
-								<option value="summarize">Summarize</option>
-							</select>
-						</div>
-						<div id="developerCompactionOptions" class="compaction-options" style="display: none;">
-							<div class="form-group">
-								<label for="developerContextThreshold">Context Size Threshold (0 = use LLM limit only)</label>
-								<input type="number" id="developerContextThreshold" min="0" step="1000" placeholder="100000">
+							<div id="managerCompactionOptions" class="compaction-options" style="display: none;">
+								<div class="form-group">
+									<label for="managerContextPercent">Context Size Percent: <span id="managerContextPercentValue">60%</span></label>
+									<input type="range" id="managerContextPercent" min="10" max="90" step="5" value="60" oninput="updatePercentLabel('manager')">
+									<small style="color: var(--gray-500);">Compaction triggers when context reaches this % of LLM limit.</small>
+								</div>
 							</div>
-						</div>
+							<div class="form-group">
+								<label for="developerCompactionType">Developer Compaction</label>
+								<select id="developerCompactionType">
+									<option value="disabled">Disabled</option>
+									<option value="summarize">Summarize</option>
+								</select>
+							</div>
+							<div id="developerCompactionOptions" class="compaction-options" style="display: none;">
+								<div class="form-group">
+									<label for="developerContextPercent">Context Size Percent: <span id="developerContextPercentValue">60%</span></label>
+									<input type="range" id="developerContextPercent" min="10" max="90" step="5" value="60" oninput="updatePercentLabel('developer')">
+									<small style="color: var(--gray-500);">Compaction triggers when context reaches this % of LLM limit.</small>
+								</div>
+							</div>
 					</div>
 				</div>
 

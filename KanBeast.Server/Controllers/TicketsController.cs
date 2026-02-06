@@ -264,6 +264,66 @@ public class TicketsController : ControllerBase
         await _hubContext.Clients.All.TicketUpdated(ticket);
         return Ok(ticket);
     }
+
+    [HttpPatch("{id}/details")]
+    public async Task<ActionResult<Ticket>> UpdateTitleDescription(string id, [FromBody] TicketTitleDescriptionUpdate update)
+    {
+        Ticket? ticket = await _ticketService.UpdateTicketTitleDescriptionAsync(id, update.Title, update.Description);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+
+        _logger.LogInformation("PATCH /tickets/{Id}/details - updated title/description", id);
+        await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
+        return Ok(ticket);
+    }
+
+    [HttpDelete("{ticketId}/tasks/{taskId}")]
+    public async Task<ActionResult<Ticket>> DeleteTask(string ticketId, string taskId)
+    {
+        Ticket? ticket = await _ticketService.DeleteTaskAsync(ticketId, taskId);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+
+        _logger.LogInformation("DELETE /tickets/{TicketId}/tasks/{TaskId}", ticketId, taskId);
+        await _hubContext.Clients.Group($"ticket-{ticketId}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
+        return Ok(ticket);
+    }
+
+    [HttpDelete("{ticketId}/tasks/{taskId}/subtasks/{subtaskId}")]
+    public async Task<ActionResult<Ticket>> DeleteSubtask(string ticketId, string taskId, string subtaskId)
+    {
+        Ticket? ticket = await _ticketService.DeleteSubtaskAsync(ticketId, taskId, subtaskId);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+
+        _logger.LogInformation("DELETE /tickets/{TicketId}/tasks/{TaskId}/subtasks/{SubtaskId}", ticketId, taskId, subtaskId);
+        await _hubContext.Clients.Group($"ticket-{ticketId}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
+        return Ok(ticket);
+    }
+
+    [HttpDelete("{id}/tasks")]
+    public async Task<ActionResult<Ticket>> ClearTasks(string id)
+    {
+        Ticket? ticket = await _ticketService.ClearTasksAsync(id);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+
+        _logger.LogInformation("DELETE /tickets/{Id}/tasks - cleared all tasks", id);
+        await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
+        return Ok(ticket);
+    }
 }
 
 public record TicketStatusUpdate(TicketStatus Status);
@@ -272,3 +332,4 @@ public record ActivityUpdate(string Message);
 public record BranchUpdate(string BranchName);
 public record CostUpdate(decimal Cost);
 public record MaxCostUpdate(decimal MaxCost);
+public record TicketTitleDescriptionUpdate(string Title, string Description);

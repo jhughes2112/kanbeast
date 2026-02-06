@@ -594,6 +594,7 @@ async function showTicketDetails(ticketId) {
     let actionsHtml = '<div class="ticket-actions">';
     const allowedTargets = ALLOWED_TRANSITIONS[status] || [];
     const canDelete = status === 'Backlog' || status === 'Done';
+    const canEdit = status === 'Backlog';
 
     if (status === 'Backlog') {
         actionsHtml += `<button class="btn-primary" onclick="moveTicket('${ticketId}', 'Active')">🚀 Start Work</button>`;
@@ -603,11 +604,34 @@ async function showTicketDetails(ticketId) {
         actionsHtml += `<button class="btn-secondary" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Reopen</button>`;
     }
 
+    if (ticket.tasks && ticket.tasks.length > 0) {
+        actionsHtml += `<button class="btn-secondary" onclick="clearTasks('${ticketId}')">🧹 Clear Tasks</button>`;
+    }
+
     if (canDelete) {
         actionsHtml += `<button class="btn-danger btn-delete" onclick="deleteTicket('${ticketId}')">🗑️ Delete</button>`;
     }
 
     actionsHtml += '</div>';
+
+    // Title/description section - editable if in Backlog
+    let titleDescHtml;
+    if (canEdit) {
+        titleDescHtml = `
+            <div class="detail-section editable-section">
+                <input type="text" id="editTitle" class="edit-title-input" value="${escapeHtml(ticket.title)}" placeholder="Ticket title...">
+                <textarea id="editDescription" class="edit-description-input" rows="4" placeholder="Description...">${escapeHtml(ticket.description || '')}</textarea>
+                <button class="btn-secondary btn-sm" onclick="saveTicketDetails('${ticketId}')">💾 Save Changes</button>
+            </div>
+        `;
+    } else {
+        titleDescHtml = `
+            <div class="detail-section">
+                <h2 class="detail-title">${escapeHtml(ticket.title)}</h2>
+                <p>${escapeHtml(ticket.description || 'No description provided.')}</p>
+            </div>
+        `;
+    }
 
     detailDiv.innerHTML = `
         <div class="ticket-detail-header">
@@ -625,10 +649,7 @@ async function showTicketDetails(ticketId) {
             </div>
         </div>
 
-        <div class="detail-section">
-            <h2 class="detail-title">${escapeHtml(ticket.title)}</h2>
-            <p>${escapeHtml(ticket.description || 'No description provided.')}</p>
-        </div>
+        ${titleDescHtml}
 
         <div class="detail-section">
             ${tasksHtml}
@@ -817,6 +838,60 @@ async function deleteTicket(ticketId) {
 
 // Make deleteTicket available globally for onclick handlers
 window.deleteTicket = deleteTicket;
+
+// Save ticket title and description
+async function saveTicketDetails(ticketId) {
+    const title = document.getElementById('editTitle').value.trim();
+    const description = document.getElementById('editDescription').value.trim();
+
+    if (!title) {
+        alert('Title cannot be empty');
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/tickets/${ticketId}/details`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ title, description })
+        });
+
+        if (response.ok) {
+            await refreshAllTickets();
+            await showTicketDetails(ticketId);
+        } else {
+            console.error('Failed to save ticket details');
+        }
+    } catch (error) {
+        console.error('Error saving ticket details:', error);
+    }
+}
+
+window.saveTicketDetails = saveTicketDetails;
+
+// Clear all tasks from a ticket
+async function clearTasks(ticketId) {
+    if (!confirm('Clear all tasks and subtasks from this ticket?')) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/tickets/${ticketId}/tasks`, {
+            method: 'DELETE'
+        });
+
+        if (response.ok) {
+            await refreshAllTickets();
+            await showTicketDetails(ticketId);
+        } else {
+            console.error('Failed to clear tasks');
+        }
+    } catch (error) {
+        console.error('Error clearing tasks:', error);
+    }
+}
+
+window.clearTasks = clearTasks;
 
 // Drag and drop
 function canMoveFrom(status) {
@@ -1047,8 +1122,13 @@ function showSettings() {
     const developerType = (settings && settings.developerCompaction && settings.developerCompaction.type) || 'disabled';
     document.getElementById('managerCompactionType').value = managerType === 'summarize' ? 'summarize' : 'disabled';
     document.getElementById('developerCompactionType').value = developerType === 'summarize' ? 'summarize' : 'disabled';
-    document.getElementById('managerContextThreshold').value = (settings && settings.managerCompaction && settings.managerCompaction.contextSizeThreshold) || 0;
-    document.getElementById('developerContextThreshold').value = (settings && settings.developerCompaction && settings.developerCompaction.contextSizeThreshold) || 0;
+
+    const managerPercent = Math.round(((settings && settings.managerCompaction && settings.managerCompaction.contextSizePercent) || 0.6) * 100);
+    const developerPercent = Math.round(((settings && settings.developerCompaction && settings.developerCompaction.contextSizePercent) || 0.6) * 100);
+    document.getElementById('managerContextPercent').value = managerPercent;
+    document.getElementById('developerContextPercent').value = developerPercent;
+    updatePercentLabel('manager');
+    updatePercentLabel('developer');
     updateCompactionVisibility();
 
     // Populate worker settings
@@ -1194,11 +1274,11 @@ async function saveSettings() {
         },
         managerCompaction: {
             type: document.getElementById('managerCompactionType').value,
-            contextSizeThreshold: parseInt(document.getElementById('managerContextThreshold').value, 10) || 0
+            contextSizePercent: parseInt(document.getElementById('managerContextPercent').value, 10) / 100
         },
         developerCompaction: {
             type: document.getElementById('developerCompactionType').value,
-            contextSizeThreshold: parseInt(document.getElementById('developerContextThreshold').value, 10) || 0
+            contextSizePercent: parseInt(document.getElementById('developerContextPercent').value, 10) / 100
         },
         jsonLogging: document.getElementById('jsonLogging').checked
     };
@@ -1222,6 +1302,15 @@ async function saveSettings() {
         alert('Error saving settings. Please check the console for details.');
     }
 }
+
+// Update percent label when slider moves
+function updatePercentLabel(role) {
+    const slider = document.getElementById(`${role}ContextPercent`);
+    const label = document.getElementById(`${role}ContextPercentValue`);
+    label.textContent = `${slider.value}%`;
+}
+
+window.updatePercentLabel = updatePercentLabel;
 
 // Make saveSettings available globally for onclick
 window.saveSettings = saveSettings;

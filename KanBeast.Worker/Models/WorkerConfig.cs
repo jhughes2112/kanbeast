@@ -61,6 +61,6 @@ public class WorkerSettings
 
 public class CompactionSettings
 {
-    public string Type { get; set; } = string.Empty;
-    public int ContextSizeThreshold { get; set; }
+    public string Type { get; set; } = "summarize";
+    public double ContextSizePercent { get; set; } = 0.6;
 }

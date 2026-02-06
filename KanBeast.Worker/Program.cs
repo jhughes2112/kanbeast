@@ -273,9 +273,8 @@ public class Program
             if (string.Equals(settings.Type, "summarize", StringComparison.OrdinalIgnoreCase) && llmConfigs.Count > 0)
             {
                 LLMConfig currentLlm = llmConfigs[0];
-                compaction = new CompactionSummarizer(
-                    compactionPrompt,
-                    settings.ContextSizeThreshold);
+                int threshold = (int)(currentLlm.ContextLength * settings.ContextSizePercent);
+                compaction = new CompactionSummarizer(compactionPrompt, threshold);
             }
 
             return compaction;

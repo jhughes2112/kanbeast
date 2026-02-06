@@ -97,7 +97,29 @@ public class CompactionSummarizer : ICompaction
 
             builder.Append(message.Role);
             builder.Append(": ");
-            builder.Append(message.Content ?? "[tool call]");
+
+            if (message.ToolCalls != null && message.ToolCalls.Count > 0)
+            {
+                bool first = true;
+                foreach (ToolCallMessage toolCall in message.ToolCalls)
+                {
+                    if (!first)
+                    {
+                        builder.Append(", ");
+                    }
+
+                    builder.Append(toolCall.Function.Name);
+                    builder.Append('(');
+                    builder.Append(toolCall.Function.Arguments);
+                    builder.Append(')');
+                    first = false;
+                }
+            }
+            else
+            {
+                builder.Append(message.Content ?? "[empty]");
+            }
+
             builder.Append('\n');
         }
 

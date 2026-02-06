@@ -198,9 +198,9 @@ public class SettingsService : ISettingsService
             errors.Add("ManagerCompaction.Type is required");
         }
 
-        if (settings.ManagerCompaction.ContextSizeThreshold <= 0)
+        if (settings.ManagerCompaction.ContextSizePercent <= 0 || settings.ManagerCompaction.ContextSizePercent > 1)
         {
-            errors.Add("ManagerCompaction.ContextSizeThreshold must be greater than 0");
+            errors.Add("ManagerCompaction.ContextSizePercent must be between 0 and 1");
         }
 
         if (string.IsNullOrEmpty(settings.DeveloperCompaction.Type))
@@ -208,9 +208,9 @@ public class SettingsService : ISettingsService
             errors.Add("DeveloperCompaction.Type is required");
         }
 
-        if (settings.DeveloperCompaction.ContextSizeThreshold <= 0)
+        if (settings.DeveloperCompaction.ContextSizePercent <= 0 || settings.DeveloperCompaction.ContextSizePercent > 1)
         {
-            errors.Add("DeveloperCompaction.ContextSizeThreshold must be greater than 0");
+            errors.Add("DeveloperCompaction.ContextSizePercent must be between 0 and 1");
         }
 
         if (string.IsNullOrEmpty(settings.WebSearch.Provider))

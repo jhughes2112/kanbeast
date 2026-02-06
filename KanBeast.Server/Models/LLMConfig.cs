@@ -46,8 +46,8 @@ public class SettingsFile
 // Configures compaction behavior for agent context handling.
 public class CompactionSettings
 {
-    public string Type { get; set; } = string.Empty;
-    public int ContextSizeThreshold { get; set; }
+    public string Type { get; set; } = "summarize";
+    public double ContextSizePercent { get; set; } = 0.6;
 }
 
 // Configures web search provider for agents.
