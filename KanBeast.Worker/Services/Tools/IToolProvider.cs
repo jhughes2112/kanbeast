@@ -5,7 +5,8 @@ namespace KanBeast.Worker.Services.Tools;
 // Roles that can be assigned to an LLM agent.
 public enum LlmRole
 {
-    Manager,
+    ManagerPlanning,
+    ManagerImplementing,
     Developer,
     Compaction
 }

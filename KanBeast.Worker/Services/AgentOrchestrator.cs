@@ -177,7 +177,7 @@ public class AgentOrchestrator : IAgentOrchestrator
 			Use create_task to create tasks, then create_subtask to add subtasks with clear acceptance criteria.
 			""";
 
-		LlmResult result = await _managerLlm.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
+		LlmResult result = await _managerLlm.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.ManagerPlanning, cancellationToken);
 		_logger.LogDebug("Manager planning response: {Response}", result.Content);
 
 		if (result.AccumulatedCost > 0)
@@ -220,11 +220,12 @@ public class AgentOrchestrator : IAgentOrchestrator
 
 			Repository: {workDir}
 
-			Workflow: For each incomplete subtask, assign it to the developer, review their response, provide feedback or mark complete, then move to the next subtask. 
+			Workflow: Complete subtasks in the exact order they appear. For each incomplete subtask, assign it to the developer, review their response, provide feedback or mark complete, then move to the next subtask.
+			Do not skip ahead or work on subtasks out of order.
 			When all subtasks are complete, set the ticket status to done.
 			""";
 
-		LlmResult result = await _managerLlm.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.Manager, cancellationToken);
+		LlmResult result = await _managerLlm.RunAsync(_managerPrompt, userPrompt, toolProviders, LlmRole.ManagerImplementing, cancellationToken);
 		_logger.LogDebug("Manager working response: {Response}", result.Content);
 
 		if (result.AccumulatedCost > 0)

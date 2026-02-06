@@ -49,11 +49,15 @@ public class TicketTools : IToolProvider
 
     private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
     {
-        List<Tool> managerTools = new List<Tool>();
-        ToolHelper.AddTools(managerTools, this,
+        List<Tool> planningTools = new List<Tool>();
+        ToolHelper.AddTools(planningTools, this,
             nameof(LogMessageAsync),
             nameof(CreateTaskAsync),
-            nameof(CreateSubtaskAsync),
+            nameof(CreateSubtaskAsync));
+
+        List<Tool> implementingTools = new List<Tool>();
+        ToolHelper.AddTools(implementingTools, this,
+            nameof(LogMessageAsync),
             nameof(AssignSubtaskToDeveloperAsync),
             nameof(TellDeveloperAsync),
             nameof(SetSubtaskStatusAsync),
@@ -66,7 +70,8 @@ public class TicketTools : IToolProvider
 
         Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
-            [LlmRole.Manager] = managerTools,
+            [LlmRole.ManagerPlanning] = planningTools,
+            [LlmRole.ManagerImplementing] = implementingTools,
             [LlmRole.Developer] = developerTools,
             [LlmRole.Compaction] = new List<Tool>()
         };

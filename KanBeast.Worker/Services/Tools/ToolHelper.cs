@@ -28,20 +28,23 @@ public static class ToolHelper
         {
             object?[] methodArgs = BuildMethodArguments(method, args);
             object? result = method.Invoke(instance, methodArgs);
+            string response;
 
             if (result is Task<string> taskString)
             {
-                return await taskString;
+                response = await taskString;
             }
             else if (result is Task task)
             {
                 await task;
-                return "OK";
+                response = "OK";
             }
             else
             {
-                return result?.ToString() ?? "OK";
+                response = result?.ToString() ?? "OK";
             }
+
+            return TruncateResponse(response);
         };
 
         tools.Add(new Tool
@@ -254,5 +257,24 @@ public static class ToolHelper
         }
 
         return result.ToString();
+    }
+
+    private const int MaxResponseLength = 4000;
+    private const int TruncateHeadLength = 2000;
+    private const int TruncateTailLength = 2000;
+
+    // Truncates long responses to first 2000 and last 2000 characters to save context window.
+    public static string TruncateResponse(string response)
+    {
+        if (string.IsNullOrEmpty(response) || response.Length <= MaxResponseLength)
+        {
+            return response;
+        }
+
+        int omittedCount = response.Length - TruncateHeadLength - TruncateTailLength;
+        string head = response.Substring(0, TruncateHeadLength);
+        string tail = response.Substring(response.Length - TruncateTailLength);
+
+        return $"{head}\n\n... [{omittedCount} characters omitted] ...\n\n{tail}";
     }
 }

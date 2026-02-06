@@ -32,16 +32,21 @@ public class FileTools : IToolProvider
     private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
     {
         List<Tool> readOnlyTools = new List<Tool>();
-        ToolHelper.AddTools(readOnlyTools, this);  // empty, read only does not get edit tools
+        ToolHelper.AddTools(readOnlyTools, this,
+            nameof(ReadFileAsync),
+            nameof(GetFileAsync));
 
         List<Tool> developerTools = new List<Tool>();
         ToolHelper.AddTools(developerTools, this,
-            nameof(WriteFileAsync),  // this helps with dumb models, mostly
-            nameof(EditFileAsync));  // this one helps with file editing a lot
+            nameof(ReadFileAsync),
+            nameof(GetFileAsync),
+            nameof(WriteFileAsync),
+            nameof(EditFileAsync));
 
         Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
-            [LlmRole.Manager] = readOnlyTools,
+            [LlmRole.ManagerPlanning] = readOnlyTools,
+            [LlmRole.ManagerImplementing] = readOnlyTools,
             [LlmRole.Developer] = developerTools,
             [LlmRole.Compaction] = new List<Tool>()
         };
@@ -58,6 +63,51 @@ public class FileTools : IToolProvider
         else
         {
             throw new ArgumentException($"Unhandled role: {role}");
+        }
+    }
+
+    [Description("Read the contents of a file.")]
+    public async Task<string> ReadFileAsync(
+        [Description("Path to the file (absolute or relative to repository)")] string filePath)
+    {
+        return await ReadFileContentAsync(filePath);
+    }
+
+    [Description("Get the contents of a file.")]
+    public async Task<string> GetFileAsync(
+        [Description("Path to the file (absolute or relative to repository)")] string filePath)
+    {
+        return await ReadFileContentAsync(filePath);
+    }
+
+    private async Task<string> ReadFileContentAsync(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            return "Error: Path cannot be empty";
+        }
+
+        string fullPath = ResolvePath(filePath);
+
+        try
+        {
+            if (!File.Exists(fullPath))
+            {
+                return $"Error: File not found: {filePath}";
+            }
+
+            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+            string content = await File.ReadAllTextAsync(fullPath, cts.Token);
+
+            return content;
+        }
+        catch (TaskCanceledException)
+        {
+            return $"Error: Timed out reading file: {filePath}";
+        }
+        catch (Exception ex)
+        {
+            return $"Error: Failed to read file: {ex.Message}";
         }
     }
 

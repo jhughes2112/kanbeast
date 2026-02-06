@@ -35,7 +35,8 @@ public class ShellTools : IToolProvider
 
         Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
-            [LlmRole.Manager] = sharedTools,
+            [LlmRole.ManagerPlanning] = sharedTools,
+            [LlmRole.ManagerImplementing] = sharedTools,
             [LlmRole.Developer] = sharedTools,
             [LlmRole.Compaction] = new List<Tool>()
         };
