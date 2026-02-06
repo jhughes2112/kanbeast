@@ -396,6 +396,12 @@ nav {
     gap: 0.25rem;
 }
 
+.ticket-cost-simple {
+    font-size: 0.75rem;
+    color: var(--gray-500);
+    font-weight: 500;
+}
+
 .pip-progress-bar {
     display: flex;
     height: 2px;
@@ -677,6 +683,42 @@ nav {
     font-size: 1rem;
     font-weight: 700;
     color: var(--primary);
+}
+
+.ticket-detail-cost {
+    font-size: 0.875rem;
+    color: var(--gray-500);
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+}
+
+.cost-inline-input {
+    width: 60px;
+    padding: 0.125rem 0.25rem;
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--gray-400);
+    color: var(--gray-500);
+    font-size: 0.875rem;
+    font-weight: 500;
+    font-family: inherit;
+}
+
+.cost-inline-input:focus {
+    outline: none;
+    border-bottom-color: var(--primary);
+}
+
+.cost-inline-input::-webkit-inner-spin-button,
+.cost-inline-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.cost-inline-input[type=number] {
+    -moz-appearance: textfield;
 }
 
 .status-badge {

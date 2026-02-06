@@ -313,7 +313,6 @@ function createTicketElement(ticket) {
     ticketEl.innerHTML = `
         <div class="ticket-status-indicator"></div>
         <div class="ticket-header">
-            ${ticket.maxCost > 0 ? `<span class="cost-badge-inline">$${(ticket.maxCost - ticket.llmCost).toFixed(2)} left</span>` : `<span class="cost-badge-inline">$${ticket.llmCost.toFixed(4)}</span>`}
             <div class="ticket-title">${escapeHtml(ticket.title)}</div>
             <div class="ticket-id">#${ticket.id}</div>
         </div>
@@ -325,6 +324,7 @@ function createTicketElement(ticket) {
                 <span>📅 ${formatDate(ticket.createdAt)}</span>
                 ${ticket.containerName && status === 'Active' ? `<span class="worker-badge">${escapeHtml(ticket.containerName)}</span>` : ''}
             </div>
+            <div class="ticket-cost-simple">${ticket.maxCost > 0 ? `$${ticket.llmCost.toFixed(2)} / $${ticket.maxCost.toFixed(2)}` : `$${ticket.llmCost.toFixed(4)}`}</div>
         </div>
         ${pipProgressHtml}
     `;
@@ -615,17 +615,13 @@ async function showTicketDetails(ticketId) {
             ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : '<span class="branch-name-spacer"></span>'}
             <div class="ticket-detail-right">
                 <span class="ticket-detail-id">#${ticket.id}</span>
-            </div>
-        </div>
-
-        <div class="detail-section cost-section">
-            <div class="cost-display">
-                <span class="cost-spent">$${ticket.llmCost.toFixed(4)} spent</span>
-                <span class="cost-separator">/</span>
-                <label class="cost-max-label">
-                    $<input type="number" id="maxCostInput" class="cost-max-input" value="${ticket.maxCost.toFixed(2)}" min="0" step="0.01"> max
-                </label>
-                <button type="button" class="btn-sm btn-secondary" onclick="updateMaxCost('${ticket.id}')">Update</button>
+                <span class="ticket-detail-cost">
+                    $${ticket.llmCost.toFixed(2)} / 
+                    ${status === 'Done' 
+                        ? `$${ticket.maxCost.toFixed(2)}` 
+                        : `$<input type="number" id="maxCostInput" class="cost-inline-input" value="${ticket.maxCost.toFixed(2)}" min="0" step="0.01" onchange="updateMaxCost('${ticket.id}')">`
+                    }
+                </span>
             </div>
         </div>
 
