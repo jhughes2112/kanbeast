@@ -5,18 +5,17 @@ using Microsoft.Extensions.Logging;
 
 namespace KanBeast.Worker.Services.Tools;
 
-// Configuration for running the developer LLM from within TicketTools.
+// Configuration for the developer conversation.
 public class DeveloperConfig
 {
     public required LlmProxy LlmProxy { get; init; }
     public required string Prompt { get; init; }
     public required string WorkDir { get; init; }
-    public required int MaxIterationsPerSubtask { get; init; }
-    public required int StuckPromptingEvery { get; init; }
     public required Func<List<IToolProvider>> ToolProvidersFactory { get; init; }
+    public LlmConversation? Conversation { get; set; }
 }
 
-// Tools for LLM to interact with the ticket system: logging, subtasks, status updates.
+// Tools for LLM to interact with the ticket system and communicate between manager/developer.
 public class TicketTools : IToolProvider
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
@@ -55,18 +54,15 @@ public class TicketTools : IToolProvider
             nameof(LogMessageAsync),
             nameof(CreateTaskAsync),
             nameof(CreateSubtaskAsync),
-            nameof(MarkTaskCompleteAsync),
             nameof(AssignSubtaskToDeveloperAsync),
-            nameof(ApproveSubtaskAsync),
-            nameof(RejectSubtaskAsync),
-            nameof(MarkTicketCompleteAsync),
-            nameof(MarkTicketBlockedAsync),
-            nameof(MarkSubtaskCompleteAsync));  // allow the manager to call it in case the developer gets stuck somehow
+            nameof(TellDeveloperAsync),
+            nameof(SetSubtaskStatusAsync),
+            nameof(SetTicketStatusAsync));
 
         List<Tool> developerTools = new List<Tool>();
         ToolHelper.AddTools(developerTools, this,
             nameof(LogMessageAsync),
-            nameof(MarkSubtaskCompleteAsync));
+            nameof(TellManagerAsync));
 
         Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
@@ -90,32 +86,36 @@ public class TicketTools : IToolProvider
         }
     }
 
-    [Description("Write a message to the ticket activity log.")]
+    [Description("Send a message to the human's display about discoveries, decisions, important details, occasional jokes, etc.")]
     public async Task<string> LogMessageAsync(
         [Description("Message to log")] string message)
     {
+        string result = "Message logged";
+
         if (string.IsNullOrWhiteSpace(message))
         {
-            return "Error: Message cannot be empty";
+            result = "Error: Message cannot be empty";
+        }
+        else
+        {
+            try
+            {
+                using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, message);
+            }
+            catch (TaskCanceledException)
+            {
+                result = "Error: Request timed out while logging message";
+            }
+            catch (Exception ex)
+            {
+                result = $"Error: Failed to log message: {ex.Message}";
+            }
         }
 
-        try
-        {
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, message);
-            return "Message logged";
-        }
-        catch (TaskCanceledException)
-        {
-            return "Error: Request timed out while logging message";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to log message: {ex.Message}";
-        }
+        return result;
     }
 
-    // Looks up a task ID by name from the current ticket state.
     private string? FindTaskIdByName(string taskName)
     {
         foreach (KanbanTaskDto task in _ticketHolder.Ticket.Tasks)
@@ -127,56 +127,6 @@ public class TicketTools : IToolProvider
         }
 
         return null;
-    }
-
-    [Description("Mark a task as complete when all of its subtasks are done.")]
-    public async Task<string> MarkTaskCompleteAsync(
-        [Description("Name of the task to mark complete")] string taskName)
-    {
-        string result = string.Empty;
-
-        if (string.IsNullOrWhiteSpace(taskName))
-        {
-            result = "Error: Task name cannot be empty";
-        }
-        else
-        {
-            string? taskId = FindTaskIdByName(taskName);
-
-            if (taskId == null)
-            {
-                result = $"Error: Task '{taskName}' not found";
-            }
-            else
-            {
-                try
-                {
-                    using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-                    TicketDto? updated = await _apiClient.MarkTaskCompleteAsync(_ticketHolder.Ticket.Id, taskId);
-
-                    if (updated == null)
-                    {
-                        result = "Error: API returned null when marking task complete";
-                    }
-                    else
-                    {
-                        _ticketHolder.Update(updated);
-                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Task '{taskName}' marked complete");
-                        result = $"Task '{taskName}' marked complete";
-                    }
-                }
-                catch (TaskCanceledException)
-                {
-                    result = "Error: Request timed out while marking task complete";
-                }
-                catch (Exception ex)
-                {
-                    result = $"Error: Failed to mark task complete: {ex.Message}";
-                }
-            }
-        }
-
-        return result;
     }
 
     [Description("Create a new task for the ticket.")]
@@ -212,7 +162,6 @@ public class TicketTools : IToolProvider
                 {
                     _ticketHolder.Update(updated);
                     await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created task '{taskName}'");
-
                     result = FormatTicketSummary(updated, $"SUCCESS: Created task '{taskName}'");
                 }
             }
@@ -229,11 +178,11 @@ public class TicketTools : IToolProvider
         return result;
     }
 
-    [Description("Create a subtask for an existing task. Include clear acceptance criteria in the description so the developer knows exactly what 'done' looks like.")]
+    [Description("Create a subtask for an existing task. Include clear acceptance criteria in the description.")]
     public async Task<string> CreateSubtaskAsync(
         [Description("Name of the task to add the subtask to")] string taskName,
         [Description("Short name for the subtask")] string subtaskName,
-        [Description("Detailed description including: what to do, acceptance criteria (how to verify it's done), and any constraints or notes")] string subtaskDescription)
+        [Description("Detailed description including acceptance criteria")] string subtaskDescription)
     {
         string result = string.Empty;
 
@@ -296,10 +245,9 @@ public class TicketTools : IToolProvider
         return result;
     }
 
-    // Formats ticket state for LLM context (excludes activity log to save tokens).
     private static string FormatTicketSummary(TicketDto ticket, string header)
     {
-        System.Text.StringBuilder sb = new System.Text.StringBuilder();
+        StringBuilder sb = new StringBuilder();
         sb.AppendLine(header);
         sb.AppendLine();
         sb.AppendLine($"Ticket: {ticket.Title} (Status: {ticket.Status})");
@@ -317,19 +265,21 @@ public class TicketTools : IToolProvider
         return sb.ToString();
     }
 
-    [Description("Assign the current subtask to the developer and run the developer agent to complete it.")]
+    [Description("Assign a subtask to the developer and start work. Sets subtask to InProgress and sends initial instructions.")]
     public async Task<string> AssignSubtaskToDeveloperAsync(
-        [Description("Detailed instructions about the task, what skills to review, and what acceptance criteria will be used to determine acceptance")] string instructions)
+        [Description("Name of the task containing the subtask")] string taskName,
+        [Description("Name of the subtask to assign")] string subtaskName,
+        [Description("Instructions for the developer, skills to review, acceptance criteria")] string instructions)
     {
         string result = string.Empty;
 
-        if (string.IsNullOrWhiteSpace(instructions))
+        if (string.IsNullOrWhiteSpace(taskName) || string.IsNullOrWhiteSpace(subtaskName))
+        {
+            result = "Error: Task name and subtask name are required";
+        }
+        else if (string.IsNullOrWhiteSpace(instructions))
         {
             result = "Error: Instructions cannot be empty";
-        }
-        else if (_state.CurrentTaskId == null || _state.CurrentSubtaskId == null)
-        {
-            result = "Error: No subtask selected for assignment";
         }
         else if (_developerConfig == null)
         {
@@ -337,54 +287,46 @@ public class TicketTools : IToolProvider
         }
         else
         {
-            (KanbanTaskDto? task, KanbanSubtaskDto? subtask) = FindTaskAndSubtask(_ticketHolder.Ticket, _state.CurrentTaskId, _state.CurrentSubtaskId);
+            string? taskId = FindTaskIdByName(taskName);
 
-            if (task == null || subtask == null)
+            if (taskId == null)
             {
-                result = "Error: Could not find task or subtask";
+                result = $"Error: Task '{taskName}' not found";
             }
             else
             {
-                try
+                string? subtaskId = FindSubtaskIdByName(taskId, subtaskName);
+
+                if (subtaskId == null)
                 {
-                    TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.InProgress);
-                    if (updated != null)
+                    result = $"Error: Subtask '{subtaskName}' not found in task '{taskName}'";
+                }
+                else
+                {
+                    try
                     {
-                        _ticketHolder.Update(updated);
-                    }
-
-                    await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Starting work on '{subtask.Name}'");
-                    _logger?.LogInformation("Developer: Working on '{Name}'", subtask.Name);
-
-                    string developerSummary = await RunDeveloperAsync(task, subtask, instructions, _developerConfig.Prompt);
-                    _state.Assigned = true;
-
-                    if (_state.DeveloperComplete)
-                    {
-                        updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.AwaitingReview);
+                        TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, taskId, subtaskId, SubtaskStatus.InProgress);
                         if (updated != null)
                         {
                             _ticketHolder.Update(updated);
                         }
 
-                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Completed work on '{subtask.Name}'");
-                        result = $"Developer completed subtask. Status: {_state.DeveloperStatus}. Summary: {developerSummary}";
+                        _state.CurrentTaskId = taskId;
+                        _state.CurrentSubtaskId = subtaskId;
+
+                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Assigned subtask '{subtaskName}' to developer");
+                        _logger?.LogInformation("Assigned subtask '{SubtaskName}' to developer", subtaskName);
+
+                        result = await TellDeveloperAsync($"You are now working on subtask '{subtaskName}' under task '{taskName}'.\n\n{instructions}");
                     }
-                    else
+                    catch (TaskCanceledException)
                     {
-                        _logger?.LogWarning("Developer exceeded max iterations ({Max})", _developerConfig.MaxIterationsPerSubtask);
-                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, "Developer: Exceeded max iterations without completion");
-                        _state.Blocked = true;
-                        result = "Developer exceeded max iterations without signaling completion. Subtask is blocked.";
+                        result = "Error: Request timed out while assigning subtask";
                     }
-                }
-                catch (TaskCanceledException)
-                {
-                    result = "Error: Request timed out while running developer";
-                }
-                catch (Exception ex)
-                {
-                    result = $"Error: Failed to run developer: {ex.Message}";
+                    catch (Exception ex)
+                    {
+                        result = $"Error: Failed to assign subtask: {ex.Message}";
+                    }
                 }
             }
         }
@@ -392,289 +334,265 @@ public class TicketTools : IToolProvider
         return result;
     }
 
-    private async Task<string> RunDeveloperAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string instructions, string developerPrompt)
+    [Description("Send a follow-up message to the developer. Use this for additional instructions, feedback, or questions after initial assignment.")]
+    public async Task<string> TellDeveloperAsync(
+        [Description("Message to tell the developer")] string message)
     {
-        string initialPrompt = $"""
-            Complete this subtask:
+        string result = string.Empty;
 
-            Task: {task.Name}
-            Task Description: {task.Description}
-
-            Subtask: {subtask.Name}
-            Subtask Description: {subtask.Description}
-
-            Instructions: {instructions}
-
-            Call mark_subtask_complete when done or blocked.
-            """;
-
-        List<IToolProvider> toolProviders = _developerConfig!.ToolProvidersFactory();
-        int iterations = 0;
-        int stuckPromptingEvery = _developerConfig.StuckPromptingEvery > 0 ? _developerConfig.StuckPromptingEvery : 10;
-
-        _state.Clear();
-
-        LlmConversation conversation = _developerConfig.LlmProxy.CreateConversation(developerPrompt, initialPrompt);
-
-        while (!_state.DeveloperComplete && iterations < _developerConfig.MaxIterationsPerSubtask)
+        if (string.IsNullOrWhiteSpace(message))
         {
-            iterations++;
-
-            LlmResult result = await _developerConfig.LlmProxy.ContinueAsync(conversation, toolProviders, LlmRole.Developer, CancellationToken.None);
-            _logger?.LogDebug("Developer response ({Iteration}): {Response}", iterations, result.Content.Length > 200 ? result.Content.Substring(0, 200) : result.Content);
-
-            if (result.AccumulatedCost > 0)
+            result = "Error: Message cannot be empty";
+        }
+        else if (_developerConfig == null)
+        {
+            result = "Error: Developer configuration not available";
+        }
+        else
+        {
+            try
             {
-                await _apiClient.AddLlmCostAsync(_ticketHolder.Ticket.Id, result.AccumulatedCost);
-            }
+                await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Manager → Developer: {(message.Length > 100 ? message.Substring(0, 100) + "..." : message)}");
+                _logger?.LogInformation("Manager → Developer: {Message}", message.Length > 100 ? message.Substring(0, 100) + "..." : message);
 
-            if (!_state.DeveloperComplete)
-            {
-                if (iterations % stuckPromptingEvery == 0)
+                if (_developerConfig.Conversation == null)
                 {
-                    _logger?.LogInformation("Developer iteration {Iteration}: prompting for stuck check", iterations);
-                    await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Iteration {iterations} - checking progress");
+                    string initialPrompt = $"""
+                        You are a developer working on this repository: {_developerConfig.WorkDir}
 
-                    conversation.AddUserMessage($"""
-                        You have been working for {iterations} iterations without completing.
+                        The manager will give you instructions. When you have completed the work or need to respond, call tell_manager with your response.
 
-                        Take a moment to assess:
-                        - Are you making progress toward the goal?
-                        - Are you stuck in a loop trying the same approaches repeatedly?
-                        - Have build or test errors remained unchanged despite your fixes?
+                        Manager says: {message}
+                        """;
 
-                        IMPORTANT: You must INVOKE the mark_subtask_complete tool using the tool calling mechanism.
-                        Do NOT write the function call as text - that does nothing.
-                        Use the tool to signal completion or being blocked.
-
-                        If you are stuck, invoke mark_subtask_complete with status "blocked" and explain what you've tried.
-                        If you are making progress, continue working and invoke mark_subtask_complete when done.
-                        """);
+                    _developerConfig.Conversation = _developerConfig.LlmProxy.CreateConversation(_developerConfig.Prompt, initialPrompt);
                 }
                 else
                 {
-                    conversation.AddUserMessage("Continue working. Invoke the mark_subtask_complete tool when done or blocked.");
+                    _developerConfig.Conversation.AddUserMessage($"Manager says: {message}");
                 }
+
+                _state.ClearDeveloperResponse();
+
+                List<IToolProvider> toolProviders = _developerConfig.ToolProvidersFactory();
+
+                while (!_state.HasDeveloperResponse)
+                {
+                    LlmResult llmResult = await _developerConfig.LlmProxy.ContinueAsync(_developerConfig.Conversation, toolProviders, LlmRole.Developer, CancellationToken.None);
+
+                    if (llmResult.AccumulatedCost > 0)
+                    {
+                        TicketDto? updated = await _apiClient.AddLlmCostAsync(_ticketHolder.Ticket.Id, llmResult.AccumulatedCost);
+                        if (updated != null)
+                        {
+                            _ticketHolder.Update(updated);
+                        }
+                    }
+
+                    if (!llmResult.Success)
+                    {
+                        result = $"Developer LLM failed: {llmResult.ErrorMessage}";
+                        _state.Blocked = true;
+                        break;
+                    }
+
+                    if (!_state.HasDeveloperResponse)
+                    {
+                        _developerConfig.Conversation.AddUserMessage("Continue working. Call tell_manager when you have something to report.");
+                    }
+                }
+
+                if (_state.HasDeveloperResponse)
+                {
+                    await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer → Manager: {(_state.DeveloperResponse?.Length > 100 ? _state.DeveloperResponse.Substring(0, 100) + "..." : _state.DeveloperResponse)}");
+                    _logger?.LogInformation("Developer → Manager: {Message}", _state.DeveloperResponse?.Length > 100 ? _state.DeveloperResponse.Substring(0, 100) + "..." : _state.DeveloperResponse);
+                    result = $"Developer response: {_state.DeveloperResponse}";
+                }
+            }
+            catch (TaskCanceledException)
+            {
+                result = "Error: Request timed out while communicating with developer";
+            }
+            catch (Exception ex)
+            {
+                result = $"Error: Failed to communicate with developer: {ex.Message}";
             }
         }
 
-        await _developerConfig.LlmProxy.FinalizeConversationAsync(conversation, CancellationToken.None);
-
-        return _state.DeveloperMessage;
+        return result;
     }
 
-    private (KanbanTaskDto?, KanbanSubtaskDto?) FindTaskAndSubtask(TicketDto ticket, string taskId, string subtaskId)
+    [Description("Send a response back to the manager. Call this when you have completed work, have a question, or need to report status.")]
+    public Task<string> TellManagerAsync(
+        [Description("Your message to the manager")] string message)
     {
-        foreach (KanbanTaskDto task in ticket.Tasks)
+        string result = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(message))
         {
-            if (task.Id == taskId)
+            result = "Error: Message cannot be empty";
+        }
+        else
+        {
+            _state.DeveloperResponse = message;
+            _state.HasDeveloperResponse = true;
+            result = "Message sent to manager";
+        }
+
+        return Task.FromResult(result);
+    }
+
+    [Description("Set the status of a subtask. Use this to mark subtasks as complete, in-progress, or rejected.")]
+    public async Task<string> SetSubtaskStatusAsync(
+        [Description("Name of the task containing the subtask")] string taskName,
+        [Description("Name of the subtask")] string subtaskName,
+        [Description("New status: 'incomplete', 'in-progress', 'complete', or 'rejected'")] string status,
+        [Description("Notes about the status change")] string notes)
+    {
+        string result = string.Empty;
+
+        if (string.IsNullOrWhiteSpace(taskName) || string.IsNullOrWhiteSpace(subtaskName))
+        {
+            result = "Error: Task name and subtask name are required";
+        }
+        else if (string.IsNullOrWhiteSpace(status))
+        {
+            result = "Error: Status is required";
+        }
+        else
+        {
+            string? taskId = FindTaskIdByName(taskName);
+
+            if (taskId == null)
             {
-                foreach (KanbanSubtaskDto subtask in task.Subtasks)
+                result = $"Error: Task '{taskName}' not found";
+            }
+            else
+            {
+                string? subtaskId = FindSubtaskIdByName(taskId, subtaskName);
+
+                if (subtaskId == null)
                 {
-                    if (subtask.Id == subtaskId)
+                    result = $"Error: Subtask '{subtaskName}' not found in task '{taskName}'";
+                }
+                else
+                {
+                    SubtaskStatus newStatus = status.ToLowerInvariant() switch
                     {
-                        return (task, subtask);
+                        "complete" or "done" => SubtaskStatus.Complete,
+                        "in-progress" or "inprogress" => SubtaskStatus.InProgress,
+                        "rejected" => SubtaskStatus.Rejected,
+                        _ => SubtaskStatus.Incomplete
+                    };
+
+                    try
+                    {
+                        using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                        TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, taskId, subtaskId, newStatus);
+
+                        if (updated == null)
+                        {
+                            result = "Error: API returned null when updating subtask status";
+                        }
+                        else
+                        {
+                            _ticketHolder.Update(updated);
+                            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask '{subtaskName}' status changed to {status}: {notes}");
+                            result = $"Subtask '{subtaskName}' status set to {status}";
+                        }
+                    }
+                    catch (TaskCanceledException)
+                    {
+                        result = "Error: Request timed out while updating subtask status";
+                    }
+                    catch (Exception ex)
+                    {
+                        result = $"Error: Failed to update subtask status: {ex.Message}";
                     }
                 }
             }
         }
 
-        return (null, null);
+        return result;
     }
 
-    [Description("Call when the developer has completed the subtask or is blocked.")]
-    public async Task<string> MarkSubtaskCompleteAsync(
-        [Description("Status: 'done', 'blocked', or 'partial'")] string status,
-        [Description("Summary of what was done")] string message)
+    private string? FindSubtaskIdByName(string taskId, string subtaskName)
     {
+        foreach (KanbanTaskDto task in _ticketHolder.Ticket.Tasks)
+        {
+            if (task.Id == taskId)
+            {
+                foreach (KanbanSubtaskDto subtask in task.Subtasks)
+                {
+                    if (string.Equals(subtask.Name, subtaskName, StringComparison.Ordinal))
+                    {
+                        return subtask.Id;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    [Description("Set the ticket status. Use 'done' when all work is complete, 'blocked' if human intervention is required.")]
+    public async Task<string> SetTicketStatusAsync(
+        [Description("New status: 'done' or 'blocked'")] string status,
+        [Description("Summary of what was accomplished or reason for blocking")] string notes)
+    {
+        string result = string.Empty;
+
         if (string.IsNullOrWhiteSpace(status))
         {
-            return "Error: Status cannot be empty";
+            result = "Error: Status is required";
         }
-
-        if (string.IsNullOrWhiteSpace(message))
+        else if (string.IsNullOrWhiteSpace(notes))
         {
-            return "Error: Message cannot be empty";
+            result = "Error: Notes are required";
         }
-
-        try
+        else
         {
-            _state.DeveloperStatus = status.ToLowerInvariant() switch
+            string normalizedStatus = status.ToLowerInvariant();
+            string ticketStatus = normalizedStatus == "done" || normalizedStatus == "complete" ? "Done" : "Failed";
+
+            try
             {
-                "done" or "complete" => SubtaskCompleteStatus.Done,
-                "blocked" => SubtaskCompleteStatus.Blocked,
-                _ => SubtaskCompleteStatus.Partial
-            };
+                using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, ticketStatus);
 
-            _state.DeveloperMessage = message;
-            _state.DeveloperComplete = true;
+                if (updated == null)
+                {
+                    result = "Error: API returned null when updating ticket status";
+                }
+                else
+                {
+                    _ticketHolder.Update(updated);
+                    await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket {status}: {notes}");
 
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: {status} - {message}");
+                    if (ticketStatus == "Done")
+                    {
+                        _state.TicketComplete = true;
+                    }
+                    else
+                    {
+                        _state.TicketComplete = false;
+                        _state.BlockedReason = notes;
+                        _state.Blocked = true;
+                    }
 
-            return $"Subtask marked as {status}";
-        }
-        catch (TaskCanceledException)
-        {
-            _state.DeveloperComplete = true;
-            return $"Warning: Logged locally but API timed out. Subtask marked as {status}";
-        }
-        catch (Exception ex)
-        {
-            _state.DeveloperComplete = true;
-            return $"Warning: Logged locally but API failed: {ex.Message}. Subtask marked as {status}";
-        }
-    }
-
-    [Description("Approve the subtask - the work meets acceptance criteria.")]
-    public async Task<string> ApproveSubtaskAsync(
-        [Description("Notes about the approval explaining why it meets criteria")] string notes)
-    {
-        if (string.IsNullOrWhiteSpace(notes))
-        {
-            return "Error: Notes cannot be empty";
-        }
-
-        if (_state.CurrentTaskId == null || _state.CurrentSubtaskId == null)
-        {
-            return "Error: No subtask selected for approval";
-        }
-
-        try
-        {
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.Complete);
-
-            if (updated == null)
-            {
-                return "Error: API returned null when approving subtask";
+                    result = $"Ticket status set to {status}";
+                }
             }
-
-            _ticketHolder.Update(updated);
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask approved: {notes}");
-
-            _state.SubtaskApproved = true;
-            return "Subtask approved";
-        }
-        catch (TaskCanceledException)
-        {
-            return "Error: Request timed out while approving subtask";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to approve subtask: {ex.Message}";
-        }
-    }
-
-    [Description("Reject the subtask - the work does not meet acceptance criteria.")]
-    public async Task<string> RejectSubtaskAsync(
-        [Description("Reason for rejection - be specific about what needs to be fixed")] string reason)
-    {
-        if (_state.CurrentTaskId == null || _state.CurrentSubtaskId == null)
-        {
-            return "Error: No subtask selected for rejection";
-        }
-
-        if (string.IsNullOrWhiteSpace(reason))
-        {
-            return "Error: Rejection reason cannot be empty";
-        }
-
-        try
-        {
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.Rejected);
-
-            if (updated == null)
+            catch (TaskCanceledException)
             {
-                return "Error: API returned null when rejecting subtask";
+                result = "Error: Request timed out while updating ticket status";
             }
-
-            _ticketHolder.Update(updated);
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask rejected: {reason}");
-
-            _state.SubtaskApproved = false;
-            _state.RejectionReason = reason;
-            return $"Subtask rejected: {reason}";
-        }
-        catch (TaskCanceledException)
-        {
-            return "Error: Request timed out while rejecting subtask";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to reject subtask: {ex.Message}";
-        }
-    }
-
-    [Description("Mark the ticket as complete - all work is done and verified.")]
-    public async Task<string> MarkTicketCompleteAsync(
-        [Description("Summary of what was accomplished")] string summary)
-    {
-        if (string.IsNullOrWhiteSpace(summary))
-        {
-            return "Error: Summary cannot be empty";
-        }
-
-        try
-        {
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Done");
-
-            if (updated == null)
+            catch (Exception ex)
             {
-                return "Error: API returned null when marking ticket complete";
+                result = $"Error: Failed to update ticket status: {ex.Message}";
             }
-
-            _ticketHolder.Update(updated);
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket complete: {summary}");
-
-            _state.TicketComplete = true;
-            return "Ticket marked complete";
-        }
-        catch (TaskCanceledException)
-        {
-            return "Error: Request timed out while marking ticket complete";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to mark ticket complete: {ex.Message}";
-        }
-    }
-
-    [Description("Mark the ticket as blocked - requires human intervention.")]
-    public async Task<string> MarkTicketBlockedAsync(
-        [Description("Reason the ticket is blocked")] string reason)
-    {
-        if (string.IsNullOrWhiteSpace(reason))
-        {
-            return "Error: Blocked reason cannot be empty";
         }
 
-        try
-        {
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            TicketDto? updated = await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Failed");
-
-            if (updated == null)
-            {
-                return "Error: API returned null when marking ticket blocked";
-            }
-
-            _ticketHolder.Update(updated);
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Ticket blocked: {reason}");
-
-            _state.TicketComplete = false;
-            _state.BlockedReason = reason;
-            return $"Ticket blocked: {reason}";
-        }
-        catch (TaskCanceledException)
-        {
-            return "Error: Request timed out while marking ticket blocked";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to mark ticket blocked: {ex.Message}";
-        }
+        return result;
     }
 }

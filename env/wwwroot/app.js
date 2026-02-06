@@ -310,7 +310,7 @@ function createTicketElement(ticket) {
     ticketEl.innerHTML = `
         <div class="ticket-status-indicator"></div>
         <div class="ticket-header">
-            ${ticket.llmCost > 0 ? `<span class="cost-badge-inline">$${ticket.llmCost.toFixed(4)}</span>` : ''}
+            ${ticket.maxCost > 0 ? `<span class="cost-badge-inline">$${(ticket.maxCost - ticket.llmCost).toFixed(2)} left</span>` : (ticket.llmCost > 0 ? `<span class="cost-badge-inline">$${ticket.llmCost.toFixed(4)}</span>` : '')}
             <div class="ticket-title">${escapeHtml(ticket.title)}</div>
             <div class="ticket-id">#${ticket.id}</div>
         </div>
@@ -612,7 +612,7 @@ async function showTicketDetails(ticketId) {
             ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : '<span class="branch-name-spacer"></span>'}
             <div class="ticket-detail-right">
                 <span class="ticket-detail-id">#${ticket.id}</span>
-                ${ticket.llmCost > 0 ? `<span class="cost-badge-detail">$${ticket.llmCost.toFixed(4)}</span>` : ''}
+                ${ticket.maxCost > 0 ? `<span class="cost-badge-detail">$${ticket.llmCost.toFixed(2)} spent / $${ticket.maxCost.toFixed(2)} total</span>` : (ticket.llmCost > 0 ? `<span class="cost-badge-detail">$${ticket.llmCost.toFixed(4)} spent</span>` : '')}
             </div>
         </div>
 

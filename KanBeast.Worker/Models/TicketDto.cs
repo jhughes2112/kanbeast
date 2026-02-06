@@ -9,6 +9,7 @@ public class TicketDto
     public string? BranchName { get; set; }
     public List<KanbanTaskDto> Tasks { get; set; } = new List<KanbanTaskDto>();
     public decimal LlmCost { get; set; } = 0m;
+    public decimal MaxCost { get; set; } = 0m;
 }
 
 public class KanbanTaskDto

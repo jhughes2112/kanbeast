@@ -21,4 +21,5 @@ public class Ticket
     public DateTime? UpdatedAt { get; set; }
     public string? ContainerName { get; set; }
     public decimal LlmCost { get; set; } = 0m;
+    public decimal MaxCost { get; set; } = 0m;
 }
