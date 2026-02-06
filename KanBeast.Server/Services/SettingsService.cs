@@ -54,16 +54,6 @@ public class SettingsService : ISettingsService
             currentSettings.GitConfig = incomingSettings.GitConfig;
         }
 
-        if (incomingSettings.LlmRetryCount > 0)
-        {
-            currentSettings.LlmRetryCount = incomingSettings.LlmRetryCount;
-        }
-
-        if (incomingSettings.LlmRetryDelaySeconds > 0)
-        {
-            currentSettings.LlmRetryDelaySeconds = incomingSettings.LlmRetryDelaySeconds;
-        }
-
         if (!string.IsNullOrEmpty(incomingSettings.ManagerCompaction.Type))
         {
             currentSettings.ManagerCompaction = incomingSettings.ManagerCompaction;
@@ -213,16 +203,6 @@ public class SettingsService : ISettingsService
     {
         List<string> errors = new List<string>();
 
-        if (settings.LlmRetryCount <= 0)
-        {
-            errors.Add("LlmRetryCount must be greater than 0");
-        }
-
-        if (settings.LlmRetryDelaySeconds <= 0)
-        {
-            errors.Add("LlmRetryDelaySeconds must be greater than 0");
-        }
-
         if (string.IsNullOrEmpty(settings.ManagerCompaction.Type))
         {
             errors.Add("ManagerCompaction.Type is required");
@@ -273,8 +253,6 @@ public class SettingsService : ISettingsService
         {
             LLMConfigs = fileSettings.LLMConfigs,
             GitConfig = fileSettings.GitConfig,
-            LlmRetryCount = fileSettings.LlmRetryCount,
-            LlmRetryDelaySeconds = fileSettings.LlmRetryDelaySeconds,
             ManagerCompaction = fileSettings.ManagerCompaction,
             DeveloperCompaction = fileSettings.DeveloperCompaction,
             WebSearch = fileSettings.WebSearch,
@@ -293,8 +271,6 @@ public class SettingsService : ISettingsService
         {
             LLMConfigs = settings.LLMConfigs,
             GitConfig = settings.GitConfig,
-            LlmRetryCount = settings.LlmRetryCount,
-            LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds,
             ManagerCompaction = settings.ManagerCompaction,
             DeveloperCompaction = settings.DeveloperCompaction,
             WebSearch = settings.WebSearch,

@@ -7,12 +7,11 @@ namespace KanBeast.Worker.Services;
 public class LlmProxy
 {
     private readonly List<LLMConfig> _configs;
-    private readonly int _retryCount;
-    private readonly TimeSpan _retryDelay;
     private readonly ICompaction _compaction;
     private readonly string _logDirectory;
     private readonly string _logPrefix;
     private readonly bool _jsonLogging;
+    private readonly List<LlmService> _services;
     private int _currentLlmIndex;
     private int _conversationIndex;
 
@@ -24,17 +23,21 @@ public class LlmProxy
 
     public ICompaction Compaction => _compaction;
 
-    public LlmProxy(List<LLMConfig> configs, int retryCount, int retryDelaySeconds, ICompaction compaction, string logDirectory, string logPrefix, bool jsonLogging)
+    public LlmProxy(List<LLMConfig> configs, ICompaction compaction, string logDirectory, string logPrefix, bool jsonLogging)
     {
         _configs = configs;
-        _retryCount = retryCount;
-        _retryDelay = TimeSpan.FromSeconds(retryDelaySeconds);
         _compaction = compaction;
         _logDirectory = logDirectory;
         _logPrefix = logPrefix;
         _jsonLogging = jsonLogging;
         _currentLlmIndex = 0;
         _conversationIndex = 0;
+
+        _services = new List<LlmService>();
+        foreach (LLMConfig config in configs)
+        {
+            _services.Add(new LlmService(config, jsonLogging));
+        }
     }
 
     public LlmConversation CreateConversation(string systemPrompt, string userPrompt)
@@ -56,60 +59,30 @@ public class LlmProxy
         return conversation;
     }
 
+	public async Task<LlmResult> RunAsync(string systemPrompt, string userPrompt, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
+	{
+		LlmConversation conversation = CreateConversation(systemPrompt, userPrompt);
+		LlmResult result = await ContinueAsync(conversation, providers, role, cancellationToken);
+		await FinalizeConversationAsync(conversation, cancellationToken);
+		return result;
+	}
+
     public async Task<LlmResult> ContinueAsync(LlmConversation conversation, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
     {
-        LlmResult result = new LlmResult();
-        bool succeeded = false;
+        LlmResult result = new LlmResult { Success = false, ErrorMessage = "All configured LLMs failed" };
 
-        if (_currentLlmIndex >= _configs.Count)
+        while (_currentLlmIndex < _services.Count && !result.Success)
         {
-            throw new InvalidOperationException("All configured LLMs are unavailable.");
-        }
+            LlmService service = _services[_currentLlmIndex];
+            string modelName = _configs[_currentLlmIndex].Model;
 
-        while (_currentLlmIndex < _configs.Count && !succeeded)
-        {
-            LLMConfig config = _configs[_currentLlmIndex];
-            string modelName = config.Model;
-            LlmService service = new LlmService(config, _compaction, _jsonLogging);
+            result = await service.RunAsync(conversation, providers, role, _compaction, cancellationToken);
 
-            int attempt = 0;
-            while (attempt <= _retryCount && !succeeded)
+            if (!result.Success)
             {
-                try
-                {
-                    LlmResult iterationResult = await service.RunAsync(conversation, providers, role, cancellationToken);
-                    result.Content = iterationResult.Content;
-                    result.AccumulatedCost += iterationResult.AccumulatedCost;
-                    succeeded = true;
-                }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"LLM {_currentLlmIndex} ({modelName}) attempt {attempt + 1} failed: {ex.Message}");
-                    if (attempt < _retryCount)
-                    {
-                        if (_retryDelay > TimeSpan.Zero)
-                        {
-                            await Task.Delay(_retryDelay, cancellationToken);
-                        }
-                    }
-                    else
-                    {
-                        Console.WriteLine($"LLM {_currentLlmIndex} ({modelName}) marked as down after {_retryCount + 1} attempts");
-                    }
-                }
-
-                attempt++;
-            }
-
-            if (!succeeded)
-            {
+                Console.WriteLine($"LLM {_currentLlmIndex} ({modelName}) failed: {result.ErrorMessage}. Trying next...");
                 _currentLlmIndex++;
             }
-        }
-
-        if (!succeeded)
-        {
-            throw new InvalidOperationException("All configured LLMs are unavailable.");
         }
 
         return result;
@@ -123,12 +96,4 @@ public class LlmProxy
             await conversation.WriteLogAsync("-complete", cancellationToken);
         }
     }
-
-	public async Task<LlmResult> RunAsync(string systemPrompt, string userPrompt, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
-	{
-		LlmConversation conversation = CreateConversation(systemPrompt, userPrompt);
-		LlmResult result = await ContinueAsync(conversation, providers, role, cancellationToken);
-		await FinalizeConversationAsync(conversation, cancellationToken);
-		return result;
-	}
 }

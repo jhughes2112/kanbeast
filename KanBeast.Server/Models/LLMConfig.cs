@@ -37,8 +37,6 @@ public class SettingsFile
 {
     public List<LLMConfig> LLMConfigs { get; set; } = new();
     public GitConfig GitConfig { get; set; } = new();
-    public int LlmRetryCount { get; set; }
-    public int LlmRetryDelaySeconds { get; set; }
     public CompactionSettings ManagerCompaction { get; set; } = new();
     public CompactionSettings DeveloperCompaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();

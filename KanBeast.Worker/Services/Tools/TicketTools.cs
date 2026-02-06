@@ -60,7 +60,8 @@ public class TicketTools : IToolProvider
             nameof(ApproveSubtaskAsync),
             nameof(RejectSubtaskAsync),
             nameof(MarkTicketCompleteAsync),
-            nameof(MarkTicketBlockedAsync));
+            nameof(MarkTicketBlockedAsync),
+            nameof(MarkSubtaskCompleteAsync));  // allow the manager to call it in case the developer gets stuck somehow
 
         List<Tool> developerTools = new List<Tool>();
         ToolHelper.AddTools(developerTools, this,
@@ -318,79 +319,80 @@ public class TicketTools : IToolProvider
 
     [Description("Assign the current subtask to the developer and run the developer agent to complete it.")]
     public async Task<string> AssignSubtaskToDeveloperAsync(
-        [Description("Mode: 'implementation', 'testing', or 'write-tests'")] string mode,
-        [Description("Clear goal statement for the developer including acceptance criteria")] string goal)
+        [Description("Detailed instructions about the task, what skills to review, and what acceptance criteria will be used to determine acceptance")] string instructions)
     {
-        if (string.IsNullOrWhiteSpace(mode))
-        {
-            return "Error: Mode cannot be empty";
-        }
+        string result = string.Empty;
 
-        if (string.IsNullOrWhiteSpace(goal))
+        if (string.IsNullOrWhiteSpace(instructions))
         {
-            return "Error: Goal cannot be empty";
+            result = "Error: Instructions cannot be empty";
         }
-
-        if (_state.CurrentTaskId == null || _state.CurrentSubtaskId == null)
+        else if (_state.CurrentTaskId == null || _state.CurrentSubtaskId == null)
         {
-            return "Error: No subtask selected for assignment";
+            result = "Error: No subtask selected for assignment";
         }
-
-        if (_developerConfig == null)
+        else if (_developerConfig == null)
         {
-            return "Error: Developer configuration not available";
+            result = "Error: Developer configuration not available";
         }
-
-        (KanbanTaskDto? task, KanbanSubtaskDto? subtask) = FindTaskAndSubtask(_ticketHolder.Ticket, _state.CurrentTaskId, _state.CurrentSubtaskId);
-        if (task == null || subtask == null)
+        else
         {
-            return "Error: Could not find task or subtask";
-        }
+            (KanbanTaskDto? task, KanbanSubtaskDto? subtask) = FindTaskAndSubtask(_ticketHolder.Ticket, _state.CurrentTaskId, _state.CurrentSubtaskId);
 
-        try
-        {
-            TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.InProgress);
-            if (updated != null)
+            if (task == null || subtask == null)
             {
-                _ticketHolder.Update(updated);
-            }
-
-            await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Starting work on '{subtask.Name}'");
-            _logger?.LogInformation("Developer: Working on '{Name}'", subtask.Name);
-
-            string developerResult = await RunDeveloperAsync(task, subtask, goal, _developerConfig.Prompt);
-            _state.Assigned = true;
-
-            if (_state.DeveloperComplete)
-            {
-                updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.AwaitingReview);
-                if (updated != null)
-                {
-                    _ticketHolder.Update(updated);
-                }
-
-                await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Completed work on '{subtask.Name}'");
-                return $"Developer completed subtask. Status: {_state.DeveloperStatus}. Summary: {_state.DeveloperMessage}";
+                result = "Error: Could not find task or subtask";
             }
             else
             {
-                _logger?.LogWarning("Developer exceeded max iterations ({Max})", _developerConfig.MaxIterationsPerSubtask);
-                await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, "Developer: Exceeded max iterations without completion");
-                _state.Blocked = true;
-                return "Developer exceeded max iterations without signaling completion. Subtask is blocked.";
+                try
+                {
+                    TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.InProgress);
+                    if (updated != null)
+                    {
+                        _ticketHolder.Update(updated);
+                    }
+
+                    await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Starting work on '{subtask.Name}'");
+                    _logger?.LogInformation("Developer: Working on '{Name}'", subtask.Name);
+
+                    string developerSummary = await RunDeveloperAsync(task, subtask, instructions, _developerConfig.Prompt);
+                    _state.Assigned = true;
+
+                    if (_state.DeveloperComplete)
+                    {
+                        updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _state.CurrentTaskId, _state.CurrentSubtaskId, SubtaskStatus.AwaitingReview);
+                        if (updated != null)
+                        {
+                            _ticketHolder.Update(updated);
+                        }
+
+                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer: Completed work on '{subtask.Name}'");
+                        result = $"Developer completed subtask. Status: {_state.DeveloperStatus}. Summary: {developerSummary}";
+                    }
+                    else
+                    {
+                        _logger?.LogWarning("Developer exceeded max iterations ({Max})", _developerConfig.MaxIterationsPerSubtask);
+                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, "Developer: Exceeded max iterations without completion");
+                        _state.Blocked = true;
+                        result = "Developer exceeded max iterations without signaling completion. Subtask is blocked.";
+                    }
+                }
+                catch (TaskCanceledException)
+                {
+                    result = "Error: Request timed out while running developer";
+                }
+                catch (Exception ex)
+                {
+                    result = $"Error: Failed to run developer: {ex.Message}";
+                }
             }
         }
-        catch (TaskCanceledException)
-        {
-            return "Error: Request timed out while running developer";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to run developer: {ex.Message}";
-        }
+
+        return result;
     }
 
-    private async Task<string> RunDeveloperAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string goal, string developerPrompt)
+    private async Task<string> RunDeveloperAsync(KanbanTaskDto task, KanbanSubtaskDto subtask, string instructions, string developerPrompt)
     {
         string initialPrompt = $"""
             Complete this subtask:
@@ -401,7 +403,7 @@ public class TicketTools : IToolProvider
             Subtask: {subtask.Name}
             Subtask Description: {subtask.Description}
 
-            Goal: {goal}
+            Instructions: {instructions}
 
             Call mark_subtask_complete when done or blocked.
             """;
@@ -441,13 +443,17 @@ public class TicketTools : IToolProvider
                         - Are you stuck in a loop trying the same approaches repeatedly?
                         - Have build or test errors remained unchanged despite your fixes?
 
-                        If you are stuck, call mark_subtask_complete with status "blocked" and explain what you've tried.
-                        If you are making progress, continue working and call mark_subtask_complete when done.
+                        IMPORTANT: You must INVOKE the mark_subtask_complete tool using the tool calling mechanism.
+                        Do NOT write the function call as text - that does nothing.
+                        Use the tool to signal completion or being blocked.
+
+                        If you are stuck, invoke mark_subtask_complete with status "blocked" and explain what you've tried.
+                        If you are making progress, continue working and invoke mark_subtask_complete when done.
                         """);
                 }
                 else
                 {
-                    conversation.AddUserMessage("Continue working. Call mark_subtask_complete when done or blocked.");
+                    conversation.AddUserMessage("Continue working. Invoke the mark_subtask_complete tool when done or blocked.");
                 }
             }
         }

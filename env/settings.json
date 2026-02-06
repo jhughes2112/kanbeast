@@ -18,8 +18,6 @@
     "username": "",
     "email": ""
   },
-  "llmRetryCount": 3,
-  "llmRetryDelaySeconds": 5,
   "managerCompaction": {
     "type": "disabled",
     "contextSizeThreshold": 100000

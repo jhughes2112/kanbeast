@@ -47,17 +47,17 @@ public class Program
             WorkerConfig config = BuildConfiguration(options);
             logger.LogInformation("Worker initialized for ticket: {TicketId}", config.TicketId);
 
-            GitService gitService = new GitService(config.GitConfig);
-            ICompaction managerCompaction = BuildCompaction(config.ManagerCompaction, config.LLMConfigs, config.GetPrompt("manager-compaction")); 
+			GitService gitService = new GitService(config.GitConfig);
+			ICompaction managerCompaction = BuildCompaction(config.ManagerCompaction, config.LLMConfigs, config.GetPrompt("manager-compaction")); 
 			ICompaction developerCompaction = BuildCompaction(config.DeveloperCompaction, config.LLMConfigs, config.GetPrompt("developer-compaction"));
 
-            string logDirectory = Path.Combine(Environment.CurrentDirectory, "logs");
+			string logDirectory = Path.Combine(Environment.CurrentDirectory, "logs");
 
-            LlmProxy managerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, managerCompaction, logDirectory, $"tik-{config.TicketId}-mgr", config.JsonLogging);
-            LlmProxy developerProxy = new LlmProxy(config.LLMConfigs, config.LlmRetryCount, config.LlmRetryDelaySeconds, developerCompaction, logDirectory, $"tik-{config.TicketId}-dev", config.JsonLogging);
+			LlmProxy managerProxy = new LlmProxy(config.LLMConfigs, managerCompaction, logDirectory, $"tik-{config.TicketId}-mgr", config.JsonLogging);
+			LlmProxy developerProxy = new LlmProxy(config.LLMConfigs, developerCompaction, logDirectory, $"tik-{config.TicketId}-dev", config.JsonLogging);
 
-            LlmProxy managerLlmService = managerProxy;
-            LlmProxy developerLlmService = developerProxy;
+			LlmProxy managerLlmService = managerProxy;
+			LlmProxy developerLlmService = developerProxy;
 
             logger.LogInformation("Fetching ticket details...");
             TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);
@@ -182,13 +182,13 @@ public class Program
             ServerUrl = serverUrl,
             GitConfig = settings.GitConfig,
             LLMConfigs = settings.LLMConfigs,
-            LlmRetryCount = settings.LlmRetryCount,
-            LlmRetryDelaySeconds = settings.LlmRetryDelaySeconds,
             ManagerCompaction = settings.ManagerCompaction,
             DeveloperCompaction = settings.DeveloperCompaction,
             Prompts = prompts,
             PromptDirectory = resolvedPromptDirectory,
-            JsonLogging = options.JsonLogging
+            JsonLogging = options.JsonLogging,
+            MaxIterationsPerSubtask = settings.MaxIterationsPerSubtask,
+            StuckPromptingEvery = settings.StuckPromptingEvery
         };
 
         return config;

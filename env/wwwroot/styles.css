@@ -544,6 +544,19 @@ nav {
     color: var(--gray-700);
 }
 
+.form-group label.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+}
+
+.form-group label.checkbox-label input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+    cursor: pointer;
+}
+
 .form-group input,
 .form-group textarea,
 .form-group select {
@@ -845,7 +858,7 @@ nav {
     word-break: break-word;
 }
 
-.subtask-item.completed {
+.subtask-item.completed .subtask-name {
     text-decoration: line-through;
     color: var(--gray-400);
 }

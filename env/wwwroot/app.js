@@ -489,7 +489,6 @@ async function showTicketDetails(ticketId) {
                     <div class="task-content">
                         <div class="task-name-row">
                             <div class="task-name">${escapeHtml(task.name || task.description || 'Task')}</div>
-                            ${hasDescription ? '<span class="expand-indicator" title="Click to see details">ⓘ</span>' : ''}
                         </div>
                         ${hasDescription ? `<div class="task-description-full" style="display: none;">${escapeHtml(taskDescription)}</div>` : ''}
                         ${subtasks.length > 0 ? `
@@ -518,7 +517,6 @@ async function showTicketDetails(ticketId) {
                                             <div class="subtask-name-row">
                                                 ${subtaskIcon}
                                                 <span class="subtask-name">${escapeHtml(st.name || '')}</span>
-                                                ${stHasDescription ? '<span class="expand-indicator" title="Click to see details">ⓘ</span>' : ''}
                                             </div>
                                             ${stHasDescription ? `<div class="subtask-description-full" style="display: none;">${escapeHtml(stDescription)}</div>` : ''}
                                         </div>
