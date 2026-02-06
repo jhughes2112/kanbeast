@@ -81,12 +81,11 @@ Any git server that uses an api token should work. Create your repo, copy your t
 **SSH key:**
 
 Any git server that you have configured with an SSH key will work fine. Security Note: It's a good idea to make a new SSH key for agentic purposes, separately from your personal one. If an agent decides to publish your key on Facebook, that's on you.
-```json
+```
   repositoryUrl: git@github.com:you/repo.git
   sshKey:        -----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----
   username:      Your Name
   email:         you@example.com
-}
 ```
 
 ## Architecture
