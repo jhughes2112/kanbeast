@@ -13,6 +13,7 @@ public interface IKanbanApiClient
     Task<TicketDto?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask);
     Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
     Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId);
+    Task<TicketDto?> DeleteAllTasksAsync(string ticketId);
     Task AddActivityLogAsync(string ticketId, string message);
     Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName);
     Task<TicketDto?> AddLlmCostAsync(string ticketId, decimal cost);
@@ -146,6 +147,19 @@ public class KanbanApiClient : IKanbanApiClient
         {
             string error = await response.Content.ReadAsStringAsync();
             Console.WriteLine($"Failed to add LLM cost: {response.StatusCode} - {error}");
+        }
+
+        return ticket;
+    }
+
+    public async Task<TicketDto?> DeleteAllTasksAsync(string ticketId)
+    {
+        TicketDto? ticket = null;
+        HttpResponseMessage response = await _httpClient.DeleteAsync($"/api/tickets/{ticketId}/tasks");
+
+        if (response.IsSuccessStatusCode)
+        {
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
         }
 
         return ticket;

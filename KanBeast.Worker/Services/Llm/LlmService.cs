@@ -131,9 +131,19 @@ public class UsageInfo
     public decimal? Cost { get; set; }
 }
 
+public enum LlmExitReason
+{
+	Completed,             // LLM finished with a content response (no tool calls)
+	ToolRequestedExit,     // A tool set ExitLoop = true
+	LlmCallFailed,         // Network error, API error, or invalid response
+	MaxIterationsReached,  // Hit iteration limit without completion
+	CostExceeded           // Accumulated cost exceeded the budget
+}
+
 public class LlmResult
 {
-	public bool Success { get; set; } = true;
+	public LlmExitReason ExitReason { get; set; } = LlmExitReason.Completed;
+	public bool Success => ExitReason == LlmExitReason.Completed || ExitReason == LlmExitReason.ToolRequestedExit;
 	public string Content { get; set; } = string.Empty;
 	public string ErrorMessage { get; set; } = string.Empty;
 	public decimal AccumulatedCost { get; set; }
@@ -169,34 +179,42 @@ public class LlmService
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, CancellationToken cancellationToken)
+	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, decimal remainingBudget, CancellationToken cancellationToken)
 	{
 		List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;
-
 		foreach (Tool tool in tools)
 		{
 			toolDefs?.Add(tool.Definition);
 		}
 
-		string finalContent = string.Empty;
-		string errorMessage = string.Empty;
-		string? finalToolCalled = null;
-		bool success = false;
 		decimal accumulatedCost = 0m;
-		int maxIterations = 5;  // best practices say 5 to 10 iterations before trying to give it some help, it usually means they're looping
+		int maxIterations = 5;
 		int iteration = 0;
 		int networkRetries = 0;
 		int maxNetworkRetries = 10;
+		LlmResult result = null!;
 
-		while (iteration < maxIterations && !success && string.IsNullOrEmpty(errorMessage))
+		for (;;)
 		{
-			iteration++;
+			// this is explicitly at the top of the loop because if it were at the bottom of the loop, there may be another reason to exit, and this would clobber it.
+			if (iteration >= maxIterations)
+			{
+				result = new LlmResult { ExitReason = LlmExitReason.MaxIterationsReached, AccumulatedCost = accumulatedCost };
+				break;
+			}
+
+			if (remainingBudget > 0 && accumulatedCost >= remainingBudget)
+			{
+				result = new LlmResult { ExitReason = LlmExitReason.CostExceeded, AccumulatedCost = accumulatedCost };
+				break;
+			}
+
 			cancellationToken.ThrowIfCancellationRequested();
 
 			if (compaction != null)
 			{
-				decimal compactionCost = await compaction.CompactAsync(conversation, this, _jsonLogging, cancellationToken);
-				accumulatedCost += compactionCost;
+				decimal compactionBudget = remainingBudget > 0 ? remainingBudget - accumulatedCost : 0;
+				accumulatedCost += await compaction.CompactAsync(conversation, this, _jsonLogging, compactionBudget, cancellationToken);
 			}
 
 			ChatCompletionRequest request = new ChatCompletionRequest
@@ -212,78 +230,19 @@ public class LlmService
 
 			await WaitForRateLimitAsync(cancellationToken);
 
-			HttpResponseMessage? httpResponse = null;
-			string responseBody = string.Empty;
-			bool shouldRetry = false;
-
 			try
 			{
 				StringContent content = new StringContent(requestJson, System.Text.Encoding.UTF8, "application/json");
-				httpResponse = await _httpClient.PostAsync(fullUrl, content, cancellationToken);
-				responseBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
-			}
-			catch (HttpRequestException ex)
-			{
-				networkRetries++;
-				if (networkRetries >= maxNetworkRetries)
-				{
-					errorMessage = $"Network error after {networkRetries} attempts: {ex.Message}";
-				}
-				else
-				{
-					_backoffSeconds = _backoffSeconds + 3;
-					Console.WriteLine($"Network error (attempt {networkRetries}/{maxNetworkRetries}): {ex.Message}. Waiting {_backoffSeconds}s...");
-					iteration--;
-					shouldRetry = true;
-				}
-			}
-			catch (TaskCanceledException ex)
-			{
-				networkRetries++;
-				if (networkRetries >= maxNetworkRetries)
-				{
-					errorMessage = $"Request timeout after {networkRetries} attempts: {ex.Message}";
-				}
-				else
-				{
-					_backoffSeconds = _backoffSeconds + 3;
-					Console.WriteLine($"Request timeout (attempt {networkRetries}/{maxNetworkRetries}). Waiting {_backoffSeconds}s...");
-					iteration--;
-					shouldRetry = true;
-				}
-			}
+				HttpResponseMessage httpResponse = await _httpClient.PostAsync(fullUrl, content, cancellationToken);
+				string responseBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
 
-			if (!shouldRetry && string.IsNullOrEmpty(errorMessage) && httpResponse != null)
-			{
-				networkRetries = 0;
-
-				if (IsRateLimited(httpResponse, responseBody))
+				if (httpResponse.IsSuccessStatusCode)
 				{
-					int waitSeconds = ParseRateLimitSeconds(httpResponse, responseBody);
-					_backoffSeconds = waitSeconds > 0 ? waitSeconds : _backoffSeconds + 3;
-					Console.WriteLine($"Rate limited. Waiting {_backoffSeconds}s before retry...");
-					iteration--;
-				}
-				else if ((int)httpResponse.StatusCode >= 500 && (int)httpResponse.StatusCode < 600)
-				{
-					_backoffSeconds = _backoffSeconds + 3;
-					Console.WriteLine($"Server error {httpResponse.StatusCode}. Waiting {_backoffSeconds}s before retry...");
-					iteration--;
-				}
-				else if (httpResponse.IsSuccessStatusCode)
-				{
+					iteration++;
 					_backoffSeconds = 0;
-					ChatCompletionResponse? response = null;
+					networkRetries = 0;
 
-					try
-					{
-						response = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions);
-					}
-					catch (JsonException ex)
-					{
-						errorMessage = $"Invalid JSON response: {ex.Message}";
-					}
-
+					ChatCompletionResponse? response = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions);
 					if (response != null && response.Choices.Count > 0 && response.Error == null)
 					{
 						if (response.Usage != null)
@@ -294,89 +253,124 @@ public class LlmService
 							}
 							else
 							{
-								decimal inputCost = response.Usage.PromptTokens * _config.InputTokenPrice;
-								decimal outputCost = response.Usage.CompletionTokens * _config.OutputTokenPrice;
-								accumulatedCost += inputCost + outputCost;
+								accumulatedCost += response.Usage.PromptTokens * _config.InputTokenPrice;
+								accumulatedCost += response.Usage.CompletionTokens * _config.OutputTokenPrice;
 							}
 						}
 
-						ChatChoice choice = response.Choices[0];
-						ChatMessage assistantMessage = choice.Message;
+						ChatMessage assistantMessage = response.Choices[0].Message;
 						conversation.AddAssistantMessage(assistantMessage);
 
 						if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
 						{
-							finalContent = assistantMessage.Content ?? string.Empty;
-							success = true;
+							// Normal end of conversation with content response and no tool calls.
+							result = new LlmResult
+							{
+								ExitReason = LlmExitReason.Completed,
+								Content = assistantMessage.Content ?? string.Empty,
+								AccumulatedCost = accumulatedCost
+							};
+							break;
 						}
 						else
 						{
+							bool toolRequestedExit = false;
 							foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
 							{
-								ToolResult toolResult = new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false, null);
-
-								foreach (Tool tool in tools)
-								{
-									if (tool.Definition.Function.Name == toolCall.Function.Name)
-									{
-										JsonObject args;
-										try
-										{
-											args = JsonNode.Parse(toolCall.Function.Arguments)?.AsObject() ?? new JsonObject();
-										}
-										catch
-										{
-											args = new JsonObject();
-										}
-
-										try
-										{
-											toolResult = await tool.Handler(args);
-										}
-										catch (Exception ex)
-										{
-											toolResult = new ToolResult($"Error: {ex.Message}", false, toolCall.Function.Name);
-										}
-										break;
-									}
-								}
-
+								ToolResult toolResult = ExecuteTool(toolCall, tools).GetAwaiter().GetResult();
 								conversation.AddToolMessage(toolCall.Id, toolResult.Response);
 
 								if (toolResult.ExitLoop)
 								{
-									finalContent = toolResult.Response;
-									finalToolCalled = toolResult.ToolName;
-									success = true;
+									// Tool requested exit of conversation, usually because it is in a nested conversation and wants to communicate with an upstream LLM, or its work is explicitly done.
+									result = new LlmResult
+									{
+										ExitReason = LlmExitReason.ToolRequestedExit,
+										Content = toolResult.Response,
+										FinalToolCalled = toolResult.ToolName,
+										AccumulatedCost = accumulatedCost
+									};
+									toolRequestedExit = true;
 									break;
 								}
 							}
+							if (toolRequestedExit)
+							{
+								break;
+							}
 						}
 					}
-					else if (response == null || response.Choices.Count == 0)
+					else
 					{
-						errorMessage = "Empty response from API";
+						// Something went wrong with the call - we got a 200 but the body indicates an error, or is in an unexpected format.
+						throw new InvalidOperationException(response?.Error?.Message ?? "Empty response from API");
 					}
-					else if (response.Error != null)
-					{
-						errorMessage = $"API error: {response.Error.Message}";
-					}
+				}
+				else if (IsRateLimited(httpResponse, responseBody))
+				{
+					int waitSeconds = ParseRateLimitSeconds(httpResponse, responseBody);
+					_backoffSeconds = waitSeconds > 0 ? waitSeconds : _backoffSeconds + 3;
+					Console.WriteLine($"Rate limited. Waiting {_backoffSeconds}s before retry...");
+				}
+				else if ((int)httpResponse.StatusCode >= 500 && (int)httpResponse.StatusCode < 600)
+				{
+					_backoffSeconds += 3;
+					Console.WriteLine($"Server error {httpResponse.StatusCode}. Waiting {_backoffSeconds}s before retry...");
 				}
 				else
 				{
-					errorMessage = $"API error {httpResponse.StatusCode}: {responseBody}";
+					throw new HttpRequestException($"API error {httpResponse.StatusCode}: {responseBody}");
+				}
+			}
+			catch (Exception ex)
+			{
+				networkRetries++;
+				if (networkRetries >= maxNetworkRetries)
+				{
+					result = new LlmResult
+					{
+						ExitReason = LlmExitReason.LlmCallFailed,
+						ErrorMessage = $"Failed after {networkRetries} attempts: {ex.Message}",
+						AccumulatedCost = accumulatedCost
+					};
+					break;
+				}
+				_backoffSeconds += 3;
+				Console.WriteLine($"Error (attempt {networkRetries}/{maxNetworkRetries}): {ex.Message}. Waiting {_backoffSeconds}s...");
+			}
+		}
+
+		return result;
+	}
+
+	private async Task<ToolResult> ExecuteTool(ToolCallMessage toolCall, List<Tool> tools)
+	{
+		foreach (Tool tool in tools)
+		{
+			if (tool.Definition.Function.Name == toolCall.Function.Name)
+			{
+				JsonObject args;
+				try
+				{
+					args = JsonNode.Parse(toolCall.Function.Arguments)?.AsObject() ?? new JsonObject();
+				}
+				catch
+				{
+					args = new JsonObject();
+				}
+
+				try
+				{
+					return await tool.Handler(args);
+				}
+				catch (Exception ex)
+				{
+					return new ToolResult($"Error: {ex.Message}", false, toolCall.Function.Name);
 				}
 			}
 		}
 
-		return new LlmResult
-		{
-			Success = success || string.IsNullOrEmpty(errorMessage),
-			Content = finalContent,
-			ErrorMessage = errorMessage,
-			AccumulatedCost = accumulatedCost,
-			FinalToolCalled = finalToolCalled
-		};
+		return new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false, null);
 	}
 
 	private async Task WaitForRateLimitAsync(CancellationToken cancellationToken)

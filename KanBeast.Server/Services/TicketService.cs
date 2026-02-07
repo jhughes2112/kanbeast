@@ -15,16 +15,14 @@ public interface ITicketService
     Task<Ticket?> UpdateTicketStatusAsync(string id, TicketStatus status);
     Task<Ticket?> UpdateTicketTitleDescriptionAsync(string id, string title, string description);
     Task<Ticket?> AddTaskToTicketAsync(string id, KanbanTask task);
-    Task<Ticket?> DeleteTaskAsync(string ticketId, string taskId);
     Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask);
-    Task<Ticket?> DeleteSubtaskAsync(string ticketId, string taskId, string subtaskId);
     Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
     Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskId);
     Task<Ticket?> AddActivityLogAsync(string id, string activity);
     Task<Ticket?> SetBranchNameAsync(string id, string branchName);
     Task<Ticket?> AddLlmCostAsync(string id, decimal cost);
     Task<Ticket?> SetMaxCostAsync(string id, decimal maxCost);
-    Task<Ticket?> ClearTasksAsync(string id);
+    Task<Ticket?> DeleteAllTasksAsync(string id);
 }
 
 public class TicketService : ITicketService
@@ -448,64 +446,7 @@ public class TicketService : ITicketService
         return ticket;
     }
 
-    public async Task<Ticket?> DeleteTaskAsync(string ticketId, string taskId)
-    {
-        if (!_tickets.TryGetValue(ticketId, out Ticket? ticket))
-        {
-            return null;
-        }
-
-        int removed = ticket.Tasks.RemoveAll(t =>
-            string.Equals(t.Id, taskId, StringComparison.Ordinal) ||
-            string.Equals(t.Name, taskId, StringComparison.Ordinal));
-
-        if (removed > 0)
-        {
-            ticket.UpdatedAt = DateTime.UtcNow;
-            await SaveTicketToDiskAsync(ticket);
-        }
-
-        return ticket;
-    }
-
-    public async Task<Ticket?> DeleteSubtaskAsync(string ticketId, string taskId, string subtaskId)
-    {
-        if (!_tickets.TryGetValue(ticketId, out Ticket? ticket))
-        {
-            return null;
-        }
-
-        KanbanTask? task = null;
-        foreach (KanbanTask candidate in ticket.Tasks)
-        {
-            if (string.Equals(candidate.Id, taskId, StringComparison.Ordinal) ||
-                string.Equals(candidate.Name, taskId, StringComparison.Ordinal))
-            {
-                task = candidate;
-                break;
-            }
-        }
-
-        if (task == null)
-        {
-            return null;
-        }
-
-        int removed = task.Subtasks.RemoveAll(s =>
-            string.Equals(s.Id, subtaskId, StringComparison.Ordinal) ||
-            string.Equals(s.Name, subtaskId, StringComparison.Ordinal));
-
-        if (removed > 0)
-        {
-            task.LastUpdatedAt = DateTime.UtcNow;
-            ticket.UpdatedAt = DateTime.UtcNow;
-            await SaveTicketToDiskAsync(ticket);
-        }
-
-        return ticket;
-    }
-
-    public async Task<Ticket?> ClearTasksAsync(string id)
+    public async Task<Ticket?> DeleteAllTasksAsync(string id)
     {
         if (!_tickets.TryGetValue(id, out Ticket? ticket))
         {

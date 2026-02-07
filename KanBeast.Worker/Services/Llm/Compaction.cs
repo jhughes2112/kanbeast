@@ -6,13 +6,13 @@ namespace KanBeast.Worker.Services;
 // Defines the contract for context compaction strategies.
 public interface ICompaction
 {
-    Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, CancellationToken cancellationToken);
+    Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, decimal remainingBudget, CancellationToken cancellationToken);
 }
 
 // Keeps context statements untouched when compaction is disabled.
 public class CompactionNone : ICompaction
 {
-    public Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, CancellationToken cancellationToken)
+    public Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, decimal remainingBudget, CancellationToken cancellationToken)
     {
         return Task.FromResult(0m);
     }
@@ -40,7 +40,7 @@ public class CompactionSummarizer : ICompaction
         }
     }
 
-    public async Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, CancellationToken cancellationToken)
+    public async Task<decimal> CompactAsync(LlmConversation conversation, LlmService llmService, bool jsonFormat, decimal remainingBudget, CancellationToken cancellationToken)
     {
         int messageSize = GetMessageSize(conversation.Messages);
 
@@ -57,7 +57,7 @@ public class CompactionSummarizer : ICompaction
             string userPrompt = $"{_compactionPrompt}\n\nConversation:\n{messagesBlock}";
             LlmConversation summaryConversation = new LlmConversation(conversation.Model, string.Empty, userPrompt, string.Empty);
             List<IToolProvider> providers = new List<IToolProvider>();
-            LlmResult result = await llmService.RunAsync(summaryConversation, new List<Tool>(), null, cancellationToken);
+            LlmResult result = await llmService.RunAsync(summaryConversation, new List<Tool>(), null, remainingBudget, cancellationToken);
             string summary = result.Content;
 
             // Keep system message, replace everything else with summary as a user message

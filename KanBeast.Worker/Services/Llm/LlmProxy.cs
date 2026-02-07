@@ -59,26 +59,32 @@ public class LlmProxy
         return conversation;
     }
 
-    public async Task<LlmResult> ContinueAsync(LlmConversation conversation, List<Tool> tools, CancellationToken cancellationToken)
-    {
-        LlmResult result = new LlmResult { Success = false, ErrorMessage = "All configured LLMs failed" };
+	// From the perspective of the caller, this method will keep retrying with fallback LLMs until it gets a successful response or exhausts all options.
+	// The caller just sees a single async call that either succeeds or fails after all retries.  If this errors, there is no LLM available.
+	// remainingBudget of 0 or less means unlimited.
+	public async Task<LlmResult> ContinueAsync(LlmConversation conversation, List<Tool> tools, decimal remainingBudget, CancellationToken cancellationToken)
+	{
+		for (;;)
+		{
+			if (_currentLlmIndex >= _services.Count)
+			{
+				return new LlmResult { ExitReason = LlmExitReason.LlmCallFailed, ErrorMessage = "All configured LLMs failed" };
+			}
 
-        while (_currentLlmIndex < _services.Count && !result.Success)
-        {
-            LlmService service = _services[_currentLlmIndex];
-            string modelName = _configs[_currentLlmIndex].Model;
+			LlmService service = _services[_currentLlmIndex];
+			string modelName = _configs[_currentLlmIndex].Model;
 
-            result = await service.RunAsync(conversation, tools, _compaction, cancellationToken);
+			LlmResult result = await service.RunAsync(conversation, tools, _compaction, remainingBudget, cancellationToken);
 
-            if (!result.Success)
-            {
-                Console.WriteLine($"LLM {_currentLlmIndex} ({modelName}) failed: {result.ErrorMessage}. Trying next...");
-                _currentLlmIndex++;
-            }
-        }
+			if (result.ExitReason != LlmExitReason.LlmCallFailed)
+			{
+				return result;
+			}
 
-        return result;
-    }
+			Console.WriteLine($"LLM {_currentLlmIndex} ({modelName}) failed: {result.ErrorMessage}. Trying next...");
+			_currentLlmIndex++;
+		}
+	}
 
     public async Task FinalizeConversationAsync(LlmConversation conversation, CancellationToken cancellationToken)
     {
