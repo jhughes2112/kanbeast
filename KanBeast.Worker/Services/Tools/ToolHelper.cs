@@ -24,27 +24,18 @@ public static class ToolHelper
 
         JsonObject parameters = BuildParametersSchema(method);
 
-        Func<JsonObject, Task<string>> handler = async (JsonObject args) =>
+        Func<JsonObject, Task<ToolResult>> handler = async (JsonObject args) =>
         {
             object?[] methodArgs = BuildMethodArguments(method, args);
             object? result = method.Invoke(instance, methodArgs);
-            string response;
 
-            if (result is Task<string> taskString)
+            if (result is not Task<ToolResult> taskToolResult)
             {
-                response = await taskString;
-            }
-            else if (result is Task task)
-            {
-                await task;
-                response = "OK";
-            }
-            else
-            {
-                response = result?.ToString() ?? "OK";
+                throw new InvalidOperationException($"Tool method '{methodName}' must return Task<ToolResult>");
             }
 
-            return TruncateResponse(response);
+            ToolResult toolResult = await taskToolResult;
+            return new ToolResult(TruncateResponse(toolResult.Response), toolResult.ExitLoop, toolName);
         };
 
         tools.Add(new Tool

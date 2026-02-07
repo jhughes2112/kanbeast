@@ -57,112 +57,121 @@ public class ShellTools : IToolProvider
     }
 
 	[Description("Execute a shell command.")]
-	public async Task<string> RunCommandAsync(
+	public async Task<ToolResult> RunCommandAsync(
 		[Description("Command to execute")] string command,
 		[Description("Working directory (or empty for repository root)")] string workDir)
 	{
+		ToolResult result;
+
 		if (string.IsNullOrWhiteSpace(command))
 		{
-			return "Error: Command cannot be empty";
+			result = new ToolResult("Error: Command cannot be empty");
 		}
-
-		string effectiveWorkDir = string.IsNullOrWhiteSpace(workDir) ? _workDir : ResolvePath(workDir);
-
-		if (!Directory.Exists(effectiveWorkDir))
+		else
 		{
-			return $"Error: Working directory does not exist: {workDir}";
-		}
+			string effectiveWorkDir = string.IsNullOrWhiteSpace(workDir) ? _workDir : ResolvePath(workDir);
 
-		try
-		{
-			string shellPath;
-			string shellArgs;
-
-			if (OperatingSystem.IsWindows())
+			if (!Directory.Exists(effectiveWorkDir))
 			{
-				string wslPath = effectiveWorkDir.Replace("\\", "/");
-				if (wslPath.Length >= 2 && wslPath[1] == ':')
-				{
-					wslPath = $"/mnt/{char.ToLower(wslPath[0])}{wslPath.Substring(2)}";
-				}
-
-				shellPath = "wsl";
-				shellArgs = $"bash -c \"cd '{wslPath}' && {command.Replace("\"", "\\\"")}\"";
+				result = new ToolResult($"Error: Working directory does not exist: {workDir}");
 			}
 			else
 			{
-				shellPath = "/bin/bash";
-				shellArgs = $"-c \"{command.Replace("\"", "\\\"")}\"";
-			}
-
-			Process process = new Process
-			{
-				StartInfo = new ProcessStartInfo
+				try
 				{
-					FileName = shellPath,
-					Arguments = shellArgs,
-					WorkingDirectory = OperatingSystem.IsWindows() ? null : effectiveWorkDir,
-					RedirectStandardOutput = true,
-					RedirectStandardError = true,
-					UseShellExecute = false,
-					CreateNoWindow = true
+					string shellPath;
+					string shellArgs;
+
+					if (OperatingSystem.IsWindows())
+					{
+						string wslPath = effectiveWorkDir.Replace("\\", "/");
+						if (wslPath.Length >= 2 && wslPath[1] == ':')
+						{
+							wslPath = $"/mnt/{char.ToLower(wslPath[0])}{wslPath.Substring(2)}";
+						}
+
+						shellPath = "wsl";
+						shellArgs = $"bash -c \"cd '{wslPath}' && {command.Replace("\"", "\\\"")}\"";
+					}
+					else
+					{
+						shellPath = "/bin/bash";
+						shellArgs = $"-c \"{command.Replace("\"", "\\\"")}\"";
+					}
+
+					Process process = new Process
+					{
+						StartInfo = new ProcessStartInfo
+						{
+							FileName = shellPath,
+							Arguments = shellArgs,
+							WorkingDirectory = OperatingSystem.IsWindows() ? null : effectiveWorkDir,
+							RedirectStandardOutput = true,
+							RedirectStandardError = true,
+							UseShellExecute = false,
+							CreateNoWindow = true
+						}
+					};
+
+					process.Start();
+
+					using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+
+					Task<string> outputTask = process.StandardOutput.ReadToEndAsync(cts.Token);
+					Task<string> errorTask = process.StandardError.ReadToEndAsync(cts.Token);
+
+					try
+					{
+						await process.WaitForExitAsync(cts.Token);
+					}
+					catch (TaskCanceledException)
+					{
+						try
+						{
+							process.Kill(true);
+						}
+						catch
+						{
+						}
+
+						result = new ToolResult($"Error: Command timed out after {DefaultTimeout.TotalSeconds} seconds: {command}");
+						return result;
+					}
+
+					string output = await outputTask;
+					string errorOutput = await errorTask;
+
+					string response = $"Exit Code: {process.ExitCode}";
+
+					if (!string.IsNullOrWhiteSpace(output))
+					{
+						if (output.Length > 50000)
+						{
+							output = output.Substring(0, 50000) + "\n[Output truncated]";
+						}
+
+						response += $"\nOutput:\n{output}";
+					}
+
+					if (!string.IsNullOrWhiteSpace(errorOutput))
+					{
+						if (errorOutput.Length > 10000)
+						{
+							errorOutput = errorOutput.Substring(0, 10000) + "\n[Error output truncated]";
+						}
+
+						response += $"\nStderr:\n{errorOutput}";
+					}
+
+					result = new ToolResult(response);
 				}
-			};
+				catch (Exception ex)
+				{
+					result = new ToolResult($"Error: Failed to execute command: {ex.Message}");
+				}
+			}
+		}
 
-            process.Start();
-
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-
-            Task<string> outputTask = process.StandardOutput.ReadToEndAsync(cts.Token);
-            Task<string> errorTask = process.StandardError.ReadToEndAsync(cts.Token);
-
-            try
-            {
-                await process.WaitForExitAsync(cts.Token);
-            }
-            catch (TaskCanceledException)
-            {
-                try
-                {
-                    process.Kill(true);
-                }
-                catch
-                {
-                }
-
-                return $"Error: Command timed out after {DefaultTimeout.TotalSeconds} seconds: {command}";
-            }
-
-            string output = await outputTask;
-            string errorOutput = await errorTask;
-
-            string result = $"Exit Code: {process.ExitCode}";
-
-            if (!string.IsNullOrWhiteSpace(output))
-            {
-                if (output.Length > 50000)
-                {
-                    output = output.Substring(0, 50000) + "\n[Output truncated]";
-                }
-
-                result += $"\nOutput:\n{output}";
-            }
-
-            if (!string.IsNullOrWhiteSpace(errorOutput))
-            {
-                if (errorOutput.Length > 10000)
-                {
-                    errorOutput = errorOutput.Substring(0, 10000) + "\n[Error output truncated]";
-                }
-
-                result += $"\nStderr:\n{errorOutput}";
-            }
-
-            return result;
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to execute command: {ex.Message}";
-        }
-    }
+		return result;
+	}
 }

@@ -59,15 +59,7 @@ public class LlmProxy
         return conversation;
     }
 
-	public async Task<LlmResult> RunAsync(string systemPrompt, string userPrompt, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
-	{
-		LlmConversation conversation = CreateConversation(systemPrompt, userPrompt);
-		LlmResult result = await ContinueAsync(conversation, providers, role, cancellationToken);
-		await FinalizeConversationAsync(conversation, cancellationToken);
-		return result;
-	}
-
-    public async Task<LlmResult> ContinueAsync(LlmConversation conversation, IEnumerable<IToolProvider> providers, LlmRole role, CancellationToken cancellationToken)
+    public async Task<LlmResult> ContinueAsync(LlmConversation conversation, List<Tool> tools, CancellationToken cancellationToken)
     {
         LlmResult result = new LlmResult { Success = false, ErrorMessage = "All configured LLMs failed" };
 
@@ -76,7 +68,7 @@ public class LlmProxy
             LlmService service = _services[_currentLlmIndex];
             string modelName = _configs[_currentLlmIndex].Model;
 
-            result = await service.RunAsync(conversation, providers, role, _compaction, cancellationToken);
+            result = await service.RunAsync(conversation, tools, _compaction, cancellationToken);
 
             if (!result.Success)
             {

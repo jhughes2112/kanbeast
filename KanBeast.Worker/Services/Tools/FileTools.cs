@@ -67,137 +67,160 @@ public class FileTools : IToolProvider
     }
 
     [Description("Read the contents of a file.")]
-    public async Task<string> ReadFileAsync(
+    public async Task<ToolResult> ReadFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath)
     {
         return await ReadFileContentAsync(filePath);
     }
 
     [Description("Get the contents of a file.")]
-    public async Task<string> GetFileAsync(
+    public async Task<ToolResult> GetFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath)
     {
         return await ReadFileContentAsync(filePath);
     }
 
-    private async Task<string> ReadFileContentAsync(string filePath)
+    private async Task<ToolResult> ReadFileContentAsync(string filePath)
     {
+        ToolResult result;
+
         if (string.IsNullOrWhiteSpace(filePath))
         {
-            return "Error: Path cannot be empty";
+            result = new ToolResult("Error: Path cannot be empty");
         }
-
-        string fullPath = ResolvePath(filePath);
-
-        try
+        else
         {
-            if (!File.Exists(fullPath))
+            string fullPath = ResolvePath(filePath);
+
+            try
             {
-                return $"Error: File not found: {filePath}";
+                if (!File.Exists(fullPath))
+                {
+                    result = new ToolResult($"Error: File not found: {filePath}");
+                }
+                else
+                {
+                    using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                    string content = await File.ReadAllTextAsync(fullPath, cts.Token);
+                    result = new ToolResult(content);
+                }
             }
+            catch (TaskCanceledException)
+            {
+                result = new ToolResult($"Error: Timed out reading file: {filePath}");
+            }
+            catch (Exception ex)
+            {
+                result = new ToolResult($"Error: Failed to read file: {ex.Message}");
+            }
+        }
 
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            string content = await File.ReadAllTextAsync(fullPath, cts.Token);
-
-            return content;
-        }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Timed out reading file: {filePath}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to read file: {ex.Message}";
-        }
+        return result;
     }
 
     [Description("Write content to a file, creating or overwriting as needed.")]
-    public async Task<string> WriteFileAsync(
+    public async Task<ToolResult> WriteFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
         [Description("Content to write")] string content)
     {
+        ToolResult result;
+
         if (string.IsNullOrWhiteSpace(filePath))
         {
-            return "Error: Path cannot be empty";
+            result = new ToolResult("Error: Path cannot be empty");
         }
-
-        string fullPath = ResolvePath(filePath);
-
-        try
+        else
         {
-            string? directory = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            string fullPath = ResolvePath(filePath);
+
+            try
             {
-                Directory.CreateDirectory(directory);
+                string? directory = Path.GetDirectoryName(fullPath);
+                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                {
+                    Directory.CreateDirectory(directory);
+                }
+
+                using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                await File.WriteAllTextAsync(fullPath, content ?? string.Empty, cts.Token);
+
+                result = new ToolResult($"File written: {filePath}");
             }
+            catch (TaskCanceledException)
+            {
+                result = new ToolResult($"Error: Timed out writing file: {filePath}");
+            }
+            catch (Exception ex)
+            {
+                result = new ToolResult($"Error: Failed to write file: {ex.Message}");
+            }
+        }
 
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            await File.WriteAllTextAsync(fullPath, content ?? string.Empty, cts.Token);
-
-            return $"File written: {filePath}";
-        }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Timed out writing file: {filePath}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to write file: {ex.Message}";
-        }
+        return result;
     }
 
     [Description("Replace a single exact block of text in a file. oldContent must match exactly once.")]
-    public async Task<string> EditFileAsync(
+    public async Task<ToolResult> EditFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
         [Description("Exact text to find and replace")] string oldContent,
         [Description("Replacement text")] string newContent)
     {
+        ToolResult result;
+
         if (string.IsNullOrWhiteSpace(filePath))
         {
-            return "Error: Path cannot be empty";
+            result = new ToolResult("Error: Path cannot be empty");
         }
-
-        string fullPath = ResolvePath(filePath);
-
-        if (string.IsNullOrEmpty(oldContent))
+        else if (string.IsNullOrEmpty(oldContent))
         {
-            return "Error: oldContent cannot be empty";
+            result = new ToolResult("Error: oldContent cannot be empty");
         }
-
-        try
+        else
         {
-            if (!File.Exists(fullPath))
+            string fullPath = ResolvePath(filePath);
+
+            try
             {
-                return $"Error: File not found: {filePath}";
+                if (!File.Exists(fullPath))
+                {
+                    result = new ToolResult($"Error: File not found: {filePath}");
+                }
+                else
+                {
+                    using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                    string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
+
+                    int firstIndex = fileContent.IndexOf(oldContent, StringComparison.Ordinal);
+                    if (firstIndex < 0)
+                    {
+                        result = new ToolResult($"Error: oldContent not found in file: {filePath}");
+                    }
+                    else
+                    {
+                        int secondIndex = fileContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
+                        if (secondIndex >= 0)
+                        {
+                            result = new ToolResult("Error: oldContent matched multiple times in file. Include more context to make it unique.");
+                        }
+                        else
+                        {
+                            string updatedContent = fileContent[..firstIndex] + (newContent ?? string.Empty) + fileContent[(firstIndex + oldContent.Length)..];
+                            await File.WriteAllTextAsync(fullPath, updatedContent, cts.Token);
+                            result = new ToolResult($"File edited: {filePath}");
+                        }
+                    }
+                }
             }
-
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
-
-            int firstIndex = fileContent.IndexOf(oldContent, StringComparison.Ordinal);
-            if (firstIndex < 0)
+            catch (TaskCanceledException)
             {
-                return $"Error: oldContent not found in file: {filePath}";
+                result = new ToolResult($"Error: Timed out editing file: {filePath}");
             }
-
-            int secondIndex = fileContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
-            if (secondIndex >= 0)
+            catch (Exception ex)
             {
-                return $"Error: oldContent matched multiple times in file. Include more context to make it unique.";
+                result = new ToolResult($"Error: Failed to edit file: {ex.Message}");
             }
+        }
 
-            string updatedContent = fileContent[..firstIndex] + (newContent ?? string.Empty) + fileContent[(firstIndex + oldContent.Length)..];
-            await File.WriteAllTextAsync(fullPath, updatedContent, cts.Token);
-
-            return $"File edited: {filePath}";
-        }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Timed out editing file: {filePath}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to edit file: {ex.Message}";
-        }
+        return result;
     }
 }

@@ -137,6 +137,7 @@ public class LlmResult
 	public string Content { get; set; } = string.Empty;
 	public string ErrorMessage { get; set; } = string.Empty;
 	public decimal AccumulatedCost { get; set; }
+	public string? FinalToolCalled { get; set; }
 }
 
 // Direct OpenAI-compatible chat completion client with tool calling.
@@ -168,15 +169,8 @@ public class LlmService
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<LlmResult> RunAsync(LlmConversation conversation, IEnumerable<IToolProvider> providers, LlmRole role, ICompaction? compaction, CancellationToken cancellationToken)
+	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, CancellationToken cancellationToken)
 	{
-		List<Tool> tools = new List<Tool>();
-
-		foreach (IToolProvider provider in providers)
-		{
-			provider.AddTools(tools, role);
-		}
-
 		List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;
 
 		foreach (Tool tool in tools)
@@ -186,9 +180,10 @@ public class LlmService
 
 		string finalContent = string.Empty;
 		string errorMessage = string.Empty;
+		string? finalToolCalled = null;
 		bool success = false;
 		decimal accumulatedCost = 0m;
-		int maxIterations = 50;
+		int maxIterations = 5;  // best practices say 5 to 10 iterations before trying to give it some help, it usually means they're looping
 		int iteration = 0;
 		int networkRetries = 0;
 		int maxNetworkRetries = 10;
@@ -318,7 +313,7 @@ public class LlmService
 						{
 							foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
 							{
-								string toolResult = $"Error: Unknown tool '{toolCall.Function.Name}'";
+								ToolResult toolResult = new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false, null);
 
 								foreach (Tool tool in tools)
 								{
@@ -340,13 +335,21 @@ public class LlmService
 										}
 										catch (Exception ex)
 										{
-											toolResult = $"Error: {ex.Message}";
+											toolResult = new ToolResult($"Error: {ex.Message}", false, toolCall.Function.Name);
 										}
 										break;
 									}
 								}
 
-								conversation.AddToolMessage(toolCall.Id, toolResult);
+								conversation.AddToolMessage(toolCall.Id, toolResult.Response);
+
+								if (toolResult.ExitLoop)
+								{
+									finalContent = toolResult.Response;
+									finalToolCalled = toolResult.ToolName;
+									success = true;
+									break;
+								}
 							}
 						}
 					}
@@ -371,7 +374,8 @@ public class LlmService
 			Success = success || string.IsNullOrEmpty(errorMessage),
 			Content = finalContent,
 			ErrorMessage = errorMessage,
-			AccumulatedCost = accumulatedCost
+			AccumulatedCost = accumulatedCost,
+			FinalToolCalled = finalToolCalled
 		};
 	}
 

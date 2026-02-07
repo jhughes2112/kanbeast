@@ -8,37 +8,46 @@ namespace KanBeast.Worker;
 
 public class Program
 {
-    public static async Task<int> Main(string[] args)
-    {
-        using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
-        {
-            builder.AddConsole();
-            builder.SetMinimumLevel(LogLevel.Information);
-        });
+	public static async Task<int> Main(string[] args)
+	{
+		using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
+		{
+			builder.AddConsole();
+			builder.SetMinimumLevel(LogLevel.Information);
+		});
 
-        ILogger<Program> logger = loggerFactory.CreateLogger<Program>();
-        logger.LogInformation("KanBeast Worker Starting...");
+		ILogger<Program> logger = loggerFactory.CreateLogger<Program>();
+		logger.LogInformation("KanBeast Worker Starting...");
 
-        WorkerOptions? options = null;
-        try
-        {
-            options = Parser.Default.ParseArguments<WorkerOptions>(args)
-                .MapResult(
-                    opt => opt,
-                    errors =>
-                    {
-                        logger.LogError("Failed to parse command line arguments");
-                        throw new InvalidOperationException("Failed to parse command line arguments.");
-                    });
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Command line parsing error: {Message}", ex.Message);
-            logger.LogInformation("Usage: KanBeast.Worker --ticket-id <id> --server-url <url> [--repo <path>]");
-            logger.LogInformation("Sleeping 100 seconds before exit to allow log inspection...");
-            await Task.Delay(TimeSpan.FromSeconds(100));
-            return 1;
-        }
+		using CancellationTokenSource cts = new CancellationTokenSource();
+
+		Console.CancelKeyPress += (sender, e) =>
+		{
+			e.Cancel = true;
+			logger.LogWarning("Shutdown requested via Ctrl+C");
+			cts.Cancel();
+		};
+
+		WorkerOptions? options = null;
+		try
+		{
+			options = Parser.Default.ParseArguments<WorkerOptions>(args)
+				.MapResult(
+					opt => opt,
+					errors =>
+					{
+						logger.LogError("Failed to parse command line arguments");
+						throw new InvalidOperationException("Failed to parse command line arguments.");
+					});
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "Command line parsing error: {Message}", ex.Message);
+			logger.LogInformation("Usage: KanBeast.Worker --ticket-id <id> --server-url <url> [--repo <path>]");
+			logger.LogInformation("Sleeping 100 seconds before exit to allow log inspection...");
+			await Task.Delay(TimeSpan.FromSeconds(100));
+			return 1;
+		}
 
 		KanbanApiClient apiClient = new KanbanApiClient(options.ServerUrl);
 
@@ -47,12 +56,13 @@ public class Program
 			WorkerConfig config = BuildConfiguration(options);
 			logger.LogInformation("Worker initialized for ticket: {TicketId}", config.TicketId);
 
-			string workDir = Path.GetFullPath(options.RepoPath);
+			string repoDir = Path.GetFullPath(options.RepoPath);
 
-			string managerPrompt = config.GetPrompt("manager").Replace("{repoDir}", workDir);
-			string developerPrompt = config.GetPrompt("developer").Replace("{repoDir}", workDir);
-			string managerCompactionPrompt = config.GetPrompt("manager-compaction").Replace("{repoDir}", workDir);
-			string developerCompactionPrompt = config.GetPrompt("developer-compaction").Replace("{repoDir}", workDir);
+			string managerPlanningPrompt = config.GetPrompt("manager-planning").Replace("{repoDir}", repoDir);
+			string managerImplementingPrompt = config.GetPrompt("manager-implementing").Replace("{repoDir}", repoDir);
+			string developerPrompt = config.GetPrompt("developer").Replace("{repoDir}", repoDir);
+			string managerCompactionPrompt = config.GetPrompt("manager-compaction").Replace("{repoDir}", repoDir);
+			string developerCompactionPrompt = config.GetPrompt("developer-compaction").Replace("{repoDir}", repoDir);
 
 			GitService gitService = new GitService(config.GitConfig);
 			ICompaction managerCompaction = BuildCompaction(config.ManagerCompaction, config.LLMConfigs, managerCompactionPrompt); 
@@ -66,90 +76,90 @@ public class Program
 			LlmProxy managerLlmService = managerProxy;
 			LlmProxy developerLlmService = developerProxy;
 
-            logger.LogInformation("Fetching ticket details...");
-            TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);
+			logger.LogInformation("Fetching ticket details...");
+			TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);
 
-            if (ticket != null)
-            {
-                logger.LogInformation("Ticket: {Title}", ticket.Title);
-                await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work");
-                if (Directory.Exists(workDir))
-                {
-                    Directory.Delete(workDir, true);
-                }
-                Directory.CreateDirectory(workDir);
-                logger.LogInformation("Working directory: {WorkDir}", workDir);
+			if (ticket != null)
+			{
+				logger.LogInformation("Ticket: {Title}", ticket.Title);
+				await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work");
+				if (Directory.Exists(repoDir))
+				{
+					Directory.Delete(repoDir, true);
+				}
+				Directory.CreateDirectory(repoDir);
+				logger.LogInformation("Working directory: {WorkDir}", repoDir);
 
-                if (!string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
-                {
-                    logger.LogInformation("Cloning repository...");
-                    await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Cloning repository");
-                    await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, workDir);
-                    await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, workDir);
+				if (!string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
+				{
+					logger.LogInformation("Cloning repository...");
+					await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Cloning repository");
+					await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, repoDir);
+					await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, repoDir);
 
-                    string branchName = ticket.BranchName ?? $"feature/ticket-{ticket.Id}";
-                    logger.LogInformation("Branch: {BranchName}", branchName);
-                    await gitService.CreateOrCheckoutBranchAsync(branchName, workDir);
+					string branchName = ticket.BranchName ?? $"feature/ticket-{ticket.Id}";
+					logger.LogInformation("Branch: {BranchName}", branchName);
+					await gitService.CreateOrCheckoutBranchAsync(branchName, repoDir);
 
-                    if (string.IsNullOrEmpty(ticket.BranchName))
-                    {
-                        await apiClient.SetBranchNameAsync(ticket.Id, branchName);
-                    }
+					if (string.IsNullOrEmpty(ticket.BranchName))
+					{
+						await apiClient.SetBranchNameAsync(ticket.Id, branchName);
+					}
 
-                    AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, managerLlmService, developerLlmService, managerPrompt, developerPrompt);
-                    logger.LogInformation("Starting agent orchestrator...");
+					AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, managerLlmService, developerLlmService, managerPlanningPrompt, managerImplementingPrompt, developerPrompt);
+					logger.LogInformation("Starting agent orchestrator...");
 
-                    try
-                    {
-                        await orchestrator.RunAsync(ticket, workDir, CancellationToken.None);
-                    }
-                    finally
-                    {
-                        bool pushed = await gitService.CommitAndPushAsync(workDir, $"[KanBeast] Work on ticket {ticket.Id}");
-                        if (pushed)
-                        {
-                            logger.LogInformation("Changes committed and pushed to feature branch");
-                        }
-                    }
+					try
+					{
+						await orchestrator.StartAgents(ticket, repoDir, cts.Token);
+					}
+					finally
+					{
+						bool pushed = await gitService.CommitAndPushAsync(repoDir, $"[KanBeast] Work on ticket {ticket.Id}");
+						if (pushed)
+						{
+							logger.LogInformation("Changes committed and pushed to feature branch");
+						}
+					}
 
-                    logger.LogInformation("Worker completed");
-                    return 0;
-                }
-                else
-                {
-                    logger.LogError("No repository URL configured");
-                    await apiClient.AddActivityLogAsync(ticket.Id, "Worker: No repository URL configured");
-                    await MoveTicketToBacklogAsync(logger, apiClient, ticket.Id);
-                    return 1;
-                }
-            }
-            else
-            {
-                logger.LogError("Ticket {TicketId} not found", config.TicketId);
-                return 1;
-            }
-        }
-        catch (Exception ex)
-        {
-            logger.LogError(ex, "Worker failed: {Message}", ex.Message);
+					logger.LogInformation("Worker completed");
+					return 0;
+				}
+				else
+				{
+					logger.LogError("No repository URL configured");
+					await apiClient.AddActivityLogAsync(ticket.Id, "Worker: No repository URL configured");
+					await MoveTicketToBacklogAsync(logger, apiClient, ticket.Id);
+					return 1;
+				}
+			}
+			else
+			{
+				logger.LogError("Ticket {TicketId} not found", config.TicketId);
+				return 1;
+			}
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "Worker failed: {Message}", ex.Message);
 
-            try
-            {
-                await apiClient.AddActivityLogAsync(options.TicketId, $"Worker: Failed with error - {ex.Message}");
-                await MoveTicketToBacklogAsync(logger, apiClient, options.TicketId);
-            }
-            catch (Exception reportException)
-            {
-                logger.LogError(reportException, "Failed to report error to server: {Message}", reportException.Message);
-            }
+			try
+			{
+				await apiClient.AddActivityLogAsync(options.TicketId, $"Worker: Failed with error - {ex.Message}");
+				await MoveTicketToBacklogAsync(logger, apiClient, options.TicketId);
+			}
+			catch (Exception reportException)
+			{
+				logger.LogError(reportException, "Failed to report error to server: {Message}", reportException.Message);
+			}
 
-            logger.LogInformation("Sleeping 100 seconds before exit to allow log inspection...");
-            await Task.Delay(TimeSpan.FromSeconds(100));
-            return 1;
-        }
-    }
+			logger.LogInformation("Sleeping 100 seconds before exit to allow log inspection...");
+			await Task.Delay(TimeSpan.FromSeconds(100));
+			return 1;
+		}
+	}
 
-    private static async Task MoveTicketToBacklogAsync(ILogger<Program> logger, KanbanApiClient apiClient, string ticketId)
+	private static async Task MoveTicketToBacklogAsync(ILogger<Program> logger, KanbanApiClient apiClient, string ticketId)
     {
         try
         {
@@ -187,7 +197,8 @@ public class Program
 
         Dictionary<string, string> prompts = new Dictionary<string, string>
         {
-            ["manager"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager"),
+            ["manager-planning"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-planning"),
+            ["manager-implementing"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-implementing"),
             ["developer"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer"),
             ["manager-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-compaction-summary"),
             ["developer-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-compaction-summary")

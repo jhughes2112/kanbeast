@@ -57,7 +57,7 @@ public class CompactionSummarizer : ICompaction
             string userPrompt = $"{_compactionPrompt}\n\nConversation:\n{messagesBlock}";
             LlmConversation summaryConversation = new LlmConversation(conversation.Model, string.Empty, userPrompt, string.Empty);
             List<IToolProvider> providers = new List<IToolProvider>();
-            LlmResult result = await llmService.RunAsync(summaryConversation, providers, LlmRole.Compaction, null, cancellationToken);
+            LlmResult result = await llmService.RunAsync(summaryConversation, new List<Tool>(), null, cancellationToken);
             string summary = result.Content;
 
             // Keep system message, replace everything else with summary as a user message

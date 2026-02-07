@@ -11,11 +11,26 @@ public enum LlmRole
     Compaction
 }
 
+// Result from a tool invocation.
+public readonly struct ToolResult
+{
+    public string Response { get; init; }
+    public bool ExitLoop { get; init; }
+    public string? ToolName { get; init; }
+
+    public ToolResult(string response, bool exitLoop = false, string? toolName = null)
+    {
+        Response = response;
+        ExitLoop = exitLoop;
+        ToolName = toolName;
+    }
+}
+
 // A tool with its definition and invocation handler.
 public class Tool
 {
     public required ToolDefinition Definition { get; init; }
-    public required Func<JsonObject, Task<string>> Handler { get; init; }
+    public required Func<JsonObject, Task<ToolResult>> Handler { get; init; }
 }
 
 // Interface for classes that provide tools to LLM agents.
