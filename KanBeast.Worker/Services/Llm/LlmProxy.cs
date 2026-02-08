@@ -44,7 +44,7 @@ public class LlmProxy
 	// Runs the conversation through the current LLM, with fallback to next LLM on failure.
 	// In hunt mode, failures immediately advance to the next LLM. Once one succeeds, hunt mode ends.
 	// remainingBudget of 0 or less means unlimited.
-	public async Task<LlmResult> ContinueAsync(LlmConversation conversation, List<Tool> tools, decimal remainingBudget, CancellationToken cancellationToken)
+	public async Task<LlmResult> ContinueAsync(LlmConversation conversation, List<Tool> tools, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
 		for (;;)
 		{
@@ -55,7 +55,7 @@ public class LlmProxy
 
 			LlmService service = _services[_currentLlmIndex];
 
-			LlmResult result = await service.RunAsync(conversation, tools, _compaction, remainingBudget, _huntMode, cancellationToken);
+			LlmResult result = await service.RunAsync(conversation, tools, _compaction, remainingBudget, _huntMode, maxCompletionTokens, cancellationToken);
 
 			if (result.ExitReason != LlmExitReason.LlmCallFailed)
 			{
@@ -66,5 +66,17 @@ public class LlmProxy
 			Console.WriteLine($"LLM {_currentLlmIndex} ({service.Model}) failed: {result.ErrorMessage}. Trying next...");
 			_currentLlmIndex++;
 		}
+	}
+	// Forces a compaction pass on the conversation to hoist memories before the conversation is discarded.
+	// Returns the cost of the compaction call.
+	public async Task<decimal> CompactAsync(LlmConversation conversation, decimal remainingBudget, CancellationToken cancellationToken)
+	{
+		if (_currentLlmIndex >= _services.Count)
+		{
+			return 0m;
+		}
+
+		LlmService service = _services[_currentLlmIndex];
+		return await _compaction.CompactAsync(conversation, service, remainingBudget, cancellationToken);
 	}
 }

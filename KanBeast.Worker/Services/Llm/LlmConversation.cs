@@ -31,18 +31,18 @@ public class LlmConversation
     private static int s_conversationIndex;
 
     private readonly bool _jsonLogging;
-    private readonly List<string> _memories;
+    private readonly LlmMemories _memories;
     private readonly List<string> _chapterSummaries;
     private string _logPath;
     private int _rewriteCount;
 
-    public LlmConversation(string model, string systemPrompt, string userPrompt, bool jsonLogging, string logDirectory, string logPrefix)
+    public LlmConversation(string model, string systemPrompt, string userPrompt, LlmMemories memories, bool jsonLogging, string logDirectory, string logPrefix)
     {
         Model = model;
         StartedAt = DateTime.UtcNow.ToString("O");
         CompletedAt = string.Empty;
         Messages = new List<ChatMessage>();
-        _memories = new List<string>();
+        _memories = memories;
         _chapterSummaries = new List<string>();
         _jsonLogging = jsonLogging;
         _rewriteCount = 0;
@@ -66,8 +66,8 @@ public class LlmConversation
         ChatMessage instructionsMessage = new ChatMessage { Role = "user", Content = userPrompt };
         Messages.Add(instructionsMessage);
 
-        // Message 2: Memories (empty initially)
-        ChatMessage memoriesMessage = new ChatMessage { Role = "user", Content = "[Memories: None yet]" };
+        // Message 2: Memories (reflects current state of shared memories)
+        ChatMessage memoriesMessage = new ChatMessage { Role = "user", Content = _memories.FormatForPrompt() };
         Messages.Add(memoriesMessage);
 
         // Message 3: Chapter summaries (empty initially)
@@ -112,79 +112,35 @@ public class LlmConversation
     [JsonPropertyName("messages")]
     public List<ChatMessage> Messages { get; }
 
-    [JsonIgnore]
-    public IReadOnlyList<string> Memories => _memories;
+	[JsonIgnore]
+	public LlmMemories Memories => _memories;
 
-    [JsonIgnore]
-    public IReadOnlyList<string> ChapterSummaries => _chapterSummaries;
+	[JsonIgnore]
+	public IReadOnlyList<string> ChapterSummaries => _chapterSummaries;
 
-    public void SetModel(string model)
-    {
-        Model = model;
-    }
+	public void SetModel(string model)
+	{
+		Model = model;
+	}
 
 	public void AddMemory(string memory)
 	{
-		if (string.IsNullOrWhiteSpace(memory))
-		{
-			return;
-		}
-
-		_memories.Add(memory.Trim());
+		_memories.Add(memory);
 		UpdateMemoriesMessage();
 	}
 
-	// Tolerant of mistakes: finds the best match assuming it starts off similar.
 	public bool RemoveMemory(string memoryToRemove)
 	{
-		if (string.IsNullOrWhiteSpace(memoryToRemove) || memoryToRemove.Trim().Length <= 5)
+		bool removed = _memories.Remove(memoryToRemove);
+		if (removed)
 		{
-			return false;
-		}
-
-		string searchText = memoryToRemove.Trim();
-		int bestMatchIndex = -1;
-		int bestMatchLength = 0;
-
-		for (int i = 0; i < _memories.Count; i++)
-		{
-			string memory = _memories[i].Trim();
-			int matchLength = GetCommonPrefixLength(memory, searchText);
-			if (matchLength > bestMatchLength)
-			{
-				bestMatchLength = matchLength;
-				bestMatchIndex = i;
-			}
-		}
-
-		if (bestMatchIndex >= 0 && bestMatchLength > 5)
-		{
-			_memories.RemoveAt(bestMatchIndex);
 			UpdateMemoriesMessage();
-			return true;
 		}
 
-		return false;
+		return removed;
 	}
 
-    private static int GetCommonPrefixLength(string a, string b)
-    {
-        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
-        {
-            return 0;
-        }
-
-        int length = 0;
-        int maxLength = Math.Min(a.Length, b.Length);
-        while (length < maxLength && a[length] == b[length])
-        {
-            length++;
-        }
-
-        return length;
-    }
-
-    private const int MaxChapterSummaries = 10;
+	private const int MaxChapterSummaries = 10;
 
     public void AddChapterSummary(string summary)
     {
@@ -210,15 +166,7 @@ public class LlmConversation
             return;
         }
 
-        string memoriesContent;
-        if (_memories.Count == 0)
-        {
-            memoriesContent = "[Memories: None yet]";
-        }
-        else
-        {
-            memoriesContent = "[Memories]\n" + string.Join("\n", _memories.Select((m, i) => $"- {m}"));
-        }
+        string memoriesContent = _memories.FormatForPrompt();
 
         Messages[2] = new ChatMessage { Role = "user", Content = memoriesContent };
     }

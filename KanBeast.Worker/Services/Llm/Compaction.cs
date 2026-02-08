@@ -93,9 +93,7 @@ public class CompactionSummarizer : ICompaction
         string originalTask = conversation.Messages.Count > 1 ? conversation.Messages[1].Content ?? "" : "";
 
         // Build memories section
-        string memoriesSection = conversation.Memories.Count > 0
-            ? "[Current memories]\n" + string.Join("\n", conversation.Memories.Select(m => $"- {m}"))
-            : "[Current memories]\nNone";
+        string memoriesSection = conversation.Memories.FormatForCompaction();
 
         // Build history block
         string historyBlock = BuildHistoryBlock(conversation.Messages, startIndex, endIndex);
@@ -115,8 +113,8 @@ public class CompactionSummarizer : ICompaction
             """;
 
         List<Tool> compactionTools = BuildCompactionTools();
-        LlmConversation summaryConversation = new LlmConversation(conversation.Model, _compactionPrompt, userPrompt, false, string.Empty, string.Empty);
-        LlmResult result = await llmService.RunAsync(summaryConversation, compactionTools, null, remainingBudget, false, cancellationToken);
+        LlmConversation summaryConversation = new LlmConversation(conversation.Model, _compactionPrompt, userPrompt, conversation.Memories, false, string.Empty, string.Empty);
+        LlmResult result = await llmService.RunAsync(summaryConversation, compactionTools, null, remainingBudget, false, null, cancellationToken);
 
         _targetConversation = null;
 

@@ -31,6 +31,7 @@ public class LLMConfig
     public int ContextLength { get; set; } = 128000;
     public decimal InputTokenPrice { get; set; } = 0m;
     public decimal OutputTokenPrice { get; set; } = 0m;
+    public double Temperature { get; set; } = 0.2;
 }
 
 // Stores Git integration settings for worker operations.

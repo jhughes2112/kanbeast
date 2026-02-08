@@ -56,13 +56,37 @@ public class ChatCompletionRequest
     [JsonPropertyName("messages")]
     public List<ChatMessage> Messages { get; set; } = new();
 
-    [JsonPropertyName("tools")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<ToolDefinition>? Tools { get; set; }
+	[JsonPropertyName("tools")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public List<ToolDefinition>? Tools { get; set; }
 
-    [JsonPropertyName("tool_choice")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ToolChoice { get; set; }
+	[JsonPropertyName("tool_choice")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public string? ToolChoice { get; set; }
+
+	[JsonPropertyName("parallel_tool_calls")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public bool? ParallelToolCalls { get; set; }
+
+	[JsonPropertyName("temperature")]
+	public double Temperature { get; set; }
+
+	[JsonPropertyName("top_p")]
+	public double TopP { get; set; }
+
+	[JsonPropertyName("frequency_penalty")]
+	public double FrequencyPenalty { get; set; }
+
+	[JsonPropertyName("seed")]
+	public int Seed { get; set; }
+
+	[JsonPropertyName("max_completion_tokens")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public int? MaxCompletionTokens { get; set; }
+
+	[JsonPropertyName("max_tokens")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public int? MaxTokens { get; set; }
 }
 
 public class ToolDefinition
@@ -159,6 +183,8 @@ public class LlmService
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
 	};
 
+	private readonly Random SeedRandom = new();
+
 	private readonly LLMConfig _config;
 	private readonly HttpClient _httpClient;
 	private readonly bool _jsonLogging;
@@ -181,7 +207,7 @@ public class LlmService
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, decimal remainingBudget, bool huntMode, CancellationToken cancellationToken)
+	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, decimal remainingBudget, bool huntMode, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
 		conversation.SetModel(_config.Model);
 
@@ -226,12 +252,19 @@ public class LlmService
 			}
 
 			ChatCompletionRequest request = new ChatCompletionRequest
-			{
-				Model = _config.Model,
-				Messages = conversation.Messages,
-				Tools = toolDefs,
-				ToolChoice = toolDefs != null ? "auto" : null
-			};
+				{
+					Model = _config.Model,
+					Messages = conversation.Messages,
+					Tools = toolDefs,
+					ToolChoice = "required",  // all agents work entirely as tool callers, no text output response is useful
+					ParallelToolCalls = true,
+					Temperature = _config.Temperature,
+					TopP = 1.0,
+					FrequencyPenalty = 0.1,
+					Seed = SeedRandom.Next(),
+					MaxCompletionTokens = maxCompletionTokens,
+					MaxTokens = maxCompletionTokens
+				};
 
 			string requestJson = JsonSerializer.Serialize(request, JsonOptions);
 			string fullUrl = $"{_config.Endpoint!.TrimEnd('/')}/chat/completions";

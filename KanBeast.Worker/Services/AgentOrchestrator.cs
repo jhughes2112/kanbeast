@@ -215,10 +215,22 @@ public class AgentOrchestrator
 		}
 		else
 		{
-			QaResult qaResult = await RunQaAsync(summary);
+			QaResult qaResult = await RunQaAsync(summary, _developerConversation!.Memories);
 
 			if (qaResult.Verdict == QaVerdict.Approved)
 			{
+				// Compact the developer conversation to hoist memories before it is discarded.
+				decimal compactBudget = GetRemainingBudget(_ticketHolder);
+				decimal compactCost = await _llmProxy.CompactAsync(_developerConversation, compactBudget, CancellationToken.None);
+				if (compactCost > 0)
+				{
+					TicketDto? costUpdate = await _apiClient.AddLlmCostAsync(_ticketHolder.Ticket.Id, compactCost);
+					if (costUpdate != null)
+					{
+						_ticketHolder.Update(costUpdate);
+					}
+				}
+
 				TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Complete);
 				if (updated != null)
 				{
@@ -290,14 +302,14 @@ public class AgentOrchestrator
 			Description: {ticketHolder.Ticket.Description}
 			""";
 
-		LlmConversation planningConversation = new LlmConversation(_llmProxy.CurrentModel, _planningPrompt, userPrompt, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-plan-");
+		LlmConversation planningConversation = new LlmConversation(_llmProxy.CurrentModel, _planningPrompt, userPrompt, new LlmMemories(), false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-plan-");
 
 		bool result = ticketHolder.Ticket.HasValidPlan();
 
 		while (result == false)
 		{
 			decimal remainingBudget = GetRemainingBudget(ticketHolder);
-			LlmResult llmResult = await _llmProxy.ContinueAsync(planningConversation, _planningTools!, remainingBudget, cancellationToken);
+			LlmResult llmResult = await _llmProxy.ContinueAsync(planningConversation, _planningTools!, remainingBudget, 16384, cancellationToken);
 			_logger.LogDebug("Manager planning response: {Response}", llmResult.Content);
 
 			if (llmResult.AccumulatedCost > 0)
@@ -363,6 +375,7 @@ public class AgentOrchestrator
 
 		_logger.LogInformation("Working on ticket");
 
+		LlmMemories memories = new LlmMemories();
 		List<(string TaskId, string TaskName, string SubtaskId, string SubtaskName, string SubtaskDescription)> subtasks = ticketHolder.Ticket.GetIncompleteSubtasks();
 
 		foreach ((string taskId, string taskName, string subtaskId, string subtaskName, string subtaskDescription) in subtasks)
@@ -398,7 +411,7 @@ public class AgentOrchestrator
 			_logger.LogInformation("Started subtask: {SubtaskName}", subtaskName);
 
 			string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask tool when complete.";
-			_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, initialPrompt, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
+			_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, initialPrompt, memories, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
 
 			int iterationCount = 0;
 			bool subtaskComplete = false;
@@ -407,7 +420,7 @@ public class AgentOrchestrator
 			for (;;)
 			{
 				decimal remainingBudget = GetRemainingBudget(ticketHolder);
-				LlmResult llmResult = await _llmProxy.ContinueAsync(_developerConversation, _developerTools!, remainingBudget, cancellationToken);
+				LlmResult llmResult = await _llmProxy.ContinueAsync(_developerConversation, _developerTools!, remainingBudget, null, cancellationToken);
 
 				if (llmResult.AccumulatedCost > 0)
 				{
@@ -438,7 +451,7 @@ public class AgentOrchestrator
 							Description: {subtaskDescription}
 							Call end_subtask tool when complete.
 							""";
-						_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, continuePrompt, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
+						_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, continuePrompt, memories, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
 						if (_qaConversation != null)
 						{
 							await _qaConversation.FinalizeAsync(cancellationToken);
@@ -489,7 +502,7 @@ public class AgentOrchestrator
 		return true;
 	}
 
-	private async Task<QaResult> RunQaAsync(string developerSummary)
+	private async Task<QaResult> RunQaAsync(string developerSummary, LlmMemories memories)
 	{
 		string userPrompt = $"""
 			Review the developer's work on this subtask.
@@ -501,7 +514,7 @@ public class AgentOrchestrator
 
 		if (_qaConversation == null)
 		{
-			_qaConversation = new LlmConversation(_llmProxy.CurrentModel, _qaPrompt, userPrompt, false, "/workspace/logs", $"TIK-{_ticketHolder!.Ticket.Id}-qa-");
+			_qaConversation = new LlmConversation(_llmProxy.CurrentModel, _qaPrompt, userPrompt, memories, false, "/workspace/logs", $"TIK-{_ticketHolder!.Ticket.Id}-qa-");
 		}
 		else
 		{
@@ -511,7 +524,7 @@ public class AgentOrchestrator
 		for (;;)
 		{
 			decimal remainingBudget = GetRemainingBudget(_ticketHolder!);
-			LlmResult llmResult = await _llmProxy.ContinueAsync(_qaConversation, _qaTools!, remainingBudget, CancellationToken.None);
+			LlmResult llmResult = await _llmProxy.ContinueAsync(_qaConversation, _qaTools!, remainingBudget, 8192, CancellationToken.None);
 
 			if (llmResult.AccumulatedCost > 0)
 			{
