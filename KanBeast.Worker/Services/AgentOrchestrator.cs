@@ -333,6 +333,7 @@ public class AgentOrchestrator
 			else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
 				_logger.LogWarning("Manager planning hit iteration limit, prompting to continue");
+				planningConversation.ResetIteration();
 				planningConversation.AddUserMessage("Are you making good progress? Keep adding tasks and subtasks as needed.  You must call planning_complete tool when ready to move onto implementation.");
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
@@ -439,6 +440,7 @@ public class AgentOrchestrator
 				else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 				{
 					iterationCount++;
+					_developerConversation.ResetIteration();
 
 					if (iterationCount >= ContextResetThreshold)
 					{
@@ -540,16 +542,19 @@ public class AgentOrchestrator
 				if (llmResult.FinalToolCalled == "approve_subtask")
 				{
 					_logger.LogInformation("QA approved: {Message}", llmResult.Content);
+					await CompactQaConversationAsync();
 					return new QaResult(QaVerdict.Approved, llmResult.Content);
 				}
 				else if (llmResult.FinalToolCalled == "reject_subtask")
 				{
 					_logger.LogInformation("QA rejected: {Message}", llmResult.Content);
+					await CompactQaConversationAsync();
 					return new QaResult(QaVerdict.Rejected, llmResult.Content);
 				}
 			}
 			else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
+				_qaConversation.ResetIteration();
 				_qaConversation.AddUserMessage("Please review the work and call approve_subtask tool.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask tool.");
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
@@ -561,6 +566,25 @@ public class AgentOrchestrator
 			{
 				_logger.LogError("QA LLM failed: {Error}", llmResult.ErrorMessage);
 				return new QaResult(QaVerdict.Rejected, $"QA review failed: {llmResult.ErrorMessage ?? "Unknown error"}. Please verify your work is complete and try again.");
+			}
+		}
+	}
+
+	private async Task CompactQaConversationAsync()
+	{
+		if (_qaConversation == null)
+		{
+			return;
+		}
+
+		decimal compactBudget = GetRemainingBudget(_ticketHolder!);
+		decimal compactCost = await _llmProxy.CompactAsync(_qaConversation, compactBudget, CancellationToken.None);
+		if (compactCost > 0)
+		{
+			TicketDto? updated = await _apiClient.AddLlmCostAsync(_ticketHolder!.Ticket.Id, compactCost);
+			if (updated != null)
+			{
+				_ticketHolder.Update(updated);
 			}
 		}
 	}

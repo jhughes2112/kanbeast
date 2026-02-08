@@ -118,6 +118,23 @@ public class LlmConversation
 	[JsonIgnore]
 	public IReadOnlyList<string> ChapterSummaries => _chapterSummaries;
 
+	[JsonIgnore]
+	public int Iteration { get; private set; }
+
+	public int MaxIterations { get; set; } = 25;
+
+	public bool HasReachedMaxIterations => Iteration >= MaxIterations;
+
+	public void IncrementIteration()
+	{
+		Iteration++;
+	}
+
+	public void ResetIteration()
+	{
+		Iteration = 0;
+	}
+
 	public void SetModel(string model)
 	{
 		Model = model;

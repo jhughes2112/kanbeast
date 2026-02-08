@@ -161,7 +161,8 @@ public enum LlmExitReason
 	ToolRequestedExit,     // A tool set ExitLoop = true
 	LlmCallFailed,         // Network error, API error, or invalid response
 	MaxIterationsReached,  // Hit iteration limit without completion
-	CostExceeded           // Accumulated cost exceeded the budget
+	CostExceeded,          // Accumulated cost exceeded the budget
+	RateLimited            // Rate limited, RetryAfter indicates when to retry
 }
 
 public class LlmResult
@@ -172,6 +173,7 @@ public class LlmResult
 	public string ErrorMessage { get; set; } = string.Empty;
 	public decimal AccumulatedCost { get; set; }
 	public string? FinalToolCalled { get; set; }
+	public DateTimeOffset? RetryAfter { get; set; }
 }
 
 // Direct OpenAI-compatible chat completion client with tool calling.
@@ -183,15 +185,23 @@ public class LlmService
 		DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
 	};
 
+	private static readonly TimeSpan DownCooldown = TimeSpan.FromMinutes(5);
+
 	private readonly Random SeedRandom = new();
 
 	private readonly LLMConfig _config;
 	private readonly HttpClient _httpClient;
 	private readonly bool _jsonLogging;
 
-	private int _backoffSeconds = 0;
+	private ToolChoiceMode _toolChoiceMode = ToolChoiceMode.Required;
+	private bool _hasSucceeded;
+	private DateTimeOffset _availableAt = DateTimeOffset.MinValue;
+
+	private enum ToolChoiceMode { Required, Auto, Omit }
 
 	public string Model => _config.Model;
+	public bool IsAvailable => DateTimeOffset.UtcNow >= _availableAt;
+	public DateTimeOffset AvailableAt => _availableAt;
 
 	public LlmService(LLMConfig config, bool jsonLogging)
 	{
@@ -207,7 +217,7 @@ public class LlmService
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, decimal remainingBudget, bool huntMode, int? maxCompletionTokens, CancellationToken cancellationToken)
+	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
 		conversation.SetModel(_config.Model);
 
@@ -217,30 +227,20 @@ public class LlmService
 			toolDefs?.Add(tool.Definition);
 		}
 
-		// In hunt mode, fail fast so the proxy can try the next endpoint quickly.
-		// Once an LLM is established, use full retry tolerance.
 		decimal accumulatedCost = 0m;
-		int maxIterations = 25;
-		int iteration = 0;
-		int networkRetries = 0;
-		int maxNetworkRetries = huntMode ? 1 : 10;
-		int rateLimitRetries = 0;
-		int maxRateLimitRetries = huntMode ? 1 : 20;
-		LlmResult result = null!;
+		int transientRetries = 0;
+		int maxTransientRetries = _hasSucceeded ? 3 : 1;
 
 		for (;;)
 		{
-			// this is explicitly at the top of the loop because if it were at the bottom of the loop, there may be another reason to exit, and this would clobber it.
-			if (iteration >= maxIterations)
+			if (conversation.HasReachedMaxIterations)
 			{
-				result = new LlmResult { ExitReason = LlmExitReason.MaxIterationsReached, AccumulatedCost = accumulatedCost };
-				break;
+				return new LlmResult { ExitReason = LlmExitReason.MaxIterationsReached, AccumulatedCost = accumulatedCost };
 			}
 
 			if (remainingBudget > 0 && accumulatedCost >= remainingBudget)
 			{
-				result = new LlmResult { ExitReason = LlmExitReason.CostExceeded, AccumulatedCost = accumulatedCost };
-				break;
+				return new LlmResult { ExitReason = LlmExitReason.CostExceeded, AccumulatedCost = accumulatedCost };
 			}
 
 			cancellationToken.ThrowIfCancellationRequested();
@@ -251,25 +251,36 @@ public class LlmService
 				accumulatedCost += await compaction.CompactAsync(conversation, this, compactionBudget, cancellationToken);
 			}
 
-			ChatCompletionRequest request = new ChatCompletionRequest
+			string? toolChoice = null;
+			if (toolDefs != null)
+			{
+				if (_toolChoiceMode == ToolChoiceMode.Required)
 				{
-					Model = _config.Model,
-					Messages = conversation.Messages,
-					Tools = toolDefs,
-					ToolChoice = "required",  // all agents work entirely as tool callers, no text output response is useful
-					ParallelToolCalls = true,
-					Temperature = _config.Temperature,
-					TopP = 1.0,
-					FrequencyPenalty = 0.1,
-					Seed = SeedRandom.Next(),
-					MaxCompletionTokens = maxCompletionTokens,
-					MaxTokens = maxCompletionTokens
-				};
+					toolChoice = "required";
+				}
+				else if (_toolChoiceMode == ToolChoiceMode.Auto)
+				{
+					toolChoice = "auto";
+				}
+			}
+
+			ChatCompletionRequest request = new ChatCompletionRequest
+			{
+				Model = _config.Model,
+				Messages = conversation.Messages,
+				Tools = toolDefs,
+				ToolChoice = toolChoice,
+				ParallelToolCalls = toolDefs != null ? true : null,
+				Temperature = _config.Temperature,
+				TopP = 1.0,
+				FrequencyPenalty = 0.1,
+				Seed = SeedRandom.Next(),
+				MaxCompletionTokens = maxCompletionTokens,
+				MaxTokens = maxCompletionTokens
+			};
 
 			string requestJson = JsonSerializer.Serialize(request, JsonOptions);
 			string fullUrl = $"{_config.Endpoint!.TrimEnd('/')}/chat/completions";
-
-			await WaitForRateLimitAsync(cancellationToken);
 
 			try
 			{
@@ -279,13 +290,14 @@ public class LlmService
 
 				if (httpResponse.IsSuccessStatusCode)
 				{
-					iteration++;
-					_backoffSeconds = 0;
-					networkRetries = 0;
+					_hasSucceeded = true;
+					transientRetries = 0;
 
 					ChatCompletionResponse? response = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions);
 					if (response != null && response.Choices.Count > 0 && response.Error == null)
 					{
+						conversation.IncrementIteration();
+
 						if (response.Usage != null)
 						{
 							if (response.Usage.Cost.HasValue)
@@ -304,90 +316,119 @@ public class LlmService
 
 						if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
 						{
-							// Normal end of conversation with content response and no tool calls.
-							result = new LlmResult
+							return new LlmResult
 							{
 								ExitReason = LlmExitReason.Completed,
 								Content = assistantMessage.Content ?? string.Empty,
 								AccumulatedCost = accumulatedCost
 							};
-							break;
 						}
-						else
-						{
-							bool toolRequestedExit = false;
-							foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
-							{
-								ToolResult toolResult = await ExecuteTool(toolCall, tools);
-								conversation.AddToolMessage(toolCall.Id, toolResult.Response);
 
-								if (toolResult.ExitLoop)
-								{
-									// Tool requested exit of conversation, usually because it is in a nested conversation and wants to communicate with an upstream LLM, or its work is explicitly done.
-									result = new LlmResult
-									{
-										ExitReason = LlmExitReason.ToolRequestedExit,
-										Content = toolResult.Response,
-										FinalToolCalled = toolResult.ToolName,
-										AccumulatedCost = accumulatedCost
-									};
-									toolRequestedExit = true;
-									break;
-								}
-							}
-							if (toolRequestedExit)
+						foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
+						{
+							ToolResult toolResult = await ExecuteTool(toolCall, tools);
+							conversation.AddToolMessage(toolCall.Id, toolResult.Response);
+
+							if (toolResult.ExitLoop)
 							{
-								break;
+								return new LlmResult
+								{
+									ExitReason = LlmExitReason.ToolRequestedExit,
+									Content = toolResult.Response,
+									FinalToolCalled = toolResult.ToolName,
+									AccumulatedCost = accumulatedCost
+								};
 							}
 						}
 					}
 					else
 					{
-						// Something went wrong with the call - we got a 200 but the body indicates an error, or is in an unexpected format.
-						throw new InvalidOperationException(response?.Error?.Message ?? "Empty response from API");
+						// 200 but body indicates an error or unexpected format.
+						transientRetries++;
+						if (transientRetries >= maxTransientRetries)
+						{
+							MarkDown();
+							return new LlmResult
+							{
+								ExitReason = LlmExitReason.LlmCallFailed,
+								ErrorMessage = response?.Error?.Message ?? "Empty response from API",
+								AccumulatedCost = accumulatedCost
+							};
+						}
+
+						int waitSeconds = Math.Min(transientRetries * 3, 15);
+						Console.WriteLine($"Invalid response from {_config.Model}, retrying in {waitSeconds}s ({transientRetries}/{maxTransientRetries})");
+						await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
 					}
+				}
+				else if (TryAdaptToError(httpResponse, responseBody))
+				{
+					// Configuration adapted, retry immediately.
 				}
 				else if (IsRateLimited(httpResponse, responseBody))
 				{
-					rateLimitRetries++;
-					if (rateLimitRetries >= maxRateLimitRetries)
+					_availableAt = ComputeRetryAfterTime(httpResponse, responseBody);
+					Console.WriteLine($"Rate limited by {_config.Model}, available at {_availableAt:HH:mm:ss}");
+					return new LlmResult
 					{
-						throw new HttpRequestException($"Rate limited {rateLimitRetries} times, giving up");
+						ExitReason = LlmExitReason.RateLimited,
+						AccumulatedCost = accumulatedCost,
+						RetryAfter = _availableAt
+					};
+				}
+				else if ((int)httpResponse.StatusCode >= 500)
+				{
+					transientRetries++;
+					if (transientRetries >= maxTransientRetries)
+					{
+						MarkDown();
+						return new LlmResult
+						{
+							ExitReason = LlmExitReason.LlmCallFailed,
+							ErrorMessage = $"Server error {httpResponse.StatusCode} after {transientRetries} retries",
+							AccumulatedCost = accumulatedCost
+						};
 					}
 
-					int waitSeconds = ParseRateLimitSeconds(httpResponse, responseBody);
-					_backoffSeconds = waitSeconds > 0 ? waitSeconds : _backoffSeconds + 3;
-					Console.WriteLine($"Rate limited ({rateLimitRetries}/{maxRateLimitRetries}). Waiting {_backoffSeconds}s before retry...");
-				}
-				else if ((int)httpResponse.StatusCode >= 500 && (int)httpResponse.StatusCode < 600)
-				{
-					_backoffSeconds += 3;
-					Console.WriteLine($"Server error {httpResponse.StatusCode}. Waiting {_backoffSeconds}s before retry...");
+					int waitSeconds = Math.Min(transientRetries * 3, 15);
+					Console.WriteLine($"Server error {httpResponse.StatusCode} from {_config.Model}, retrying in {waitSeconds}s ({transientRetries}/{maxTransientRetries})");
+					await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
 				}
 				else
 				{
-					throw new HttpRequestException($"API error {httpResponse.StatusCode}: {responseBody}");
+					// Non-recoverable client error (4xx, not tool_choice, not rate limit).
+					MarkDown();
+					return new LlmResult
+					{
+						ExitReason = LlmExitReason.LlmCallFailed,
+						ErrorMessage = $"API error {httpResponse.StatusCode}: {responseBody}",
+						AccumulatedCost = accumulatedCost
+					};
 				}
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
 			}
 			catch (Exception ex)
 			{
-				networkRetries++;
-				if (networkRetries >= maxNetworkRetries)
+				transientRetries++;
+				if (transientRetries >= maxTransientRetries)
 				{
-					result = new LlmResult
+					MarkDown();
+					return new LlmResult
 					{
 						ExitReason = LlmExitReason.LlmCallFailed,
-						ErrorMessage = $"Failed after {networkRetries} attempts: {ex.Message}",
+						ErrorMessage = $"Failed after {transientRetries} attempts: {ex.Message}",
 						AccumulatedCost = accumulatedCost
 					};
-					break;
 				}
-				_backoffSeconds += 3;
-				Console.WriteLine($"Error (attempt {networkRetries}/{maxNetworkRetries}): {ex.Message}. Waiting {_backoffSeconds}s...");
+
+				int waitSeconds = Math.Min(transientRetries * 3, 15);
+				Console.WriteLine($"Error from {_config.Model} (attempt {transientRetries}/{maxTransientRetries}): {ex.Message}. Retrying in {waitSeconds}s...");
+				await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
 			}
 		}
-
-		return result;
 	}
 
 	private async Task<ToolResult> ExecuteTool(ToolCallMessage toolCall, List<Tool> tools)
@@ -420,15 +461,52 @@ public class LlmService
 		return new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false, null);
 	}
 
-	private async Task WaitForRateLimitAsync(CancellationToken cancellationToken)
+	// Checks whether a 4xx error is a known configuration mismatch and adapts settings for retry.
+	// Returns true if an adaptation was made and the caller should retry immediately.
+	private bool TryAdaptToError(HttpResponseMessage response, string responseBody)
 	{
-		if (_backoffSeconds > 0)
+		int statusCode = (int)response.StatusCode;
+		if (statusCode < 400 || statusCode >= 500 || statusCode == 429)
 		{
-			int maxBackoffSeconds = 60;
-			_backoffSeconds = Math.Min(_backoffSeconds, maxBackoffSeconds);
-			Console.WriteLine($"Rate limit backoff: waiting {_backoffSeconds}s");
-			await Task.Delay(TimeSpan.FromSeconds(_backoffSeconds), cancellationToken);
+			return false;
 		}
+
+		string lowerBody = responseBody.ToLowerInvariant();
+
+		if (_toolChoiceMode != ToolChoiceMode.Omit && (lowerBody.Contains("tool_choice") || lowerBody.Contains("tool choice")))
+		{
+			if (_toolChoiceMode == ToolChoiceMode.Required)
+			{
+				_toolChoiceMode = ToolChoiceMode.Auto;
+				Console.WriteLine($"Model {_config.Model} does not support tool_choice=required, falling back to auto");
+			}
+			else
+			{
+				_toolChoiceMode = ToolChoiceMode.Omit;
+				Console.WriteLine($"Model {_config.Model} does not support tool_choice, omitting");
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	private void MarkDown()
+	{
+		_availableAt = DateTimeOffset.UtcNow + DownCooldown;
+		Console.WriteLine($"LLM {_config.Model} marked down until {_availableAt:HH:mm:ss}");
+	}
+
+	private DateTimeOffset ComputeRetryAfterTime(HttpResponseMessage response, string responseBody)
+	{
+		int seconds = ParseRateLimitSeconds(response, responseBody);
+		if (seconds > 0)
+		{
+			return DateTimeOffset.UtcNow.AddSeconds(seconds);
+		}
+
+		return DateTimeOffset.UtcNow.AddSeconds(5);
 	}
 
 	private bool IsRateLimited(HttpResponseMessage response, string responseBody)

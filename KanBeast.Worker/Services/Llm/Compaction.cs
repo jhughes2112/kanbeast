@@ -114,7 +114,7 @@ public class CompactionSummarizer : ICompaction
 
         List<Tool> compactionTools = BuildCompactionTools();
         LlmConversation summaryConversation = new LlmConversation(conversation.Model, _compactionPrompt, userPrompt, conversation.Memories, false, string.Empty, string.Empty);
-        LlmResult result = await llmService.RunAsync(summaryConversation, compactionTools, null, remainingBudget, false, null, cancellationToken);
+        LlmResult result = await llmService.RunAsync(summaryConversation, compactionTools, null, remainingBudget, null, cancellationToken);
 
         _targetConversation = null;
 
