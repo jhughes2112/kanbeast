@@ -123,10 +123,10 @@ public class SettingsService : ISettingsService
 
         List<PromptTemplate> prompts = new List<PromptTemplate>
         {
-            LoadPromptTemplate("planning", "Task Planning"),
+            LoadPromptTemplate("planning", "Planning"),
             LoadPromptTemplate("qualityassurance", "Quality Assurance"),
             LoadPromptTemplate("developer", "Developer"),
-            LoadPromptTemplate("compaction", "Compaction Prompt"),
+            LoadPromptTemplate("compaction", "Compaction"),
         };
 
         return prompts;

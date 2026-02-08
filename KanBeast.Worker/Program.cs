@@ -192,7 +192,7 @@ public class Program
             ["planning"] = LoadPromptFromDisk(resolvedPromptDirectory, "planning"),
             ["qualityassurance"] = LoadPromptFromDisk(resolvedPromptDirectory, "qualityassurance"),
             ["developer"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer"),
-            ["compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "compaction-summary")
+            ["compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "compaction")
         };
 
         WorkerConfig config = new WorkerConfig
