@@ -1025,9 +1025,8 @@ function setupEventListeners() {
     // Add LLM button
     document.getElementById('addLLMBtn').addEventListener('click', addLLMConfig);
 
-    // Compaction type dropdowns
-    document.getElementById('managerCompactionType').addEventListener('change', updateCompactionVisibility);
-    document.getElementById('developerCompactionType').addEventListener('change', updateCompactionVisibility);
+    // Compaction type dropdown
+    document.getElementById('compactionType').addEventListener('change', updateCompactionVisibility);
 
     // Close modal buttons
     document.querySelectorAll('.close').forEach(btn => {
@@ -1118,17 +1117,12 @@ function showSettings() {
     }
 
     // Populate compaction settings
-    const managerType = (settings && settings.managerCompaction && settings.managerCompaction.type) || 'disabled';
-    const developerType = (settings && settings.developerCompaction && settings.developerCompaction.type) || 'disabled';
-    document.getElementById('managerCompactionType').value = managerType === 'summarize' ? 'summarize' : 'disabled';
-    document.getElementById('developerCompactionType').value = developerType === 'summarize' ? 'summarize' : 'disabled';
+    const compactionType = (settings && settings.compaction && settings.compaction.type) || 'disabled';
+    document.getElementById('compactionType').value = compactionType === 'summarize' ? 'summarize' : 'disabled';
 
-    const managerPercent = Math.round(((settings && settings.managerCompaction && settings.managerCompaction.contextSizePercent) || 0.6) * 100);
-    const developerPercent = Math.round(((settings && settings.developerCompaction && settings.developerCompaction.contextSizePercent) || 0.6) * 100);
-    document.getElementById('managerContextPercent').value = managerPercent;
-    document.getElementById('developerContextPercent').value = developerPercent;
-    updatePercentLabel('manager');
-    updatePercentLabel('developer');
+    const contextPercent = Math.round(((settings && settings.compaction && settings.compaction.contextSizePercent) || 0.9) * 100);
+    document.getElementById('contextPercent').value = contextPercent;
+    updatePercentLabel();
     updateCompactionVisibility();
 
     // Populate worker settings
@@ -1156,10 +1150,8 @@ function toggleAccordion(e) {
 }
 
 function updateCompactionVisibility() {
-    const managerType = document.getElementById('managerCompactionType').value;
-    const developerType = document.getElementById('developerCompactionType').value;
-    document.getElementById('managerCompactionOptions').style.display = managerType === 'summarize' ? 'block' : 'none';
-    document.getElementById('developerCompactionOptions').style.display = developerType === 'summarize' ? 'block' : 'none';
+    const compactionType = document.getElementById('compactionType').value;
+    document.getElementById('compactionOptions').style.display = compactionType === 'summarize' ? 'block' : 'none';
 }
 
 function renderLLMConfigs() {
@@ -1272,13 +1264,9 @@ async function saveSettings() {
             apiToken: document.getElementById('gitApiToken').value || null,
             password: document.getElementById('gitPassword').value || null
         },
-        managerCompaction: {
-            type: document.getElementById('managerCompactionType').value,
-            contextSizePercent: parseInt(document.getElementById('managerContextPercent').value, 10) / 100
-        },
-        developerCompaction: {
-            type: document.getElementById('developerCompactionType').value,
-            contextSizePercent: parseInt(document.getElementById('developerContextPercent').value, 10) / 100
+        compaction: {
+            type: document.getElementById('compactionType').value,
+            contextSizePercent: parseInt(document.getElementById('contextPercent').value, 10) / 100
         },
         jsonLogging: document.getElementById('jsonLogging').checked
     };
@@ -1304,9 +1292,9 @@ async function saveSettings() {
 }
 
 // Update percent label when slider moves
-function updatePercentLabel(role) {
-    const slider = document.getElementById(`${role}ContextPercent`);
-    const label = document.getElementById(`${role}ContextPercentValue`);
+function updatePercentLabel() {
+    const slider = document.getElementById('contextPercent');
+    const label = document.getElementById('contextPercentValue');
     label.textContent = `${slider.value}%`;
 }
 

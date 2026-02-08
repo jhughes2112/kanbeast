@@ -57,14 +57,9 @@ public class SettingsService : ISettingsService
             currentSettings.GitConfig = incomingSettings.GitConfig;
         }
 
-        if (!string.IsNullOrEmpty(incomingSettings.ManagerCompaction.Type))
+        if (!string.IsNullOrEmpty(incomingSettings.Compaction.Type))
         {
-            currentSettings.ManagerCompaction = incomingSettings.ManagerCompaction;
-        }
-
-        if (!string.IsNullOrEmpty(incomingSettings.DeveloperCompaction.Type))
-        {
-            currentSettings.DeveloperCompaction = incomingSettings.DeveloperCompaction;
+            currentSettings.Compaction = incomingSettings.Compaction;
         }
 
         currentSettings.JsonLogging = incomingSettings.JsonLogging;
@@ -196,26 +191,15 @@ public class SettingsService : ISettingsService
     {
         List<string> errors = new List<string>();
 
-        if (string.IsNullOrEmpty(settings.ManagerCompaction.Type))
+        if (string.IsNullOrEmpty(settings.Compaction.Type))
         {
-            errors.Add("ManagerCompaction.Type is required");
+            errors.Add("Compaction.Type is required");
         }
 
-        if (string.Equals(settings.ManagerCompaction.Type, "summarize", StringComparison.OrdinalIgnoreCase) &&
-            (settings.ManagerCompaction.ContextSizePercent <= 0 || settings.ManagerCompaction.ContextSizePercent > 1))
+        if (string.Equals(settings.Compaction.Type, "summarize", StringComparison.OrdinalIgnoreCase) &&
+            (settings.Compaction.ContextSizePercent <= 0 || settings.Compaction.ContextSizePercent > 1))
         {
-            errors.Add("ManagerCompaction.ContextSizePercent must be between 0 and 1");
-        }
-
-        if (string.IsNullOrEmpty(settings.DeveloperCompaction.Type))
-        {
-            errors.Add("DeveloperCompaction.Type is required");
-        }
-
-        if (string.Equals(settings.DeveloperCompaction.Type, "summarize", StringComparison.OrdinalIgnoreCase) &&
-            (settings.DeveloperCompaction.ContextSizePercent <= 0 || settings.DeveloperCompaction.ContextSizePercent > 1))
-        {
-            errors.Add("DeveloperCompaction.ContextSizePercent must be between 0 and 1");
+            errors.Add("Compaction.ContextSizePercent must be between 0 and 1");
         }
 
         if (string.IsNullOrEmpty(settings.WebSearch.Provider))
@@ -248,8 +232,7 @@ public class SettingsService : ISettingsService
         {
             LLMConfigs = fileSettings.LLMConfigs,
             GitConfig = fileSettings.GitConfig,
-            ManagerCompaction = fileSettings.ManagerCompaction,
-            DeveloperCompaction = fileSettings.DeveloperCompaction,
+            Compaction = fileSettings.Compaction,
             WebSearch = fileSettings.WebSearch,
             JsonLogging = fileSettings.JsonLogging,
             SystemPrompts = LoadPromptTemplates()
@@ -264,8 +247,7 @@ public class SettingsService : ISettingsService
         {
             LLMConfigs = settings.LLMConfigs,
             GitConfig = settings.GitConfig,
-            ManagerCompaction = settings.ManagerCompaction,
-            DeveloperCompaction = settings.DeveloperCompaction,
+            Compaction = settings.Compaction,
             WebSearch = settings.WebSearch,
             JsonLogging = settings.JsonLogging
         };

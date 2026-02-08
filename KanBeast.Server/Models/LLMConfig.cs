@@ -37,8 +37,7 @@ public class SettingsFile
 {
     public List<LLMConfig> LLMConfigs { get; set; } = new();
     public GitConfig GitConfig { get; set; } = new();
-    public CompactionSettings ManagerCompaction { get; set; } = new();
-    public CompactionSettings DeveloperCompaction { get; set; } = new();
+    public CompactionSettings Compaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();
     public bool JsonLogging { get; set; }
 }
@@ -47,7 +46,7 @@ public class SettingsFile
 public class CompactionSettings
 {
     public string Type { get; set; } = "summarize";
-    public double ContextSizePercent { get; set; } = 0.6;
+    public double ContextSizePercent { get; set; } = 0.9;
 }
 
 // Configures web search provider for agents.
@@ -63,8 +62,7 @@ public class Settings
 {
     public List<LLMConfig> LLMConfigs { get; set; } = new();
     public GitConfig GitConfig { get; set; } = new();
-    public CompactionSettings ManagerCompaction { get; set; } = new();
-    public CompactionSettings DeveloperCompaction { get; set; } = new();
+    public CompactionSettings Compaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();
     public List<PromptTemplate> SystemPrompts { get; set; } = new();
     public bool JsonLogging { get; set; }
