@@ -290,7 +290,7 @@ public class AgentOrchestrator
 			Description: {ticketHolder.Ticket.Description}
 			""";
 
-		LlmConversation planningConversation = new LlmConversation(_llmProxy.CurrentModel, _planningPrompt, userPrompt, false, string.Empty, string.Empty);
+		LlmConversation planningConversation = new LlmConversation(_llmProxy.CurrentModel, _planningPrompt, userPrompt, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-plan-");
 
 		bool result = ticketHolder.Ticket.HasValidPlan();
 
@@ -398,7 +398,7 @@ public class AgentOrchestrator
 			_logger.LogInformation("Started subtask: {SubtaskName}", subtaskName);
 
 			string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask when complete.";
-			_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, initialPrompt, false, string.Empty, string.Empty);
+			_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, initialPrompt, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
 
 			int iterationCount = 0;
 			bool subtaskComplete = false;
@@ -438,7 +438,7 @@ public class AgentOrchestrator
 							Description: {subtaskDescription}
 							Call end_subtask when complete.
 							""";
-						_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, continuePrompt, false, string.Empty, string.Empty);
+						_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, continuePrompt, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
 						if (_qaConversation != null)
 						{
 							await _qaConversation.FinalizeAsync(cancellationToken);
@@ -501,7 +501,7 @@ public class AgentOrchestrator
 
 		if (_qaConversation == null)
 		{
-			_qaConversation = new LlmConversation(_llmProxy.CurrentModel, _qaPrompt, userPrompt, false, string.Empty, string.Empty);
+			_qaConversation = new LlmConversation(_llmProxy.CurrentModel, _qaPrompt, userPrompt, false, "/workspace/logs", $"TIK-{_ticketHolder!.Ticket.Id}-qa-");
 		}
 		else
 		{
