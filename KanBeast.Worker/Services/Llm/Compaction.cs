@@ -1,6 +1,5 @@
 using System.ComponentModel;
 using System.Text;
-using System.Text.Json.Nodes;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
@@ -93,25 +92,26 @@ public class CompactionSummarizer : ICompaction
         // Get the original task from message 1 (initial instructions)
         string originalTask = conversation.Messages.Count > 1 ? conversation.Messages[1].Content ?? "" : "";
 
-        // Build facts section
-        string factsSection = conversation.KeyFacts.Count > 0
-            ? "[CURRENT_STATE]\n" + string.Join("\n", conversation.KeyFacts.Select(f => $"- {f}"))
-            : "[CURRENT_STATE]\nNone";
+        // Build memories section
+        string memoriesSection = conversation.Memories.Count > 0
+            ? "[Current memories]\n" + string.Join("\n", conversation.Memories.Select(m => $"- {m}"))
+            : "[Current memories]\nNone";
 
         // Build history block
         string historyBlock = BuildHistoryBlock(conversation.Messages, startIndex, endIndex);
 
         string userPrompt = $"""
+            [Original task]
             {originalTask}
 
-            {factsSection}
+            {memoriesSection}
 
             <history>
             {historyBlock}
             </history>
 
-            First, use remove_memory then use add_memory to update the CURRENT_STATE according to the instructions.
-            Then respond with the State Transition Summary.
+            First, use add_memory and remove_memory to update the memories with important discoveries, decisions, or state changes from this history.
+            Then respond with a concise summary of the work done, as it pertains to solving the original task.
             """;
 
         List<Tool> compactionTools = BuildCompactionTools();
@@ -185,14 +185,15 @@ public class CompactionSummarizer : ICompaction
     {
         List<Tool> tools = new List<Tool>();
         ToolHelper.AddTools(tools, this,
-            nameof(AddKeyFactAsync),
-            nameof(RemoveKeyFactAsync));
+            nameof(AddMemoryAsync),
+            nameof(RemoveMemoryAsync));
         return tools;
     }
 
-    [Description("Add a single important fact, discovery, or state to the persistent key facts list. These survive compaction.")]
-    public Task<ToolResult> AddKeyFactAsync(
-        [Description("A single important fact to preserve")] string fact)
+    [Description("Add a labeled memory to the persistent memories list. Memories survive compaction and are visible to the agent across the entire conversation.")]
+    public Task<ToolResult> AddMemoryAsync(
+        [Description("Label: INVARIANT (what is), CONSTRAINT (what cannot be), DECISION (what was chosen), REFERENCE (what was done), or OPEN_ITEM (what is unresolved)")] string label,
+        [Description("Terse, self-contained memory entry")] string content)
     {
         ToolResult result;
 
@@ -200,22 +201,24 @@ public class CompactionSummarizer : ICompaction
         {
             result = new ToolResult("Error: No active conversation");
         }
-        else if (string.IsNullOrWhiteSpace(fact))
+        else if (string.IsNullOrWhiteSpace(content))
         {
-            result = new ToolResult("Error: Fact cannot be empty");
+            result = new ToolResult("Error: Content cannot be empty");
         }
         else
         {
-            _targetConversation.AddKeyFact(fact);
-            result = new ToolResult($"Added key fact: {fact}");
+            string trimmedLabel = (label ?? "REFERENCE").Trim().ToUpperInvariant();
+            string entry = $"[{trimmedLabel}] {content.Trim()}";
+            _targetConversation.AddMemory(entry);
+            result = new ToolResult($"Added: {entry}");
         }
 
         return Task.FromResult(result);
     }
 
-    [Description("Remove a key fact that is no longer relevant or has been superseded.")]
-    public Task<ToolResult> RemoveKeyFactAsync(
-        [Description("Text to match against existing facts (must match >5 characters)")] string factToRemove)
+    [Description("Remove a memory that is no longer true, relevant, or has been superseded.")]
+    public Task<ToolResult> RemoveMemoryAsync(
+        [Description("Text to match against existing memories (beginning of the memory entry)")] string memoryToRemove)
     {
         ToolResult result;
 
@@ -223,20 +226,20 @@ public class CompactionSummarizer : ICompaction
         {
             result = new ToolResult("Error: No active conversation");
         }
-        else if (string.IsNullOrWhiteSpace(factToRemove))
+        else if (string.IsNullOrWhiteSpace(memoryToRemove))
         {
-            result = new ToolResult("Error: Fact text cannot be empty");
+            result = new ToolResult("Error: Memory text cannot be empty");
         }
         else
         {
-            bool removed = _targetConversation.RemoveKeyFact(factToRemove);
+            bool removed = _targetConversation.RemoveMemory(memoryToRemove);
             if (removed)
             {
-                result = new ToolResult($"Removed key fact matching: {factToRemove}");
+                result = new ToolResult($"Removed memory matching: {memoryToRemove}");
             }
             else
             {
-                result = new ToolResult("No matching fact found (need >5 character match)");
+                result = new ToolResult("No matching memory found (need >5 character match at start)");
             }
         }
 

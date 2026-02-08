@@ -9,15 +9,15 @@ namespace KanBeast.Worker.Services;
 // The conversation maintains a specific message structure for prompt cache efficiency and compaction:
 //   [0] System prompt - Static instructions for the LLM role
 //   [1] Initial instructions - The first user message with task details
-//   [2] Key facts - A dynamically updated message containing accumulated discoveries (may be empty initially)
+//   [2] Memories - A dynamically updated message containing accumulated discoveries (may be empty initially)
 //   [3] Chapter summaries - Accumulated summaries from previous compactions (may be empty initially)
 //   [4+] Conversation messages - Regular assistant/user/tool exchanges
 //
 // During compaction:
-//   - Messages 0-3 are preserved (system, instructions, facts, summaries)
+//   - Messages 0-3 are preserved (system, instructions, memories, summaries)
 //   - Messages 4 to ~80% are summarized and added to the chapter summaries
 //   - The most recent ~20% of messages are kept intact
-//   - Important discoveries can be hoisted into the key facts list
+//   - Important discoveries can be hoisted into the memories list
 //   - Each compaction adds a new chapter summary, building a history
 //
 public class LlmConversation
@@ -31,7 +31,7 @@ public class LlmConversation
     private static int s_conversationIndex;
 
     private readonly bool _jsonLogging;
-    private readonly List<string> _keyFacts;
+    private readonly List<string> _memories;
     private readonly List<string> _chapterSummaries;
     private string _logPath;
     private int _rewriteCount;
@@ -42,7 +42,7 @@ public class LlmConversation
         StartedAt = DateTime.UtcNow.ToString("O");
         CompletedAt = string.Empty;
         Messages = new List<ChatMessage>();
-        _keyFacts = new List<string>();
+        _memories = new List<string>();
         _chapterSummaries = new List<string>();
         _jsonLogging = jsonLogging;
         _rewriteCount = 0;
@@ -66,9 +66,9 @@ public class LlmConversation
         ChatMessage instructionsMessage = new ChatMessage { Role = "user", Content = userPrompt };
         Messages.Add(instructionsMessage);
 
-        // Message 2: Key facts (empty initially)
-        ChatMessage factsMessage = new ChatMessage { Role = "user", Content = "[Key facts: None yet]" };
-        Messages.Add(factsMessage);
+        // Message 2: Memories (empty initially)
+        ChatMessage memoriesMessage = new ChatMessage { Role = "user", Content = "[Memories: None yet]" };
+        Messages.Add(memoriesMessage);
 
         // Message 3: Chapter summaries (empty initially)
         ChatMessage summariesMessage = new ChatMessage { Role = "user", Content = "[Chapter summaries: None yet]" };
@@ -93,11 +93,11 @@ public class LlmConversation
         }
         AppendMessageToLog(systemMessage);
         AppendMessageToLog(instructionsMessage);
-        AppendMessageToLog(factsMessage);
+        AppendMessageToLog(memoriesMessage);
         AppendMessageToLog(summariesMessage);
     }
 
-    // Index of the first compressible message (after system, instructions, facts, and summaries)
+    // Index of the first compressible message (after system, instructions, memories, and summaries)
     public const int FirstCompressibleIndex = 4;
 
     [JsonPropertyName("model")]
@@ -113,7 +113,7 @@ public class LlmConversation
     public List<ChatMessage> Messages { get; }
 
     [JsonIgnore]
-    public IReadOnlyList<string> KeyFacts => _keyFacts;
+    public IReadOnlyList<string> Memories => _memories;
 
     [JsonIgnore]
     public IReadOnlyList<string> ChapterSummaries => _chapterSummaries;
@@ -123,49 +123,49 @@ public class LlmConversation
         Model = model;
     }
 
-    public void AddKeyFact(string fact)
-    {
-        if (string.IsNullOrWhiteSpace(fact))
-        {
-            return;
-        }
+	public void AddMemory(string memory)
+	{
+		if (string.IsNullOrWhiteSpace(memory))
+		{
+			return;
+		}
 
-        _keyFacts.Add(fact.Trim());
-        UpdateFactsMessage();
-    }
+		_memories.Add(memory.Trim());
+		UpdateMemoriesMessage();
+	}
 
-	// This is tolerant of mistakes, but we try to find the best match assuming it starts off similar.
-    public bool RemoveKeyFact(string factToRemove)
-    {
-        if (string.IsNullOrWhiteSpace(factToRemove) || factToRemove.Trim().Length <= 5)
-        {
-            return false;
-        }
+	// Tolerant of mistakes: finds the best match assuming it starts off similar.
+	public bool RemoveMemory(string memoryToRemove)
+	{
+		if (string.IsNullOrWhiteSpace(memoryToRemove) || memoryToRemove.Trim().Length <= 5)
+		{
+			return false;
+		}
 
-        string searchText = factToRemove.Trim();
-        int bestMatchIndex = -1;
-        int bestMatchLength = 0;
+		string searchText = memoryToRemove.Trim();
+		int bestMatchIndex = -1;
+		int bestMatchLength = 0;
 
-        for (int i = 0; i < _keyFacts.Count; i++)
-        {
-            string fact = _keyFacts[i].Trim();
-            int matchLength = GetCommonPrefixLength(fact, searchText);
-            if (matchLength > bestMatchLength)
-            {
-                bestMatchLength = matchLength;
-                bestMatchIndex = i;
-            }
-        }
+		for (int i = 0; i < _memories.Count; i++)
+		{
+			string memory = _memories[i].Trim();
+			int matchLength = GetCommonPrefixLength(memory, searchText);
+			if (matchLength > bestMatchLength)
+			{
+				bestMatchLength = matchLength;
+				bestMatchIndex = i;
+			}
+		}
 
-        if (bestMatchIndex >= 0 && bestMatchLength > 5)
-        {
-            _keyFacts.RemoveAt(bestMatchIndex);
-            UpdateFactsMessage();
-            return true;
-        }
+		if (bestMatchIndex >= 0 && bestMatchLength > 5)
+		{
+			_memories.RemoveAt(bestMatchIndex);
+			UpdateMemoriesMessage();
+			return true;
+		}
 
-        return false;
-    }
+		return false;
+	}
 
     private static int GetCommonPrefixLength(string a, string b)
     {
@@ -203,24 +203,24 @@ public class LlmConversation
         UpdateSummariesMessage();
     }
 
-    private void UpdateFactsMessage()
+    private void UpdateMemoriesMessage()
     {
         if (Messages.Count < 4)
         {
             return;
         }
 
-        string factsContent;
-        if (_keyFacts.Count == 0)
+        string memoriesContent;
+        if (_memories.Count == 0)
         {
-            factsContent = "[Key facts: None yet]";
+            memoriesContent = "[Memories: None yet]";
         }
         else
         {
-            factsContent = "[Key facts]\n" + string.Join("\n", _keyFacts.Select((f, i) => $"- {f}"));
+            memoriesContent = "[Memories]\n" + string.Join("\n", _memories.Select((m, i) => $"- {m}"));
         }
 
-        Messages[2] = new ChatMessage { Role = "user", Content = factsContent };
+        Messages[2] = new ChatMessage { Role = "user", Content = memoriesContent };
     }
 
     private void UpdateSummariesMessage()
