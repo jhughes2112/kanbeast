@@ -449,11 +449,11 @@ public class AgentOrchestrator
 					else if (iterationCount == ProgressCheckThreshold)
 					{
 						_logger.LogWarning("Progress check at {Count} iterations", iterationCount);
-						_developerConversation.AddUserMessage("You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask when done.");
+						_developerConversation.AddUserMessage("This is god speaking. You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask when done.");
 					}
 					else
 					{
-						_developerConversation.AddUserMessage("Continue working. Call end_subtask when done.");
+						_developerConversation.AddUserMessage("This is god speaking. Continue working or call end_subtask when done.");
 					}
 				}
 				else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
@@ -496,7 +496,7 @@ public class AgentOrchestrator
 
 			Developer's summary: {developerSummary}
 
-			Verify the work meets the acceptance criteria. Call approve_subtask if the work is complete, or reject_subtask with specific feedback if changes are needed.
+			Verify the work meets the acceptance criteria. Call approve_subtask if the work is complete and verified. Call reject_subtask with specific feedback if changes are needed, or if you are unable to review the work for some reason.
 			""";
 
 		if (_qaConversation == null)
@@ -537,7 +537,7 @@ public class AgentOrchestrator
 			}
 			else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
-				_qaConversation.AddUserMessage("Please review the work and call approve_subtask or reject_subtask.");
+				_qaConversation.AddUserMessage("Please review the work and call approve_subtask.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask.");
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 			{
