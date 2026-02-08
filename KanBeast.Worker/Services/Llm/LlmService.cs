@@ -165,6 +165,8 @@ public class LlmService
 
 	private int _backoffSeconds = 0;
 
+	public string Model => _config.Model;
+
 	public LlmService(LLMConfig config, bool jsonLogging)
 	{
 		_config = config;
@@ -181,6 +183,8 @@ public class LlmService
 
 	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, decimal remainingBudget, CancellationToken cancellationToken)
 	{
+		conversation.SetModel(_config.Model);
+
 		List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;
 		foreach (Tool tool in tools)
 		{
@@ -214,7 +218,7 @@ public class LlmService
 			if (compaction != null)
 			{
 				decimal compactionBudget = remainingBudget > 0 ? remainingBudget - accumulatedCost : 0;
-				accumulatedCost += await compaction.CompactAsync(conversation, this, _jsonLogging, compactionBudget, cancellationToken);
+				accumulatedCost += await compaction.CompactAsync(conversation, this, compactionBudget, cancellationToken);
 			}
 
 			ChatCompletionRequest request = new ChatCompletionRequest

@@ -6,50 +6,61 @@ using Microsoft.Extensions.Logging;
 
 namespace KanBeast.Worker.Services;
 
-// Orchestrates the manager and developer LLMs to complete a ticket.
-public interface IAgentOrchestrator
+// Result from QA review.
+public enum QaVerdict
 {
-	Task StartAgents(TicketDto ticket, string workDir, CancellationToken cancellationToken);
+	Approved,
+	Rejected
+}
+
+public readonly struct QaResult
+{
+	public QaVerdict Verdict { get; init; }
+	public string Message { get; init; }
+
+	public QaResult(QaVerdict verdict, string message)
+	{
+		Verdict = verdict;
+		Message = message;
+	}
 }
 
 // Coordinates manager LLM with developer LLM.
-public class AgentOrchestrator : IAgentOrchestrator
+public class AgentOrchestrator
 {
-	private const int CircuitBreakerThreshold = 15;
-
 	private readonly ILogger<AgentOrchestrator> _logger;
 	private readonly IKanbanApiClient _apiClient;
-	private readonly LlmProxy _managerLlm;
-	private readonly LlmProxy _developerLlm;
-	private readonly string _managerPlanningPrompt;
-	private readonly string _managerImplementingPrompt;
+	private readonly LlmProxy _llmProxy;
+
+	private readonly string _planningPrompt;
+	private readonly string _qaPrompt;
 	private readonly string _developerPrompt;
+
+	private List<Tool>? _planningTools;
+	private List<Tool>? _qaTools;
+	private List<Tool>? _developerTools;
+
+	private LlmConversation? _qaConversation;
+	private LlmConversation? _developerConversation;
 
 	private TicketHolder? _ticketHolder;
 	private string? _workDir;
-	private List<Tool>? _managerPlanningTools;
-	private List<Tool>? _managerImplementingTools;
-	private List<Tool>? _developerTools;
-	private LlmConversation? _managerConversation;
-	private LlmConversation? _developerConversation;
 	private string? _currentTaskId;
 	private string? _currentSubtaskId;
 
 	public AgentOrchestrator(
 		ILogger<AgentOrchestrator> logger,
 		IKanbanApiClient apiClient,
-		LlmProxy managerLlm,
-		LlmProxy developerLlm,
-		string managerPlanningPrompt,
-		string managerImplementingPrompt,
+		LlmProxy llmProxy,
+		string planningPrompt,
+		string qaPrompt,
 		string developerPrompt)
 	{
 		_logger = logger;
 		_apiClient = apiClient;
-		_managerLlm = managerLlm;
-		_developerLlm = developerLlm;
-		_managerPlanningPrompt = managerPlanningPrompt;
-		_managerImplementingPrompt = managerImplementingPrompt;
+		_llmProxy = llmProxy;
+		_planningPrompt = planningPrompt;
+		_qaPrompt = qaPrompt;
 		_developerPrompt = developerPrompt;
 	}
 
@@ -65,13 +76,13 @@ public class AgentOrchestrator : IAgentOrchestrator
 		ShellTools shellTools = new ShellTools(workDir);
 		FileTools fileTools = new FileTools(workDir);
 
-		_managerPlanningTools = BuildManagerPlanningTools(shellTools, fileTools, ticketTools);
-		_managerImplementingTools = BuildManagerImplementingTools(shellTools, fileTools, ticketTools);
+		_planningTools = BuildManagerPlanningTools(shellTools, fileTools, ticketTools);
+		_qaTools = BuildQaTools(shellTools, fileTools);
 		_developerTools = BuildDeveloperTools(shellTools, fileTools);
 
 		if (await RunPlanningAsync(_ticketHolder, cancellationToken))
 		{
-			if (await RunWorkingAsync(_ticketHolder, cancellationToken))
+			if (await RunDeveloperAsync(_ticketHolder, cancellationToken))
 			{
 				decimal finalCost = _ticketHolder.Ticket.LlmCost;
 				_logger.LogInformation("Orchestrator completed successfully (spent ${Spend:F4})", finalCost);
@@ -94,15 +105,15 @@ public class AgentOrchestrator : IAgentOrchestrator
 			await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Failed");
 		}
 
-		if (_managerConversation != null)
+		if (_qaConversation != null)
 		{
-			await _managerLlm.FinalizeConversationAsync(_managerConversation, cancellationToken);
-			_managerConversation = null;
+			await _qaConversation.FinalizeAsync(cancellationToken);
+			_qaConversation = null;
 		}
 
 		if (_developerConversation != null)
 		{
-			await _developerLlm.FinalizeConversationAsync(_developerConversation, cancellationToken);
+			await _developerConversation.FinalizeAsync(cancellationToken);
 			_developerConversation = null;
 		}
 	}
@@ -110,25 +121,23 @@ public class AgentOrchestrator : IAgentOrchestrator
 	private List<Tool> BuildManagerPlanningTools(ShellTools shellTools, FileTools fileTools, TicketTools ticketTools)
 	{
 		List<Tool> tools = new List<Tool>();
-		shellTools.AddTools(tools, LlmRole.ManagerPlanning);
-		fileTools.AddTools(tools, LlmRole.ManagerPlanning);
-		ticketTools.AddTools(tools, LlmRole.ManagerPlanning);
+		shellTools.AddTools(tools, LlmRole.Planning);
+		fileTools.AddTools(tools, LlmRole.Planning);
+		ticketTools.AddTools(tools, LlmRole.Planning);
 		ToolHelper.AddTools(tools, this,
 			nameof(PlanningCompleteAsync),
 			nameof(DeleteAllTasksAsync));
 		return tools;
 	}
 
-	private List<Tool> BuildManagerImplementingTools(ShellTools shellTools, FileTools fileTools, TicketTools ticketTools)
+	private List<Tool> BuildQaTools(ShellTools shellTools, FileTools fileTools)
 	{
 		List<Tool> tools = new List<Tool>();
-		shellTools.AddTools(tools, LlmRole.ManagerImplementing);
-		fileTools.AddTools(tools, LlmRole.ManagerImplementing);
-		ticketTools.AddTools(tools, LlmRole.ManagerImplementing);
+		shellTools.AddTools(tools, LlmRole.QA);
+		fileTools.AddTools(tools, LlmRole.QA);
 		ToolHelper.AddTools(tools, this,
-			nameof(StartNextSubtaskAsync),
-			nameof(MarkSubtaskCompleteAsync),
-			nameof(MarkSubtaskRejectedAsync));
+			nameof(ApproveSubtaskAsync),
+			nameof(RejectSubtaskAsync));
 		return tools;
 	}
 
@@ -138,7 +147,6 @@ public class AgentOrchestrator : IAgentOrchestrator
 		shellTools.AddTools(tools, LlmRole.Developer);
 		fileTools.AddTools(tools, LlmRole.Developer);
 		ToolHelper.AddTools(tools, this,
-			nameof(AskForHelpAsync),
 			nameof(EndSubtaskAsync));
 		return tools;
 	}
@@ -191,126 +199,8 @@ public class AgentOrchestrator : IAgentOrchestrator
 		return result;
 	}
 
-	[Description("Start working on the next incomplete subtask. The developer will work autonomously until complete.")]
-	public async Task<ToolResult> StartNextSubtaskAsync()
-	{
-		ToolResult result;
-
-		if (_ticketHolder == null || _workDir == null)
-		{
-			result = new ToolResult("Error: Orchestrator not initialized");
-		}
-		else if (_currentSubtaskId != null)
-		{
-			result = new ToolResult("Error: Already working on a subtask. Complete or reject the current subtask before starting a new one.");
-		}
-		else
-		{
-			List<(string TaskId, string TaskName, string SubtaskId, string SubtaskName, string SubtaskDescription)> subtasks = _ticketHolder.Ticket.GetIncompleteSubtasks();
-
-			if (subtasks.Count == 0)
-			{
-				result = new ToolResult("No incomplete subtasks remaining. All work is complete.");
-			}
-			else
-			{
-				(string taskId, string taskName, string subtaskId, string subtaskName, string subtaskDescription) = subtasks[0];
-
-				TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, taskId, subtaskId, SubtaskStatus.InProgress);
-				if (updated != null)
-				{
-					_ticketHolder.Update(updated);
-				}
-
-				_currentTaskId = taskId;
-				_currentSubtaskId = subtaskId;
-
-				await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Started subtask: {subtaskName}");
-				_logger.LogInformation("Started subtask: {SubtaskName}", subtaskName);
-
-				if (_developerConversation != null)
-				{
-					// Reuse existing conversation for rejected subtask retry
-					_developerConversation.AddUserMessage($"The manager rejected your previous work on this subtask. Try again.\n\nSubtask: '{subtaskName}' in task '{taskName}'\nDescription: {subtaskDescription}\n\nCall end_subtask when complete, or ask_for_help if you need guidance.");
-				}
-				else
-				{
-					string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask when complete, or ask_for_help if you need guidance.";
-					_developerConversation = _developerLlm.CreateConversation(_developerPrompt, initialPrompt);
-				}
-
-				string developerResult = await RunDeveloperLoopAsync();
-				result = new ToolResult(developerResult);
-			}
-		}
-
-		return result;
-	}
-
-	[Description("Ask the manager for help, clarification, or guidance. The manager will respond and you can continue working.")]
-	public async Task<ToolResult> AskForHelpAsync(
-		[Description("Your question for the manager")] string question)
-	{
-		ToolResult result;
-
-		if (string.IsNullOrWhiteSpace(question))
-		{
-			result = new ToolResult("Error: Question cannot be empty");
-		}
-		else if (_ticketHolder == null)
-		{
-			result = new ToolResult("Error: Orchestrator not initialized");
-		}
-		else if (_managerConversation == null)
-		{
-			result = new ToolResult("Error: No active manager conversation");
-		}
-		else
-		{
-			await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Developer → Manager (question): {question}");
-			_logger.LogInformation("Developer → Manager (question): {Message}", question);
-
-			string userMessage = $"The developer working on the current subtask has a question:\n\n\"{question}\"\n\nProvide a helpful, concise answer.";
-			_managerConversation.AddUserMessage(userMessage);
-
-			decimal remainingBudget = GetRemainingBudget(_ticketHolder);
-			LlmResult managerResult = await _managerLlm.ContinueAsync(_managerConversation, _managerImplementingTools!, remainingBudget, CancellationToken.None);
-
-			if (managerResult.AccumulatedCost > 0)
-			{
-				TicketDto? updated = await _apiClient.AddLlmCostAsync(_ticketHolder.Ticket.Id, managerResult.AccumulatedCost);
-				if (updated != null)
-				{
-					_ticketHolder.Update(updated);
-				}
-			}
-
-			if (managerResult.ExitReason == LlmExitReason.Completed && !string.IsNullOrWhiteSpace(managerResult.Content))
-			{
-				await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Manager → Developer (answer): {managerResult.Content}");
-				_logger.LogInformation("Manager → Developer (answer): {Message}", managerResult.Content);
-				result = new ToolResult($"Manager says: {managerResult.Content}");
-			}
-			else if (managerResult.ExitReason == LlmExitReason.LlmCallFailed)
-			{
-				_logger.LogError("Manager LLM failed while answering question: {Error}", managerResult.ErrorMessage);
-				result = new ToolResult("Manager LLM is unavailable. Continue with your best judgment.");
-			}
-			else if (managerResult.ExitReason == LlmExitReason.CostExceeded)
-			{
-				result = new ToolResult("Cost budget exceeded. Continue with your best judgment.");
-			}
-			else
-			{
-				result = new ToolResult("Manager was unable to respond. Continue with your best judgment.");
-			}
-		}
-
-		return result;
-	}
-
 	[Description("Signal that you have finished working on the current subtask. Call this when your work is complete.")]
-	public Task<ToolResult> EndSubtaskAsync(
+	public async Task<ToolResult> EndSubtaskAsync(
 		[Description("Summary of what you accomplished")] string summary)
 	{
 		ToolResult result;
@@ -319,247 +209,159 @@ public class AgentOrchestrator : IAgentOrchestrator
 		{
 			result = new ToolResult("Error: Summary cannot be empty", false);
 		}
+		else if (_ticketHolder == null || _currentTaskId == null || _currentSubtaskId == null)
+		{
+			result = new ToolResult("Error: No active subtask", false);
+		}
 		else
 		{
-			result = new ToolResult(summary, true);
+			QaResult qaResult = await RunQaAsync(summary);
+
+			if (qaResult.Verdict == QaVerdict.Approved)
+			{
+				TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Complete);
+				if (updated != null)
+				{
+					_ticketHolder.Update(updated);
+				}
+
+				await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask completed: {summary}");
+				_logger.LogInformation("Subtask completed");
+
+				result = new ToolResult("Subtask approved and marked complete.", true, "end_subtask");
+			}
+			else
+			{
+				await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"QA rejected: {qaResult.Message}");
+				_logger.LogWarning("QA rejected, developer will retry: {Feedback}", qaResult.Message);
+
+				result = new ToolResult($"QA rejected your work. Feedback: {qaResult.Message}\n\nPlease fix the issues and call end_subtask when done.", false);
+			}
+		}
+
+		return result;
+	}
+
+	[Description("Approve the developer's work on this subtask. Call this when the work meets the acceptance criteria.")]
+	public Task<ToolResult> ApproveSubtaskAsync(
+		[Description("Summary of what was verified")] string notes)
+	{
+		ToolResult result;
+
+		if (string.IsNullOrWhiteSpace(notes))
+		{
+			result = new ToolResult("Error: Notes are required", false);
+		}
+		else
+		{
+			result = new ToolResult(notes, true, "approve_subtask");
 		}
 
 		return Task.FromResult(result);
 	}
 
-	[Description("Mark the current subtask as complete. Only call this when the subtask work is verified complete.")]
-	public async Task<ToolResult> MarkSubtaskCompleteAsync(
-		[Description("Summary of what was accomplished")] string notes)
+	[Description("Reject the developer's work on this subtask. The developer will retry with your feedback.")]
+	public Task<ToolResult> RejectSubtaskAsync(
+		[Description("Specific feedback on what needs to be fixed")] string feedback)
 	{
 		ToolResult result;
 
-		if (_ticketHolder == null)
+		if (string.IsNullOrWhiteSpace(feedback))
 		{
-			result = new ToolResult("Error: Orchestrator not initialized");
-		}
-		else if (_currentSubtaskId == null || _currentTaskId == null)
-		{
-			result = new ToolResult("Error: No subtask is currently assigned. Use start_next_subtask first.");
-		}
-		else if (string.IsNullOrWhiteSpace(notes))
-		{
-			result = new ToolResult("Error: Notes are required");
+			result = new ToolResult("Error: Feedback is required", false);
 		}
 		else
 		{
-			TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Complete);
-			if (updated != null)
-			{
-				_ticketHolder.Update(updated);
-			}
-
-			await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask completed: {notes}");
-			_logger.LogInformation("Subtask completed: {Notes}", notes);
-
-			_currentTaskId = null;
-			_currentSubtaskId = null;
-
-			if (_developerConversation != null)
-			{
-				await _developerLlm.FinalizeConversationAsync(_developerConversation, CancellationToken.None);
-				_developerConversation = null;
-			}
-
-			result = new ToolResult($"Subtask marked complete. {notes}");
+			result = new ToolResult(feedback, true, "reject_subtask");
 		}
 
-		return result;
-	}
-
-	[Description("Mark the current subtask as rejected. Use this if the subtask cannot be completed.")]
-	public async Task<ToolResult> MarkSubtaskRejectedAsync(
-		[Description("Reason for rejection")] string reason)
-	{
-		ToolResult result;
-
-		if (_ticketHolder == null)
-		{
-			result = new ToolResult("Error: Orchestrator not initialized");
-		}
-		else if (_currentSubtaskId == null || _currentTaskId == null)
-		{
-			result = new ToolResult("Error: No subtask is currently assigned.");
-		}
-		else if (string.IsNullOrWhiteSpace(reason))
-		{
-			result = new ToolResult("Error: Reason is required");
-		}
-		else
-		{
-			TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Rejected);
-			if (updated != null)
-			{
-				_ticketHolder.Update(updated);
-			}
-
-			await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Subtask rejected: {reason}");
-			_logger.LogWarning("Subtask rejected: {Reason}", reason);
-
-			_currentTaskId = null;
-			_currentSubtaskId = null;
-
-			// Tell the developer why their work was rejected so they can fix it on retry
-			if (_developerConversation != null)
-			{
-				_developerConversation.AddUserMessage($"The manager rejected your work. Reason: {reason}");
-			}
-
-			result = new ToolResult($"Subtask rejected. {reason}");
-		}
-
-		return result;
-	}
-
-	private static string GetRecentMessagesFromConversation(LlmConversation conversation, int count)
-	{
-		List<ChatMessage> messages = conversation.Messages;
-		int startIndex = Math.Max(0, messages.Count - count);
-		StringBuilder sb = new StringBuilder();
-		sb.AppendLine($"Last {Math.Min(count, messages.Count - startIndex)} messages:");
-
-		for (int i = startIndex; i < messages.Count; i++)
-		{
-			ChatMessage msg = messages[i];
-			string content = msg.Content ?? string.Empty;
-
-			if (msg.Role == "assistant")
-			{
-				if (msg.ToolCalls != null && msg.ToolCalls.Count > 0)
-				{
-					foreach (ToolCallMessage tc in msg.ToolCalls)
-					{
-						sb.AppendLine($"  [assistant] {tc.Function.Name}({tc.Function.Arguments})");
-					}
-				}
-				else
-				{
-					sb.AppendLine($"  [assistant] {content}");
-				}
-			}
-			else if (msg.Role == "tool")
-			{
-				sb.AppendLine($"  [tool result] {content}");
-			}
-		}
-
-		return sb.ToString();
-	}
-
-	private static string FormatTicketStatus(TicketDto ticket)
-	{
-		StringBuilder sb = new StringBuilder();
-		sb.AppendLine($"Ticket: {ticket.Title}");
-		sb.AppendLine($"Description: {ticket.Description}");
-		sb.AppendLine();
-		sb.AppendLine("Current Status:");
-
-		foreach (KanbanTaskDto task in ticket.Tasks)
-		{
-			sb.AppendLine($"  Task: {task.Name}");
-			foreach (KanbanSubtaskDto subtask in task.Subtasks)
-			{
-				sb.AppendLine($"    [{subtask.Status}] {subtask.Name}");
-			}
-		}
-
-		return sb.ToString();
+		return Task.FromResult(result);
 	}
 
 	//-------------------
 
 	private async Task<bool> RunPlanningAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
-		bool result = false;
+		_logger.LogInformation("Manager: Planning ticket breakdown");
+		await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Planning ticket breakdown");
 
-		if (ticketHolder.Ticket.HasValidPlan())
+		string userPrompt = $"""
+			Ticket: {ticketHolder.Ticket.Title}
+			Description: {ticketHolder.Ticket.Description}
+			""";
+
+		LlmConversation planningConversation = new LlmConversation(_llmProxy.CurrentModel, _planningPrompt, userPrompt, false, string.Empty, string.Empty);
+
+		bool result = ticketHolder.Ticket.HasValidPlan();
+
+		while (result == false)
 		{
-			result = true;
+			decimal remainingBudget = GetRemainingBudget(ticketHolder);
+			LlmResult llmResult = await _llmProxy.ContinueAsync(planningConversation, _planningTools!, remainingBudget, cancellationToken);
+			_logger.LogDebug("Manager planning response: {Response}", llmResult.Content);
+
+			if (llmResult.AccumulatedCost > 0)
+			{
+				TicketDto? updated = await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, llmResult.AccumulatedCost);
+				if (updated != null)
+				{
+					ticketHolder.Update(updated);
+				}
+			}
+
+			if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "planning_complete")
+			{
+				result = true;
+				break;
+			}
+			else if (llmResult.ExitReason == LlmExitReason.Completed)
+			{
+				planningConversation.AddUserMessage("Continue planning by adding tasks and subtasks. When finished, call planning_complete to begin implementation.");
+			}
+			else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
+			{
+				_logger.LogWarning("Manager planning hit iteration limit, prompting to continue");
+				planningConversation.AddUserMessage("Are you making good progress? Keep adding tasks and subtasks as needed.  You must call planning_complete when ready to move onto implementation.");
+			}
+			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
+			{
+				_logger.LogWarning("Manager planning exceeded cost budget");
+				await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Cost budget exceeded during planning");
+				break;
+			}
+			else
+			{
+				_logger.LogError("Manager LLM failed during planning: {Error}", llmResult.ErrorMessage);
+				await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager LLM failed: {llmResult.ErrorMessage}");
+				break;
+			}
+		}
+
+		if (result)
+		{
+			int subtaskCount = 0;
+			foreach (KanbanTaskDto task in ticketHolder.Ticket.Tasks)
+			{
+				subtaskCount += task.Subtasks.Count;
+			}
+			await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Planning complete.");
+			_logger.LogInformation($"Planning complete: {subtaskCount} subtasks created");
 		}
 		else
 		{
-			_logger.LogInformation("Manager: Planning ticket breakdown");
-			await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Planning ticket breakdown");
-
-			string userPrompt = $"""
-				Break down this ticket into tasks and subtasks.  Every task must have at least one subtask.  If you don't like this plan, you can call delete_all_tasks to start over.
-
-				Ticket: {ticketHolder.Ticket.Title}
-				Description: {ticketHolder.Ticket.Description}
-
-				When planning is complete, call planning_complete to begin implementation.
-				""";
-
-			_managerConversation = _managerLlm.CreateConversation(_managerPlanningPrompt, userPrompt);
-
-			for (;;)
-			{
-				decimal remainingBudget = GetRemainingBudget(ticketHolder);
-				LlmResult llmResult = await _managerLlm.ContinueAsync(_managerConversation, _managerPlanningTools!, remainingBudget, cancellationToken);
-				_logger.LogDebug("Manager planning response: {Response}", llmResult.Content);
-
-				if (llmResult.AccumulatedCost > 0)
-				{
-					TicketDto? updated = await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, llmResult.AccumulatedCost);
-					if (updated != null)
-					{
-						ticketHolder.Update(updated);
-					}
-				}
-
-				if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "planning_complete")
-				{
-					if (ticketHolder.Ticket.HasValidPlan())
-					{
-						int subtaskCount = 0;
-						foreach (KanbanTaskDto task in ticketHolder.Ticket.Tasks)
-						{
-							subtaskCount += task.Subtasks.Count;
-						}
-						_logger.LogInformation("Planning complete: {Count} subtasks created", subtaskCount);
-						result = true;
-						break;
-					}
-					else
-					{
-						_logger.LogWarning("Planning incomplete - not all tasks have subtasks");
-						_managerConversation.AddUserMessage("Planning is not complete. Every task must have at least one subtask. Review your tasks and add subtasks where missing, then call planning_complete again.");
-					}
-				}
-				else if (llmResult.ExitReason == LlmExitReason.Completed)  // to avoid partially completed planning phases, the LLM must call planning_complete to move on to the next phase.
-				{
-					_managerConversation.AddUserMessage("Continue planning by adding tasks and subtasks. When finished, call planning_complete to begin implementation.");
-				}
-				else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
-				{
-					_logger.LogWarning("Manager planning hit iteration limit, prompting to continue");
-					_managerConversation.AddUserMessage("Are you making good progress? Keep adding tasks and subtasks as needed.  You must call planning_complete when ready to move onto implementation.");
-				}
-				else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
-				{
-					_logger.LogWarning("Manager planning exceeded cost budget");
-					await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Cost budget exceeded during planning");
-					break;
-				}
-				else
-				{
-					_logger.LogError("Manager LLM failed during planning: {Error}", llmResult.ErrorMessage);
-					await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager LLM failed: {llmResult.ErrorMessage}");
-					break;
-				}
-			}
+			await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Planning failed.");
+			_logger.LogInformation("Planning failed.");
 		}
 
 		return result;
 	}
 
-	private async Task<bool> RunWorkingAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
+	private async Task<bool> RunDeveloperAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
-		_logger.LogInformation("Manager: Working on ticket");
+		const int ProgressCheckThreshold = 5;  // 5 times that the LLM has returned without calling the end_subtask tool (or just has had a ton of tool calls).  This is an indication something is probably wrong.
+		const int ContextResetThreshold = 15;  // 15 times is a whole lot.  Wipe the context and start fresh.
+
+		_logger.LogInformation("Working on ticket");
 
 		List<(string TaskId, string TaskName, string SubtaskId, string SubtaskName, string SubtaskDescription)> subtasks = ticketHolder.Ticket.GetIncompleteSubtasks();
 
@@ -568,99 +370,145 @@ public class AgentOrchestrator : IAgentOrchestrator
 			cancellationToken.ThrowIfCancellationRequested();
 
 			// Start fresh conversations for each subtask
-			if (_managerConversation != null)
+			if (_qaConversation != null)
 			{
-				await _managerLlm.FinalizeConversationAsync(_managerConversation, cancellationToken);
-				_managerConversation = null;
+				await _qaConversation.FinalizeAsync(cancellationToken);
+				_qaConversation = null;
 			}
 
 			if (_developerConversation != null)
 			{
-				await _developerLlm.FinalizeConversationAsync(_developerConversation, cancellationToken);
+				await _developerConversation.FinalizeAsync(cancellationToken);
 				_developerConversation = null;
 			}
 
-			string ticketSummary = FormatTicketStatus(ticketHolder.Ticket);
-			string currentSubtaskInfo = $"Current subtask: '{subtaskName}' in task '{taskName}'\nDescription: {subtaskDescription}";
+			_currentTaskId = taskId;
+			_currentSubtaskId = subtaskId;
 
-			string userPrompt = $"""
-				Work on this subtask until it is complete.
+			TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(ticketHolder.Ticket.Id, taskId, subtaskId, SubtaskStatus.InProgress);
+			if (updated != null)
+			{
+				ticketHolder.Update(updated);
+			}
 
-				{ticketSummary}
+			await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Started subtask: {subtaskName}");
+			_logger.LogInformation("Started subtask: {SubtaskName}", subtaskName);
 
-				{currentSubtaskInfo}
+			string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask when complete.";
+			_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, initialPrompt, false, string.Empty, string.Empty);
 
-				Call start_next_subtask to begin work on this subtask.
-				""";
+			int iterationCount = 0;
+			bool subtaskComplete = false;
+			bool blocked = false;
 
-			_managerConversation = _managerLlm.CreateConversation(_managerImplementingPrompt, userPrompt);
-
-			// Work on this subtask until complete or failed
 			for (;;)
 			{
 				decimal remainingBudget = GetRemainingBudget(ticketHolder);
-				LlmResult llmResult = await _managerLlm.ContinueAsync(_managerConversation, _managerImplementingTools!, remainingBudget, cancellationToken);
-				_logger.LogDebug("Manager working response: {Response}", llmResult.Content);
+				LlmResult llmResult = await _llmProxy.ContinueAsync(_developerConversation, _developerTools!, remainingBudget, cancellationToken);
 
 				if (llmResult.AccumulatedCost > 0)
 				{
-					TicketDto? updated = await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, llmResult.AccumulatedCost);
+					updated = await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, llmResult.AccumulatedCost);
 					if (updated != null)
 					{
 						ticketHolder.Update(updated);
 					}
 				}
 
-				if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
+				if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
 				{
-					// MarkSubtaskCompleteAsync sets _currentSubtaskId to null when done
-					if (_currentSubtaskId == null)
-					{
-						break;
-					}
-					// Otherwise keep working (e.g., after rejection and retry)
+					subtaskComplete = true;
+					break;
 				}
-				else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
+				else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 				{
-					_logger.LogWarning("Manager working hit iteration limit, prompting to continue");
-					_managerConversation.AddUserMessage("Continue working on the current subtask. Use start_next_subtask if not already started.");
+					iterationCount++;
+
+					if (iterationCount >= ContextResetThreshold)
+					{
+						await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Context reset: Developer exceeded iteration limit, starting fresh");
+						_logger.LogWarning("Context reset after {Count} iterations", iterationCount);
+
+						await _developerConversation.FinalizeAsync(cancellationToken);
+						string continuePrompt = $"""
+							You were working on subtask '{subtaskName}' but got stuck. Look at the local changes and decide if you should continue or take a fresh approach.
+							Description: {subtaskDescription}
+							Call end_subtask when complete.
+							""";
+						_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, continuePrompt, false, string.Empty, string.Empty);
+						if (_qaConversation != null)
+						{
+							await _qaConversation.FinalizeAsync(cancellationToken);
+							_qaConversation = null;
+						}
+						iterationCount = 0;
+					}
+					else if (iterationCount == ProgressCheckThreshold)
+					{
+						_logger.LogWarning("Progress check at {Count} iterations", iterationCount);
+						_developerConversation.AddUserMessage("You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask when done.");
+					}
+					else
+					{
+						_developerConversation.AddUserMessage("Continue working. Call end_subtask when done.");
+					}
 				}
 				else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 				{
-					_logger.LogWarning("Manager working exceeded cost budget");
-					await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Cost budget exceeded during work");
-					return false;
+					await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Developer: Cost budget exceeded");
+					_logger.LogWarning("Developer exceeded cost budget");
+					blocked = true;
+					break;
 				}
 				else
 				{
-					_logger.LogError("Manager LLM failed during work: {Error}", llmResult.ErrorMessage);
-					await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Manager LLM failed: {llmResult.ErrorMessage}");
-					return false;
+					await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Developer LLM failed: {llmResult.ErrorMessage}");
+					_logger.LogError("Developer LLM failed: {Error}", llmResult.ErrorMessage);
+					blocked = true;
+					break;
 				}
+			}
+
+			_currentTaskId = null;
+			_currentSubtaskId = null;
+
+			if (blocked)
+			{
+				return false;
+			}
+
+			if (!subtaskComplete)
+			{
+				return false;
 			}
 		}
 
 		return true;
 	}
 
-	private async Task<string> RunDeveloperLoopAsync()
+	private async Task<QaResult> RunQaAsync(string developerSummary)
 	{
-		string result;
-		int iterationCount = 0;
+		string userPrompt = $"""
+			Review the developer's work on this subtask.
+
+			Developer's summary: {developerSummary}
+
+			Verify the work meets the acceptance criteria. Call approve_subtask if the work is complete, or reject_subtask with specific feedback if changes are needed.
+			""";
+
+		if (_qaConversation == null)
+		{
+			_qaConversation = new LlmConversation(_llmProxy.CurrentModel, _qaPrompt, userPrompt, false, string.Empty, string.Empty);
+		}
+		else
+		{
+			_qaConversation.AddUserMessage(userPrompt);
+		}
 
 		for (;;)
 		{
-			if (iterationCount >= CircuitBreakerThreshold)
-			{
-				string recentActivity = GetRecentMessagesFromConversation(_developerConversation!, 20);
-				await _apiClient.AddActivityLogAsync(_ticketHolder!.Ticket.Id, "Circuit breaker: Developer exceeded iteration limit");
-				_logger.LogWarning("Circuit breaker tripped after {Count} iterations", iterationCount);
-				result = $"CIRCUIT BREAKER: Developer ran {iterationCount} iterations without completing. Review recent activity:\n\n{recentActivity}";
-				break;
-			}
-
 			decimal remainingBudget = GetRemainingBudget(_ticketHolder!);
-			LlmResult llmResult = await _developerLlm.ContinueAsync(_developerConversation!, _developerTools!, remainingBudget, CancellationToken.None);
+			LlmResult llmResult = await _llmProxy.ContinueAsync(_qaConversation, _qaTools!, remainingBudget, CancellationToken.None);
 
 			if (llmResult.AccumulatedCost > 0)
 			{
@@ -671,39 +519,33 @@ public class AgentOrchestrator : IAgentOrchestrator
 				}
 			}
 
-			if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
+			if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
 			{
-				await _apiClient.AddActivityLogAsync(_ticketHolder!.Ticket.Id, $"Developer → Manager (SUBTASK COMPLETE): {llmResult.Content}");
-				_logger.LogInformation("Developer → Manager (SUBTASK COMPLETE): {Message}", llmResult.Content);
-				result = $"Developer reports SUBTASK COMPLETE: {llmResult.Content}\n\nReview the work and use mark_subtask_complete or mark_subtask_rejected.";
-				break;
+				if (llmResult.FinalToolCalled == "approve_subtask")
+				{
+					_logger.LogInformation("QA approved: {Message}", llmResult.Content);
+					return new QaResult(QaVerdict.Approved, llmResult.Content);
+				}
+				else if (llmResult.FinalToolCalled == "reject_subtask")
+				{
+					_logger.LogInformation("QA rejected: {Message}", llmResult.Content);
+					return new QaResult(QaVerdict.Rejected, llmResult.Content);
+				}
 			}
-			else if (llmResult.ExitReason == LlmExitReason.Completed)
+			else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
-				iterationCount++;
-				_developerConversation!.AddUserMessage("Continue working. Call end_subtask when done, or ask_for_help if you need guidance.");
-			}
-			else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
-			{
-				iterationCount++;
-				_developerConversation!.AddUserMessage("Continue working. Call end_subtask when done, or ask_for_help if you need guidance.");
+				_qaConversation.AddUserMessage("Please review the work and call approve_subtask or reject_subtask.");
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 			{
-				await _apiClient.AddActivityLogAsync(_ticketHolder!.Ticket.Id, "Developer: Cost budget exceeded");
-				_logger.LogWarning("Developer exceeded cost budget");
-				result = "Developer stopped: Cost budget exceeded.";
-				break;
+				_logger.LogWarning("QA exceeded cost budget");
+				return new QaResult(QaVerdict.Rejected, "QA review could not complete due to cost budget. Please verify your work is complete and try again.");
 			}
 			else
 			{
-				await _apiClient.AddActivityLogAsync(_ticketHolder!.Ticket.Id, $"Developer LLM failed: {llmResult.ErrorMessage}");
-				_logger.LogError("Developer LLM failed: {Error}", llmResult.ErrorMessage);
-				result = $"Developer LLM failed: {llmResult.ErrorMessage}";
-				break;
+				_logger.LogError("QA LLM failed: {Error}", llmResult.ErrorMessage);
+				return new QaResult(QaVerdict.Rejected, $"QA review failed: {llmResult.ErrorMessage ?? "Unknown error"}. Please verify your work is complete and try again.");
 			}
 		}
-
-		return result;
 	}
 }

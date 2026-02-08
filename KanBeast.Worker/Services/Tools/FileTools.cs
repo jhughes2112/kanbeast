@@ -45,8 +45,8 @@ public class FileTools : IToolProvider
 
         Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
-            [LlmRole.ManagerPlanning] = readOnlyTools,
-            [LlmRole.ManagerImplementing] = readOnlyTools,
+            [LlmRole.Planning] = readOnlyTools,
+            [LlmRole.QA] = readOnlyTools,
             [LlmRole.Developer] = developerTools,
             [LlmRole.Compaction] = new List<Tool>()
         };

@@ -4,6 +4,22 @@ using System.Text.Json.Serialization;
 namespace KanBeast.Worker.Services;
 
 // Holds the content and logging state for a single LLM conversation.
+//
+// CONVERSATION STRUCTURE:
+// The conversation maintains a specific message structure for prompt cache efficiency and compaction:
+//   [0] System prompt - Static instructions for the LLM role
+//   [1] Initial instructions - The first user message with task details
+//   [2] Key facts - A dynamically updated message containing accumulated discoveries (may be empty initially)
+//   [3] Chapter summaries - Accumulated summaries from previous compactions (may be empty initially)
+//   [4+] Conversation messages - Regular assistant/user/tool exchanges
+//
+// During compaction:
+//   - Messages 0-3 are preserved (system, instructions, facts, summaries)
+//   - Messages 4 to ~80% are summarized and added to the chapter summaries
+//   - The most recent ~20% of messages are kept intact
+//   - Important discoveries can be hoisted into the key facts list
+//   - Each compaction adds a new chapter summary, building a history
+//
 public class LlmConversation
 {
     private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
@@ -12,20 +28,51 @@ public class LlmConversation
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private readonly string _logPath;
+    private static int s_conversationIndex;
 
-    public LlmConversation(string model, string systemPrompt, string userPrompt, string logPath)
+    private readonly bool _jsonLogging;
+    private readonly List<string> _keyFacts;
+    private readonly List<string> _chapterSummaries;
+    private string _logPath;
+    private int _rewriteCount;
+
+    public LlmConversation(string model, string systemPrompt, string userPrompt, bool jsonLogging, string logDirectory, string logPrefix)
     {
         Model = model;
         StartedAt = DateTime.UtcNow.ToString("O");
         CompletedAt = string.Empty;
         Messages = new List<ChatMessage>();
-        _logPath = logPath;
+        _keyFacts = new List<string>();
+        _chapterSummaries = new List<string>();
+        _jsonLogging = jsonLogging;
+        _rewriteCount = 0;
 
+        if (!string.IsNullOrWhiteSpace(logDirectory) && !string.IsNullOrWhiteSpace(logPrefix))
+        {
+            s_conversationIndex++;
+            long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            _logPath = Path.Combine(logDirectory, $"{logPrefix}-{timestamp}-{s_conversationIndex:D3}.log");
+        }
+        else
+        {
+            _logPath = string.Empty;
+        }
+
+        // Message 0: System prompt
         ChatMessage systemMessage = new ChatMessage { Role = "system", Content = systemPrompt };
-        ChatMessage userMessage = new ChatMessage { Role = "user", Content = userPrompt };
         Messages.Add(systemMessage);
-        Messages.Add(userMessage);
+
+        // Message 1: Initial instructions
+        ChatMessage instructionsMessage = new ChatMessage { Role = "user", Content = userPrompt };
+        Messages.Add(instructionsMessage);
+
+        // Message 2: Key facts (empty initially)
+        ChatMessage factsMessage = new ChatMessage { Role = "user", Content = "[Key facts: None yet]" };
+        Messages.Add(factsMessage);
+
+        // Message 3: Chapter summaries (empty initially)
+        ChatMessage summariesMessage = new ChatMessage { Role = "user", Content = "[Chapter summaries: None yet]" };
+        Messages.Add(summariesMessage);
 
         if (!string.IsNullOrWhiteSpace(_logPath))
         {
@@ -38,20 +85,23 @@ public class LlmConversation
             string header = $"# LLM Conversation Log\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
             Console.Write(header);
             File.WriteAllText(_logPath, header);
-            AppendMessageToLog(systemMessage);
-            AppendMessageToLog(userMessage);
         }
         else
         {
             string header = $"# LLM Conversation Log\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
             Console.Write(header);
-            AppendMessageToLog(systemMessage);
-            AppendMessageToLog(userMessage);
         }
+        AppendMessageToLog(systemMessage);
+        AppendMessageToLog(instructionsMessage);
+        AppendMessageToLog(factsMessage);
+        AppendMessageToLog(summariesMessage);
     }
 
+    // Index of the first compressible message (after system, instructions, facts, and summaries)
+    public const int FirstCompressibleIndex = 4;
+
     [JsonPropertyName("model")]
-    public string Model { get; }
+    public string Model { get; private set; }
 
     [JsonPropertyName("started_at")]
     public string StartedAt { get; }
@@ -61,6 +111,137 @@ public class LlmConversation
 
     [JsonPropertyName("messages")]
     public List<ChatMessage> Messages { get; }
+
+    [JsonIgnore]
+    public IReadOnlyList<string> KeyFacts => _keyFacts;
+
+    [JsonIgnore]
+    public IReadOnlyList<string> ChapterSummaries => _chapterSummaries;
+
+    public void SetModel(string model)
+    {
+        Model = model;
+    }
+
+    public void AddKeyFact(string fact)
+    {
+        if (string.IsNullOrWhiteSpace(fact))
+        {
+            return;
+        }
+
+        _keyFacts.Add(fact.Trim());
+        UpdateFactsMessage();
+    }
+
+	// This is tolerant of mistakes, but we try to find the best match assuming it starts off similar.
+    public bool RemoveKeyFact(string factToRemove)
+    {
+        if (string.IsNullOrWhiteSpace(factToRemove) || factToRemove.Trim().Length <= 5)
+        {
+            return false;
+        }
+
+        string searchText = factToRemove.Trim();
+        int bestMatchIndex = -1;
+        int bestMatchLength = 0;
+
+        for (int i = 0; i < _keyFacts.Count; i++)
+        {
+            string fact = _keyFacts[i].Trim();
+            int matchLength = GetCommonPrefixLength(fact, searchText);
+            if (matchLength > bestMatchLength)
+            {
+                bestMatchLength = matchLength;
+                bestMatchIndex = i;
+            }
+        }
+
+        if (bestMatchIndex >= 0 && bestMatchLength > 5)
+        {
+            _keyFacts.RemoveAt(bestMatchIndex);
+            UpdateFactsMessage();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static int GetCommonPrefixLength(string a, string b)
+    {
+        if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+        {
+            return 0;
+        }
+
+        int length = 0;
+        int maxLength = Math.Min(a.Length, b.Length);
+        while (length < maxLength && a[length] == b[length])
+        {
+            length++;
+        }
+
+        return length;
+    }
+
+    private const int MaxChapterSummaries = 10;
+
+    public void AddChapterSummary(string summary)
+    {
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            return;
+        }
+
+        // Remove oldest summary if at max capacity
+        if (_chapterSummaries.Count >= MaxChapterSummaries)
+        {
+            _chapterSummaries.RemoveAt(0);
+        }
+
+        _chapterSummaries.Add(summary);
+        UpdateSummariesMessage();
+    }
+
+    private void UpdateFactsMessage()
+    {
+        if (Messages.Count < 4)
+        {
+            return;
+        }
+
+        string factsContent;
+        if (_keyFacts.Count == 0)
+        {
+            factsContent = "[Key facts: None yet]";
+        }
+        else
+        {
+            factsContent = "[Key facts]\n" + string.Join("\n", _keyFacts.Select((f, i) => $"- {f}"));
+        }
+
+        Messages[2] = new ChatMessage { Role = "user", Content = factsContent };
+    }
+
+    private void UpdateSummariesMessage()
+    {
+        if (Messages.Count < 4)
+        {
+            return;
+        }
+
+        string summariesContent;
+        if (_chapterSummaries.Count == 0)
+        {
+            summariesContent = "[Chapter summaries: None yet]";
+        }
+        else
+        {
+            summariesContent = "[Chapter summaries]\n" + string.Join("\n\n", _chapterSummaries.Select((s, i) => $"### Chapter {i + 1}\n{s}"));
+        }
+
+        Messages[3] = new ChatMessage { Role = "user", Content = summariesContent };
+    }
 
     public void AddUserMessage(string content)
     {
@@ -91,6 +272,78 @@ public class LlmConversation
         AppendMessageToLog(message);
     }
 
+    // Deletes messages from startIndex to endIndex (exclusive), preserving messages before and after.
+    // Indices are clamped to protect the first 4 messages (system, instructions, facts, summaries).
+    // Closes current log and starts a new one with incremented rewrite count.
+    public async Task DeleteRangeAsync(int startIndex, int endIndex, CancellationToken cancellationToken)
+    {
+        // Clamp to protect first 4 messages
+        startIndex = Math.Max(startIndex, FirstCompressibleIndex);
+        endIndex = Math.Max(endIndex, FirstCompressibleIndex);
+
+        if (startIndex >= Messages.Count || endIndex <= startIndex)
+        {
+            return;
+        }
+
+        endIndex = Math.Min(endIndex, Messages.Count);
+
+        // Write pre-delete JSON log if enabled
+        if (_jsonLogging && !string.IsNullOrWhiteSpace(_logPath))
+        {
+            await WriteLogAsync($"-pre-compact-{_rewriteCount}", cancellationToken);
+        }
+
+        // Close current log
+        if (!string.IsNullOrWhiteSpace(_logPath))
+        {
+            string closeMessage = $"\n---\n**Compacted at:** {DateTime.UtcNow:O}\n";
+            File.AppendAllText(_logPath, closeMessage);
+        }
+
+        // Collect messages to keep after the deleted range
+        List<ChatMessage> tailMessages = new List<ChatMessage>();
+        for (int i = endIndex; i < Messages.Count; i++)
+        {
+            tailMessages.Add(Messages[i]);
+        }
+
+        // Remove messages from startIndex onwards
+        while (Messages.Count > startIndex)
+        {
+            Messages.RemoveAt(Messages.Count - 1);
+        }
+
+        // Add back the tail messages
+        foreach (ChatMessage msg in tailMessages)
+        {
+            Messages.Add(msg);
+        }
+
+        // Start new log file
+        _rewriteCount++;
+        if (!string.IsNullOrWhiteSpace(_logPath))
+        {
+            string basePath = Path.ChangeExtension(_logPath, null);
+            _logPath = $"{basePath}-c{_rewriteCount}.log";
+
+            string? directory = Path.GetDirectoryName(_logPath);
+            if (!string.IsNullOrWhiteSpace(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+
+            string header = $"# LLM Conversation Log (Compacted {_rewriteCount})\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
+            Console.Write(header);
+            File.WriteAllText(_logPath, header);
+
+            foreach (ChatMessage msg in Messages)
+            {
+                AppendMessageToLog(msg);
+            }
+        }
+    }
+
     public void MarkCompleted()
     {
         CompletedAt = DateTime.UtcNow.ToString("O");
@@ -101,6 +354,15 @@ public class LlmConversation
         if (!string.IsNullOrWhiteSpace(_logPath))
         {
             File.AppendAllText(_logPath, completionMessage);
+        }
+    }
+
+    public async Task FinalizeAsync(CancellationToken cancellationToken)
+    {
+        MarkCompleted();
+        if (_jsonLogging)
+        {
+            await WriteLogAsync("-complete", cancellationToken);
         }
     }
 

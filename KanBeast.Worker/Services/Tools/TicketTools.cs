@@ -28,15 +28,15 @@ public class TicketTools : IToolProvider
             nameof(CreateTaskAsync),
             nameof(CreateSubtaskAsync));
 
-        List<Tool> implementingTools = new List<Tool>();
-        ToolHelper.AddTools(implementingTools, this,
+        List<Tool> logOnlyTools = new List<Tool>();
+        ToolHelper.AddTools(logOnlyTools, this,
             nameof(LogMessageAsync));
 
         Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
         {
-            [LlmRole.ManagerPlanning] = planningTools,
-            [LlmRole.ManagerImplementing] = implementingTools,
-            [LlmRole.Developer] = implementingTools,
+            [LlmRole.Planning] = planningTools,
+            [LlmRole.QA] = logOnlyTools,
+            [LlmRole.Developer] = logOnlyTools,
             [LlmRole.Compaction] = new List<Tool>()
         };
 

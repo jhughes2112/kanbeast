@@ -58,23 +58,15 @@ public class Program
 
 			string repoDir = Path.GetFullPath(options.RepoPath);
 
-			string managerPlanningPrompt = config.GetPrompt("manager-planning").Replace("{repoDir}", repoDir);
-			string managerImplementingPrompt = config.GetPrompt("manager-implementing").Replace("{repoDir}", repoDir);
+			string planningPrompt = config.GetPrompt("planning").Replace("{repoDir}", repoDir);
+			string qaPrompt = config.GetPrompt("qualityassurance").Replace("{repoDir}", repoDir);
 			string developerPrompt = config.GetPrompt("developer").Replace("{repoDir}", repoDir);
-			string managerCompactionPrompt = config.GetPrompt("manager-compaction").Replace("{repoDir}", repoDir);
-			string developerCompactionPrompt = config.GetPrompt("developer-compaction").Replace("{repoDir}", repoDir);
+			string compactionPrompt = config.GetPrompt("compaction").Replace("{repoDir}", repoDir);
 
 			GitService gitService = new GitService(config.GitConfig);
-			ICompaction managerCompaction = BuildCompaction(config.ManagerCompaction, config.LLMConfigs, managerCompactionPrompt); 
-			ICompaction developerCompaction = BuildCompaction(config.DeveloperCompaction, config.LLMConfigs, developerCompactionPrompt);
+			ICompaction compaction = BuildCompaction(config.Compaction, config.LLMConfigs, compactionPrompt);
 
-			string logDirectory = Path.Combine(Environment.CurrentDirectory, "logs");
-
-			LlmProxy managerProxy = new LlmProxy(config.LLMConfigs, managerCompaction, logDirectory, $"tik-{config.TicketId}-mgr", config.JsonLogging);
-			LlmProxy developerProxy = new LlmProxy(config.LLMConfigs, developerCompaction, logDirectory, $"tik-{config.TicketId}-dev", config.JsonLogging);
-
-			LlmProxy managerLlmService = managerProxy;
-			LlmProxy developerLlmService = developerProxy;
+			LlmProxy llmProxy = new LlmProxy(config.LLMConfigs, compaction, config.JsonLogging);
 
 			logger.LogInformation("Fetching ticket details...");
 			TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);
@@ -106,7 +98,7 @@ public class Program
 						await apiClient.SetBranchNameAsync(ticket.Id, branchName);
 					}
 
-					AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, managerLlmService, developerLlmService, managerPlanningPrompt, managerImplementingPrompt, developerPrompt);
+					AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, llmProxy, planningPrompt, qaPrompt, developerPrompt);
 					logger.LogInformation("Starting agent orchestrator...");
 
 					try
@@ -197,11 +189,10 @@ public class Program
 
         Dictionary<string, string> prompts = new Dictionary<string, string>
         {
-            ["manager-planning"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-planning"),
-            ["manager-implementing"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-implementing"),
+            ["planning"] = LoadPromptFromDisk(resolvedPromptDirectory, "planning"),
+            ["qualityassurance"] = LoadPromptFromDisk(resolvedPromptDirectory, "qualityassurance"),
             ["developer"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer"),
-            ["manager-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "manager-compaction-summary"),
-            ["developer-compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer-compaction-summary")
+            ["compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "compaction-summary")
         };
 
         WorkerConfig config = new WorkerConfig
@@ -210,8 +201,7 @@ public class Program
             ServerUrl = serverUrl,
             GitConfig = settings.GitConfig,
             LLMConfigs = settings.LLMConfigs,
-            ManagerCompaction = settings.ManagerCompaction,
-            DeveloperCompaction = settings.DeveloperCompaction,
+            Compaction = settings.Compaction,
             Prompts = prompts,
             PromptDirectory = resolvedPromptDirectory,
             JsonLogging = options.JsonLogging

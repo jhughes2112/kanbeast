@@ -7,8 +7,7 @@ public class WorkerConfig
     public required string ServerUrl { get; set; }
     public required GitConfig GitConfig { get; set; }
     public required List<LLMConfig> LLMConfigs { get; set; }
-    public required CompactionSettings ManagerCompaction { get; set; }
-    public required CompactionSettings DeveloperCompaction { get; set; }
+    public required CompactionSettings Compaction { get; set; }
     public required Dictionary<string, string> Prompts { get; set; }
     public required string PromptDirectory { get; set; }
     public bool JsonLogging { get; set; }
@@ -54,8 +53,7 @@ public class WorkerSettings
         Username = string.Empty,
         Email = string.Empty
     };
-    public CompactionSettings ManagerCompaction { get; set; } = new();
-    public CompactionSettings DeveloperCompaction { get; set; } = new();
+    public CompactionSettings Compaction { get; set; } = new();
     public bool JsonLogging { get; set; }
 }
 

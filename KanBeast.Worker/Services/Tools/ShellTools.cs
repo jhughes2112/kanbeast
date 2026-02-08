@@ -33,13 +33,13 @@ public class ShellTools : IToolProvider
         List<Tool> sharedTools = new List<Tool>();
         ToolHelper.AddTools(sharedTools, this, nameof(RunCommandAsync));
 
-        Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
-        {
-            [LlmRole.ManagerPlanning] = sharedTools,
-            [LlmRole.ManagerImplementing] = sharedTools,
-            [LlmRole.Developer] = sharedTools,
-            [LlmRole.Compaction] = new List<Tool>()
-        };
+		Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
+		{
+			[LlmRole.Planning] = sharedTools,
+			[LlmRole.QA] = sharedTools,
+			[LlmRole.Developer] = sharedTools,
+			[LlmRole.Compaction] = new List<Tool>()
+		};
 
         return result;
     }
