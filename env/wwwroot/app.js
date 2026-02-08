@@ -1168,13 +1168,15 @@ function renderLLMConfigs() {
     llmConfigs.forEach((config, index) => {
         const configEl = document.createElement('div');
         configEl.className = 'llm-config accordion';
+        configEl.style.marginBottom = '8px';
+        configEl.style.padding = '0';
         const modelName = config.model || `LLM ${index + 1}`;
         configEl.innerHTML = `
-            <div class="accordion-header">
+            <div class="accordion-header" style="padding: 10px 12px; margin: 0;">
                 <span>🧠 ${escapeHtml(modelName)}</span>
                 <span class="accordion-icon">▼</span>
             </div>
-            <div class="accordion-content">
+            <div class="accordion-content" style="padding: 12px; padding-top: 8px;">
                 <div class="form-group">
                     <label>Model</label>
                     <input type="text" class="llm-model" value="${escapeHtml(config.model || '')}" placeholder="gpt-4o">
@@ -1187,19 +1189,25 @@ function renderLLMConfigs() {
                     <label>Endpoint (optional, for Azure/custom)</label>
                     <input type="text" class="llm-endpoint" value="${escapeHtml(config.endpoint || '')}" placeholder="https://...">
                 </div>
-                <div class="form-group">
-                    <label>Context Length</label>
-                    <input type="number" class="llm-context-length" value="${config.contextLength || 128000}" min="1000" step="1000" placeholder="128000">
+                <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
+                    <div>
+                        <label style="font-size: 11px; font-weight: 500; color: var(--text-muted); display: block; margin-bottom: 4px;">Context Length</label>
+                        <input type="number" class="llm-context-length" value="${config.contextLength || 128000}" min="1000" step="1000" placeholder="128000" style="width: 100%; padding: 0.5rem 0.5rem; border: 1px solid var(--gray-300); border-radius: var(--radius); background: var(--gray-100); color: var(--gray-800); font-size: 0.9375rem; transition: border-color 0.2s ease, box-shadow 0.2s ease; font-family: inherit;">
+                    </div>
+                    <div>
+                        <label style="font-size: 11px; font-weight: 500; color: var(--text-muted); display: block; margin-bottom: 4px;">Input $/M</label>
+                        <input type="number" class="llm-input-price" value="${config.inputTokenPrice || 0}" min="0" step="0.01" placeholder="0.00" style="width: 100%; padding: 0.5rem 0.5rem; border: 1px solid var(--gray-300); border-radius: var(--radius); background: var(--gray-100); color: var(--gray-800); font-size: 0.9375rem; transition: border-color 0.2s ease, box-shadow 0.2s ease; font-family: inherit;">
+                    </div>
+                    <div>
+                        <label style="font-size: 11px; font-weight: 500; color: var(--text-muted); display: block; margin-bottom: 4px;">Output $/M</label>
+                        <input type="number" class="llm-output-price" value="${config.outputTokenPrice || 0}" min="0" step="0.01" placeholder="0.00" style="width: 100%; padding: 0.5rem 0.5rem; border: 1px solid var(--gray-300); border-radius: var(--radius); background: var(--gray-100); color: var(--gray-800); font-size: 0.9375rem; transition: border-color 0.2s ease, box-shadow 0.2s ease; font-family: inherit;">
+                    </div>
+                    <div>
+                        <label style="font-size: 11px; font-weight: 500; color: var(--text-muted); display: block; margin-bottom: 4px;">Temperature</label>
+                        <input type="number" class="llm-temperature" value="${config.temperature !== undefined ? config.temperature : 0.2}" min="0" max="2" step="0.1" placeholder="0.2" style="width: 100%; padding: 0.5rem 0.5rem; border: 1px solid var(--gray-300); border-radius: var(--radius); background: var(--gray-100); color: var(--gray-800); font-size: 0.9375rem; transition: border-color 0.2s ease, box-shadow 0.2s ease; font-family: inherit;">
+                    </div>
                 </div>
-                <div class="form-group">
-                    <label>Input Price ($ per million tokens)</label>
-                    <input type="number" class="llm-input-price" value="${config.inputTokenPrice || 0}" min="0" step="0.01" placeholder="0.00">
-                </div>
-                <div class="form-group">
-                    <label>Output Price ($ per million tokens)</label>
-                    <input type="number" class="llm-output-price" value="${config.outputTokenPrice || 0}" min="0" step="0.01" placeholder="0.00">
-                </div>
-                <button type="button" class="btn-danger btn-sm" data-index="${index}" style="width: 100%;">Remove This LLM</button>
+                <button type="button" class="btn-danger btn-sm" data-index="${index}" style="width: 100%; display: flex; align-items: center; justify-content: center;">Remove This LLM</button>
             </div>
         `;
 
@@ -1218,7 +1226,7 @@ function addLLMConfig() {
         settings.llmConfigs = [];
     }
 
-    settings.llmConfigs.push({ model: '', apiKey: '', endpoint: '', contextLength: 128000, inputTokenPrice: 0, outputTokenPrice: 0 });
+    settings.llmConfigs.push({ model: '', apiKey: '', endpoint: '', contextLength: 128000, inputTokenPrice: 0, outputTokenPrice: 0, temperature: 0.2 });
     renderLLMConfigs();
 }
 
@@ -1239,7 +1247,8 @@ function collectLLMConfigs() {
             endpoint: configEl.querySelector('.llm-endpoint').value || null,
             contextLength: parseInt(configEl.querySelector('.llm-context-length').value, 10) || 128000,
             inputTokenPrice: parseFloat(configEl.querySelector('.llm-input-price').value) || 0,
-            outputTokenPrice: parseFloat(configEl.querySelector('.llm-output-price').value) || 0
+            outputTokenPrice: parseFloat(configEl.querySelector('.llm-output-price').value) || 0,
+            temperature: parseFloat(configEl.querySelector('.llm-temperature').value) || 0.2
         });
     });
 

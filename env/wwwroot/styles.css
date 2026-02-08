@@ -573,7 +573,7 @@ nav {
 .form-group textarea,
 .form-group select {
     width: 100%;
-    padding: 0.625rem 0.875rem;
+    padding: 0.5rem 0.5rem;
     border: 1px solid var(--gray-300);
     border-radius: var(--radius);
     font-size: 0.9375rem;
@@ -589,6 +589,15 @@ nav {
     outline: none;
     border-color: var(--primary);
     box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.2);
+}
+
+.llm-context-length:focus,
+.llm-input-price:focus,
+.llm-output-price:focus,
+.llm-temperature:focus {
+    outline: none !important;
+    border-color: var(--primary) !important;
+    box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.2) !important;
 }
 
 .form-group textarea {
@@ -1204,16 +1213,20 @@ nav {
 /* LLM Config Cards in Accordion */
 .llm-config {
     margin-bottom: 0.75rem;
+    background: rgba(14, 165, 233, 0.05);
+    border: 1px solid rgba(14, 165, 233, 0.3);
+    border-radius: var(--radius);
 }
 
 .llm-config .accordion-header {
-    background: var(--gray-200);
+    background: rgba(14, 165, 233, 0.3);
     padding: 0.625rem 0.875rem;
     font-size: 0.875rem;
 }
 
 .llm-config .accordion-content {
     padding: 0.875rem;
+    background: rgba(14, 165, 233, 0.1);
 }
 
 @media (max-width: 1400px) {

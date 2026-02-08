@@ -155,31 +155,35 @@
 					<div class="accordion-content" id="git-section">
 						<form id="gitConfigForm">
 							<div class="form-group">
+								<label for="gitUsername">Username</label>
+								<input type="text" id="gitUsername" placeholder="used for git commits, can be anything">
+							</div>
+							<div class="form-group">
+								<label for="gitEmail">Email</label>
+								<input type="email" id="gitEmail" placeholder="used for git commits, can be anything">
+							</div>
+							<div class="form-group">
 								<label for="gitUrl">Repository URL</label>
 								<input type="text" id="gitUrl" placeholder="https://github.com/user/repo.git or git@github.com:user/repo.git">
 							</div>
-							<div class="form-group">
-								<label for="gitUsername">Username (for commits)</label>
-								<input type="text" id="gitUsername" placeholder="Your Name">
+							<div style="display: flex; align-items: center; gap: 1rem; margin: 1.5rem 0; color: var(--gray-600); font-weight: 600; font-size: 0.875rem;">
+								<div style="flex: 1; height: 1px; background: var(--gray-300);"></div>
+								<span>Authentication Method</span>
+								<div style="flex: 1; height: 1px; background: var(--gray-300);"></div>
 							</div>
 							<div class="form-group">
-								<label for="gitEmail">Email (for commits)</label>
-								<input type="email" id="gitEmail" placeholder="user@example.com">
-							</div>
-							<div class="form-group">
-								<label for="gitSshKey">SSH Private Key (for SSH URLs)</label>
-								<textarea id="gitSshKey" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
-								<small style="color: var(--gray-500);">Paste your private key. Use \n for newlines in JSON.</small>
-							</div>
-							<div class="form-group">
-								<label for="gitApiToken">API Token (for HTTPS URLs)</label>
+								<label for="gitApiToken">API Token</label>
 								<input type="password" id="gitApiToken" placeholder="ghp_xxxx or glpat-xxxx">
-								<small style="color: var(--gray-500);">GitHub PAT, GitLab token, etc. Preferred over password.</small>
+								<small style="color: var(--gray-500);">Preferred for HTTPS URLs.</small>
 							</div>
 							<div class="form-group">
-								<label for="gitPassword">Password (for HTTPS URLs)</label>
-								<input type="password" id="gitPassword" placeholder="password">
-								<small style="color: var(--gray-500);">Only if not using API token.</small>
+								<label for="gitPassword">Password</label>
+								<input type="password" id="gitPassword" placeholder="Only if not using API token.">
+							</div>
+							<div class="form-group">
+								<label for="gitSshKey">SSH Private Key</label>
+								<textarea id="gitSshKey" rows="4" placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;...&#10;-----END OPENSSH PRIVATE KEY-----"></textarea>
+								<small style="color: var(--gray-500);">For SSH URLs only.</small>
 							</div>
 						</form>
 					</div>
