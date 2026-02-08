@@ -181,7 +181,7 @@ public class LlmService
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, decimal remainingBudget, CancellationToken cancellationToken)
+	public async Task<LlmResult> RunAsync(LlmConversation conversation, List<Tool> tools, ICompaction? compaction, decimal remainingBudget, bool huntMode, CancellationToken cancellationToken)
 	{
 		conversation.SetModel(_config.Model);
 
@@ -191,11 +191,15 @@ public class LlmService
 			toolDefs?.Add(tool.Definition);
 		}
 
+		// In hunt mode, fail fast so the proxy can try the next endpoint quickly.
+		// Once an LLM is established, use full retry tolerance.
 		decimal accumulatedCost = 0m;
-		int maxIterations = 5;
+		int maxIterations = 25;
 		int iteration = 0;
 		int networkRetries = 0;
-		int maxNetworkRetries = 10;
+		int maxNetworkRetries = huntMode ? 1 : 10;
+		int rateLimitRetries = 0;
+		int maxRateLimitRetries = huntMode ? 1 : 20;
 		LlmResult result = null!;
 
 		for (;;)
@@ -281,7 +285,7 @@ public class LlmService
 							bool toolRequestedExit = false;
 							foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
 							{
-								ToolResult toolResult = ExecuteTool(toolCall, tools).GetAwaiter().GetResult();
+								ToolResult toolResult = await ExecuteTool(toolCall, tools);
 								conversation.AddToolMessage(toolCall.Id, toolResult.Response);
 
 								if (toolResult.ExitLoop)
@@ -312,9 +316,15 @@ public class LlmService
 				}
 				else if (IsRateLimited(httpResponse, responseBody))
 				{
+					rateLimitRetries++;
+					if (rateLimitRetries >= maxRateLimitRetries)
+					{
+						throw new HttpRequestException($"Rate limited {rateLimitRetries} times, giving up");
+					}
+
 					int waitSeconds = ParseRateLimitSeconds(httpResponse, responseBody);
 					_backoffSeconds = waitSeconds > 0 ? waitSeconds : _backoffSeconds + 3;
-					Console.WriteLine($"Rate limited. Waiting {_backoffSeconds}s before retry...");
+					Console.WriteLine($"Rate limited ({rateLimitRetries}/{maxRateLimitRetries}). Waiting {_backoffSeconds}s before retry...");
 				}
 				else if ((int)httpResponse.StatusCode >= 500 && (int)httpResponse.StatusCode < 600)
 				{

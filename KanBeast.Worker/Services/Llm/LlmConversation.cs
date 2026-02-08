@@ -49,9 +49,9 @@ public class LlmConversation
 
         if (!string.IsNullOrWhiteSpace(logDirectory) && !string.IsNullOrWhiteSpace(logPrefix))
         {
-            s_conversationIndex++;
+            int index = Interlocked.Increment(ref s_conversationIndex);
             long timestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            _logPath = Path.Combine(logDirectory, $"{logPrefix}-{timestamp}-{s_conversationIndex:D3}.log");
+            _logPath = Path.Combine(logDirectory, $"{logPrefix}-{timestamp}-{index:D3}.log");
         }
         else
         {
@@ -298,7 +298,7 @@ public class LlmConversation
         if (!string.IsNullOrWhiteSpace(_logPath))
         {
             string closeMessage = $"\n---\n**Compacted at:** {DateTime.UtcNow:O}\n";
-            File.AppendAllText(_logPath, closeMessage);
+            await File.AppendAllTextAsync(_logPath, closeMessage, cancellationToken);
         }
 
         // Collect messages to keep after the deleted range
@@ -335,11 +335,11 @@ public class LlmConversation
 
             string header = $"# LLM Conversation Log (Compacted {_rewriteCount})\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
             Console.Write(header);
-            File.WriteAllText(_logPath, header);
+            await File.WriteAllTextAsync(_logPath, header, cancellationToken);
 
             foreach (ChatMessage msg in Messages)
             {
-                AppendMessageToLog(msg);
+                await AppendMessageToLogAsync(msg, cancellationToken);
             }
         }
     }
@@ -374,6 +374,17 @@ public class LlmConversation
         if (!string.IsNullOrWhiteSpace(_logPath))
         {
             File.AppendAllText(_logPath, formattedMessage);
+        }
+    }
+
+    private async Task AppendMessageToLogAsync(ChatMessage message, CancellationToken cancellationToken)
+    {
+        string formattedMessage = FormatMessage(message);
+        Console.Write(formattedMessage);
+
+        if (!string.IsNullOrWhiteSpace(_logPath))
+        {
+            await File.AppendAllTextAsync(_logPath, formattedMessage, cancellationToken);
         }
     }
 

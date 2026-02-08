@@ -358,8 +358,8 @@ public class AgentOrchestrator
 
 	private async Task<bool> RunDeveloperAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
-		const int ProgressCheckThreshold = 5;  // 5 times that the LLM has returned without calling the end_subtask tool (or just has had a ton of tool calls).  This is an indication something is probably wrong.
-		const int ContextResetThreshold = 15;  // 15 times is a whole lot.  Wipe the context and start fresh.
+		const int ProgressCheckThreshold = 3;  // 3 times that the LLM has returned without calling the end_subtask tool (or just has had a ton of tool calls).  This is an indication something is probably wrong.
+		const int ContextResetThreshold  = 7;  // 15 times is a whole lot.  Wipe the context and start fresh.
 
 		_logger.LogInformation("Working on ticket");
 
@@ -381,6 +381,9 @@ public class AgentOrchestrator
 				await _developerConversation.FinalizeAsync(cancellationToken);
 				_developerConversation = null;
 			}
+
+			// Try primary LLM again for each new subtask
+			_llmProxy.ResetFallback();
 
 			_currentTaskId = taskId;
 			_currentSubtaskId = subtaskId;
