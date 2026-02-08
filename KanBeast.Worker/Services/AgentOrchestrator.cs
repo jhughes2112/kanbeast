@@ -235,7 +235,7 @@ public class AgentOrchestrator
 				await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"QA rejected: {qaResult.Message}");
 				_logger.LogWarning("QA rejected, developer will retry: {Feedback}", qaResult.Message);
 
-				result = new ToolResult($"QA rejected your work. Feedback: {qaResult.Message}\n\nPlease fix the issues and call end_subtask when done.", false);
+				result = new ToolResult($"QA rejected your work. Feedback: {qaResult.Message}\n\nPlease fix the issues and call end_subtask tool when done.", false);
 			}
 		}
 
@@ -316,12 +316,12 @@ public class AgentOrchestrator
 			}
 			else if (llmResult.ExitReason == LlmExitReason.Completed)
 			{
-				planningConversation.AddUserMessage("Continue planning by adding tasks and subtasks. When finished, call planning_complete to begin implementation.");
+				planningConversation.AddUserMessage("Continue planning by adding tasks and subtasks. When finished, call planning_complete tool to begin implementation.");
 			}
 			else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
 				_logger.LogWarning("Manager planning hit iteration limit, prompting to continue");
-				planningConversation.AddUserMessage("Are you making good progress? Keep adding tasks and subtasks as needed.  You must call planning_complete when ready to move onto implementation.");
+				planningConversation.AddUserMessage("Are you making good progress? Keep adding tasks and subtasks as needed.  You must call planning_complete tool when ready to move onto implementation.");
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 			{
@@ -397,7 +397,7 @@ public class AgentOrchestrator
 			await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Started subtask: {subtaskName}");
 			_logger.LogInformation("Started subtask: {SubtaskName}", subtaskName);
 
-			string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask when complete.";
+			string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask tool when complete.";
 			_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, initialPrompt, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
 
 			int iterationCount = 0;
@@ -436,7 +436,7 @@ public class AgentOrchestrator
 						string continuePrompt = $"""
 							You were working on subtask '{subtaskName}' but got stuck. Look at the local changes and decide if you should continue or take a fresh approach.
 							Description: {subtaskDescription}
-							Call end_subtask when complete.
+							Call end_subtask tool when complete.
 							""";
 						_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, continuePrompt, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
 						if (_qaConversation != null)
@@ -449,11 +449,11 @@ public class AgentOrchestrator
 					else if (iterationCount == ProgressCheckThreshold)
 					{
 						_logger.LogWarning("Progress check at {Count} iterations", iterationCount);
-						_developerConversation.AddUserMessage("This is god speaking. You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask when done.");
+						_developerConversation.AddUserMessage("This is god speaking. You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask tool when done.");
 					}
 					else
 					{
-						_developerConversation.AddUserMessage("This is god speaking. Continue working or call end_subtask when done.");
+						_developerConversation.AddUserMessage("This is god speaking. Continue working or call end_subtask tool when done.");
 					}
 				}
 				else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
@@ -496,7 +496,7 @@ public class AgentOrchestrator
 
 			Developer's summary: {developerSummary}
 
-			Verify the work meets the acceptance criteria. Call approve_subtask if the work is complete and verified. Call reject_subtask with specific feedback if changes are needed, or if you are unable to review the work for some reason.
+			Verify the work meets the acceptance criteria. Call approve_subtask tool if the work is complete and verified. Call reject_subtask tool with specific feedback if changes are needed, or if you are unable to review the work for some reason.
 			""";
 
 		if (_qaConversation == null)
@@ -537,7 +537,7 @@ public class AgentOrchestrator
 			}
 			else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
-				_qaConversation.AddUserMessage("Please review the work and call approve_subtask.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask.");
+				_qaConversation.AddUserMessage("Please review the work and call approve_subtask tool.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask tool.");
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 			{
