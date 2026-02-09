@@ -69,20 +69,24 @@ public class FileTools : IToolProvider
     [Description("Read the contents of a file.")]
     public async Task<ToolResult> ReadFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
+        [Description("Line number to center on (1-based, optional)")] int? offset,
+        [Description("Total number of lines to return around offset (optional)")] int? lines,
         CancellationToken cancellationToken)
     {
-        return await ReadFileContentAsync(filePath, cancellationToken);
+        return await ReadFileContentAsync(filePath, offset, lines, cancellationToken);
     }
 
     [Description("Get the contents of a file.")]
     public async Task<ToolResult> GetFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
+        [Description("Line number to center on (1-based, optional)")] int? offset,
+        [Description("Total number of lines to return around offset (optional)")] int? lines,
         CancellationToken cancellationToken)
     {
-        return await ReadFileContentAsync(filePath, cancellationToken);
+        return await ReadFileContentAsync(filePath, offset, lines, cancellationToken);
     }
 
-    private async Task<ToolResult> ReadFileContentAsync(string filePath, CancellationToken cancellationToken)
+    private async Task<ToolResult> ReadFileContentAsync(string filePath, int? offset, int? lines, CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -105,7 +109,44 @@ public class FileTools : IToolProvider
                     using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                     cts.CancelAfter(DefaultTimeout);
                     string content = await File.ReadAllTextAsync(fullPath, cts.Token);
-                    result = new ToolResult(content);
+
+                    if (offset.HasValue && lines.HasValue)
+                    {
+                        string[] allLines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+                        int totalLines = allLines.Length;
+
+                        if (totalLines == 0)
+                        {
+                            result = new ToolResult($"File is empty: {filePath}");
+                        }
+                        else
+                        {
+                            int centerLine = Math.Max(1, Math.Min(offset.Value, totalLines));
+                            int halfLines = lines.Value / 2;
+                            int startLine = Math.Max(1, centerLine - halfLines);
+                            int endLine = Math.Min(totalLines, startLine + lines.Value - 1);
+
+                            // Adjust start if we hit the end boundary
+                            if (endLine == totalLines)
+                            {
+                                startLine = Math.Max(1, endLine - lines.Value + 1);
+                            }
+
+                            StringBuilder sb = new StringBuilder();
+                            sb.AppendLine($"Lines {startLine}-{endLine} of {totalLines} from {filePath}:");
+
+                            for (int i = startLine - 1; i <= endLine - 1; i++)
+                            {
+                                sb.AppendLine($"{i + 1}: {allLines[i]}");
+                            }
+
+                            result = new ToolResult(sb.ToString());
+                        }
+                    }
+                    else
+                    {
+                        result = new ToolResult(content);
+                    }
                 }
             }
             catch (OperationCanceledException)
