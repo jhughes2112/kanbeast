@@ -20,6 +20,12 @@ public class Program
         });
         builder.Logging.AddConsoleFormatter<MinimalConsoleFormatter, ConsoleFormatterOptions>();
 
+        // Reduce ASP.NET Core routing/action noise
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Routing", LogLevel.Warning);
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Mvc", LogLevel.Warning);
+        builder.Logging.AddFilter("Microsoft.AspNetCore.Hosting", LogLevel.Information);
+        builder.Logging.AddFilter("Microsoft.AspNetCore.StaticFiles", LogLevel.Warning);
+
         // Add services to the container
         builder.Services.AddControllers()
             .AddJsonOptions(options =>

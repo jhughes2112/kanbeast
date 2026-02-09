@@ -23,17 +23,37 @@ const ALLOWED_TRANSITIONS = {
 
 // Initialize application
 async function init() {
-    try {
-        await loadTickets();
-        await loadSettings();
-        renderAllTickets();
-        setupSignalR();
-        setupEventListeners();
-        setupDragAndDrop();
-        startTimestampUpdater();
-    } catch (error) {
-        console.error('Initialization error:', error);
-        updateConnectionStatus('disconnected', 'Error');
+    let retryCount = 0;
+    const maxRetries = 20;
+    const baseDelay = 1000;
+
+    while (retryCount < maxRetries) {
+        try {
+            if (retryCount > 0) {
+                updateConnectionStatus('connecting', `Waiting for server... (attempt ${retryCount + 1})`);
+            }
+
+            await loadTickets();
+            await loadSettings();
+            renderAllTickets();
+            setupSignalR();
+            setupEventListeners();
+            setupDragAndDrop();
+            startTimestampUpdater();
+            return;
+        } catch (error) {
+            retryCount++;
+            console.warn(`Initialization attempt ${retryCount} failed:`, error);
+
+            if (retryCount >= maxRetries) {
+                console.error('Initialization failed after maximum retries:', error);
+                updateConnectionStatus('disconnected', 'Server unavailable');
+                return;
+            }
+
+            const delay = Math.min(baseDelay * Math.pow(1.5, retryCount - 1), 10000);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
     }
 }
 

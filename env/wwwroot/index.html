@@ -195,6 +195,44 @@
 	</div>
 
 	<script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@latest/dist/browser/signalr.min.js"></script>
-	<script src="app.js"></script>
+	<script>
+		// Dynamic script loader with retry logic to handle server startup delays
+		async function loadScript(src, maxRetries = 20) {
+			for (let attempt = 1; attempt <= maxRetries; attempt++) {
+				try {
+					const response = await fetch(src);
+					if (response.ok) {
+						const code = await response.text();
+						const script = document.createElement('script');
+						script.textContent = code;
+						document.body.appendChild(script);
+						console.log(`✓ Loaded ${src}`);
+						return true;
+					}
+				} catch (error) {
+					console.warn(`Attempt ${attempt}/${maxRetries} to load ${src} failed:`, error.message);
+				}
+
+				if (attempt < maxRetries) {
+					const delay = Math.min(1000 * Math.pow(1.5, attempt - 1), 10000);
+					await new Promise(resolve => setTimeout(resolve, delay));
+				}
+			}
+
+			console.error(`✗ Failed to load ${src} after ${maxRetries} attempts`);
+			document.body.innerHTML = '<div style="padding: 2rem; text-align: center; color: #e53e3e;"><h1>Failed to load application</h1><p>Server may be unavailable. Please refresh the page.</p></div>';
+			return false;
+		}
+
+		// Load app.js and initialize the app
+		(async () => {
+			if (await loadScript('/app.js')) {
+				// DOMContentLoaded already fired, manually call init
+				if (typeof init === 'function') {
+					init();
+				}
+			}
+		})();
+	</script>
 </body>
 </html>
