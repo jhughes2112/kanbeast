@@ -1,182 +1,53 @@
 ---
 name: Finish Branch
-description: High throughput git workflow with feature branches, squash then rebase onto main, and fast forward merges. Linear history. No PRs or reviews.
+description: This is how we finish branches. Rebasing squashed branches as fast-forward merges only. Linear history. No PRs or reviews.
 dependencies: git
 ---
 
-## Overview
+## Agent Skill: Linear Integration (OneFlow)
 
-This skill defines a strict OneFlow style workflow optimized for autonomous agents. All work happens on short lived feature branches. Before integration, feature branch commits are squashed into a single logical commit, rebased onto the latest main, tested, then fast forward merged to maintain a strictly linear history.
+### Phase 1: Preparation & Local Sync
 
-## When to Use
+Before integration, you must ensure the local feature branch is clean and the environment is synchronized.
 
-* Starting work on a new ticket
-* Completing work on a ticket
-* Syncing a feature branch with main
+1. **Checkout Feature Branch:** `git checkout feature/<ticket-id>`
+2. **Initial Squash:** Use `git reset --soft origin/main && git commit -m "TKT-123: Description"` to collapse all work into a single commit.
+3. **Push Prep:** `git push origin feature/<ticket-id> --force-with-lease` (to ensure the remote reflects the squashed state).
 
-## Branch Naming
+### Phase 2: The Sync & Rebase Loop
 
-```
-feature/<ticket-id>-<short-description>
-```
+4. **Sync Main:**
+* `git checkout main`
+* `git pull origin main`
 
-Example: `feature/TKT-123-add-user-api`
+5. **Rebase Feature:**
+* `git checkout feature/<ticket-id>`
+* `git rebase main`
 
-## Workflow Commands
+6. **Conflict Handling:**
+* **If Conflicts Exist:** You must attempt resolution, understand what the changes are intending to do, resolving conflicts such that your changes and their changes both still function properly. Run build steps to be sure.
+* **If Unresolvable:** `git rebase --abort`, push the current clean (but unmerged) state, and **Abort Skill**.
+* **If Resolved:** `git add .` and `git rebase --continue`.
 
-### 1. Start Feature Branch
+7. **Post-Rebase Validation:**
+* Run `dotnet build` and `dotnet test`.
+* **If Tests Fail:** Fix, `git add .`, `git commit --amend --no-edit`, and **Restart Phase 2** (to ensure `main` hasn't moved again).
 
-Create a feature branch from the latest main:
+### Phase 3: Fast-Forward Integration
 
-```bash
-git fetch origin
-git checkout main
-git pull origin main
-git checkout -b feature/<ticket-id>-<short-description>
-```
+Once tests pass on a rebased branch, the agent performs the final merge.
 
-### 2. Commit Changes
+8. **Final Push of Feature:** `git push origin feature/<ticket-id> --force-with-lease`
+9. **The FF-Merge:**
+* `git checkout main`
+* `git merge --ff-only feature/<ticket-id>`
 
-Commits may be granular during development. They will be squashed before integration.
+10. **Push Main:** * `git push origin main`
+* **If Rejected (Main moved again):** **Restart Phase 2**.
 
-```bash
-git add <files>
-git commit -m "<ticket-id>: <brief description>"
-```
+### Restrictions
+* No using stashes, cherry picking, or merge commits.  They ruin the repository history and lead to ruin in inept hands.
 
-Commit message rules:
+### Implementation Note
 
-* Start with ticket ID
-* Present tense
-* Subject line only, <= 50 chars
-
-Example:
-`TKT-123: Add GetUserById to UserRepository`
-
-### 3. Squash Feature Branch
-
-Before rebasing, squash all feature branch commits into a single commit.
-
-```bash
-git fetch origin
-git rebase -i origin/main
-```
-
-In the interactive rebase:
-
-* Keep the first commit as pick
-* Mark all subsequent commits as squash
-* Edit the final commit message to a single clean ticket level message
-
-Result must be exactly one commit on the feature branch.
-
-### 4. Rebase onto Main
-
-After squashing, rebase the feature branch onto the latest main:
-
-```bash
-git rebase origin/main
-```
-
-If conflicts occur:
-
-* Resolve conflicts
-* `git add <resolved-files>`
-* `git rebase --continue`
-* If blocked, `git rebase --abort` and stop
-
-### 5. Re-test After Rebase
-
-Tests are mandatory after the squash and rebase.
-
-```bash
-dotnet build
-dotnet test
-```
-
-If tests fail:
-
-* Fix issues
-* Amend the single commit
-* Re-run tests
-* Do not merge until green
-
-### 6. Fast Forward Merge to Main
-
-Merge using fast forward only:
-
-```bash
-git checkout main
-git pull origin main
-git merge --ff-only feature/<ticket-id>-<short-description>
-git push origin main
-```
-
-If fast forward fails, main moved:
-
-* Checkout feature branch
-* Rebase again
-* Re-test
-* Retry merge
-
-### 7. Cleanup
-
-```bash
-git branch -d feature/<ticket-id>-<short-description>
-git push origin --delete feature/<ticket-id>-<short-description>
-```
-
-## Complete Merge Sequence
-
-```bash
-git checkout feature/<ticket-id>-<short-description>
-
-git fetch origin
-git rebase -i origin/main
-git rebase origin/main
-
-dotnet build
-dotnet test
-
-git checkout main
-git pull origin main
-git merge --ff-only feature/<ticket-id>-<short-description>
-git push origin main
-
-git branch -d feature/<ticket-id>-<short-description>
-```
-
-## Error Handling
-
-### Rebase Conflicts
-
-```
-Conflicting Files:
-- <file>
-
-Resolution:
-<what changed>
-
-Status: Resolved | Blocked
-```
-
-### Merge Not Fast Forward
-
-Main advanced. Repeat squash, rebase, test.
-
-### Push Rejected
-
-```bash
-git pull origin main --rebase
-git push origin main
-```
-
-## Rules
-
-* Exactly one commit per ticket on main
-* Squash before rebasing, always
-* Never force push to main
-* Never merge without rebasing
-* Never merge without passing tests
-* Feature branches are disposable
-* One ticket, one branch
+To make this truly "OneFlow," ensure Git configuration has `pull.rebase true` to avoid accidental merge commits during the `git pull` phase.
