@@ -124,15 +124,6 @@ public class CompactionSummarizer : ICompaction
         string userPrompt = $"""
             [Original task]
             {originalTask}
-
-            {memoriesSection}
-
-            <history>
-            {historyBlock}
-            </history>
-
-            First, use add_memory and remove_memory to update the memories with important discoveries, decisions, or state changes from this history.
-            Then respond with a concise summary of the work done, as it pertains to solving the original task.
             """;
 
         List<Tool> compactionTools = BuildCompactionTools();
@@ -141,6 +132,14 @@ public class CompactionSummarizer : ICompaction
         ICompaction noCompaction = new CompactionNone();
 
         LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, noCompaction, false, compactLogDir, compactLogPrefix);
+		await summaryConversation.AddUserMessageAsync($"""
+			<history>
+			{historyBlock}
+			</history>
+
+			First, use add_memory and remove_memory to update the memories with important discoveries, decisions, or state changes from this history.
+			Then respond with a concise summary of the work done, as it pertains to solving the original task.
+			""", cancellationToken);
         LlmResult result = await _llmProxy.ContinueAsync(summaryConversation, compactionTools, null, cancellationToken);
 
         _targetConversation = null;
