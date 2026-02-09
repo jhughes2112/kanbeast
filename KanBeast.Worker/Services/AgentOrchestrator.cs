@@ -1,5 +1,4 @@
 using System.ComponentModel;
-using System.Text;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services.Tools;
 using Microsoft.Extensions.Logging;
@@ -31,10 +30,9 @@ public class AgentOrchestrator
 	private readonly ILogger<AgentOrchestrator> _logger;
 	private readonly IKanbanApiClient _apiClient;
 	private readonly LlmProxy _llmProxy;
-
-	private readonly string _planningPrompt;
-	private readonly string _qaPrompt;
-	private readonly string _developerPrompt;
+	private readonly Dictionary<string, string> _prompts;
+	private readonly CompactionSettings _compactionSettings;
+	private readonly List<LLMConfig> _llmConfigs;
 
 	private List<Tool>? _planningTools;
 	private List<Tool>? _qaTools;
@@ -52,24 +50,24 @@ public class AgentOrchestrator
 		ILogger<AgentOrchestrator> logger,
 		IKanbanApiClient apiClient,
 		LlmProxy llmProxy,
-		string planningPrompt,
-		string qaPrompt,
-		string developerPrompt)
+		Dictionary<string, string> prompts,
+		CompactionSettings compactionSettings,
+		List<LLMConfig> llmConfigs)
 	{
 		_logger = logger;
 		_apiClient = apiClient;
 		_llmProxy = llmProxy;
-		_planningPrompt = planningPrompt;
-		_qaPrompt = qaPrompt;
-		_developerPrompt = developerPrompt;
+		_prompts = prompts;
+		_compactionSettings = compactionSettings;
+		_llmConfigs = llmConfigs;
 	}
 
-	public async Task StartAgents(TicketDto ticket, string workDir, CancellationToken cancellationToken)
+	public async Task StartAgents(TicketHolder ticketHolder, string workDir, CancellationToken cancellationToken)
 	{
-		_logger.LogInformation("Orchestrator starting for ticket: {Title}", ticket.Title);
-		await _apiClient.AddActivityLogAsync(ticket.Id, "Orchestrator: Starting work");
+		_logger.LogInformation("Orchestrator starting for ticket: {Title}", ticketHolder.Ticket.Title);
+		await _apiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Orchestrator: Starting work");
 
-		_ticketHolder = new TicketHolder(ticket);
+		_ticketHolder = ticketHolder;
 		_workDir = workDir;
 
 		TicketTools ticketTools = new TicketTools(_apiClient, _ticketHolder);
@@ -151,17 +149,16 @@ public class AgentOrchestrator
 		return tools;
 	}
 
-	private static decimal GetRemainingBudget(TicketHolder ticketHolder)
+	private ICompaction CreateCompaction()
 	{
-		decimal maxCost = ticketHolder.Ticket.MaxCost;
-		if (maxCost <= 0)
+		ICompaction compaction = new CompactionNone();
+
+		if (string.Equals(_compactionSettings.Type, "summarize", StringComparison.OrdinalIgnoreCase) && _llmConfigs.Count > 0)
 		{
-			return 0;
+			compaction = new CompactionSummarizer(_prompts["compaction"], _llmProxy, _compactionSettings.ContextSizePercent);
 		}
 
-		decimal currentCost = ticketHolder.Ticket.LlmCost;
-		decimal remaining = maxCost - currentCost;
-		return remaining > 0 ? remaining : 0;
+		return compaction;
 	}
 
 	[Description("Signal that planning is complete and implementation should begin. Call this when all tasks and subtasks have been created.")]
@@ -220,16 +217,7 @@ public class AgentOrchestrator
 			if (qaResult.Verdict == QaVerdict.Approved)
 			{
 				// Compact the developer conversation to hoist memories before it is discarded.
-				decimal compactBudget = GetRemainingBudget(_ticketHolder);
-				decimal compactCost = await _llmProxy.CompactAsync(_developerConversation, compactBudget, CancellationToken.None);
-				if (compactCost > 0)
-				{
-					TicketDto? costUpdate = await _apiClient.AddLlmCostAsync(_ticketHolder.Ticket.Id, compactCost);
-					if (costUpdate != null)
-					{
-						_ticketHolder.Update(costUpdate);
-					}
-				}
+				await _developerConversation.CompactNowAsync(CancellationToken.None);
 
 				TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Complete);
 				if (updated != null)
@@ -302,24 +290,15 @@ public class AgentOrchestrator
 			Description: {ticketHolder.Ticket.Description}
 			""";
 
-		LlmConversation planningConversation = new LlmConversation(_llmProxy.CurrentModel, _planningPrompt, userPrompt, new LlmMemories(), false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-plan-");
+		ICompaction planningCompaction = CreateCompaction();
+		LlmConversation planningConversation = new LlmConversation(_prompts["planning"], userPrompt, new LlmMemories(), planningCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-plan");
 
 		bool result = ticketHolder.Ticket.HasValidPlan();
 
 		while (result == false)
 		{
-			decimal remainingBudget = GetRemainingBudget(ticketHolder);
-			LlmResult llmResult = await _llmProxy.ContinueAsync(planningConversation, _planningTools!, remainingBudget, 16384, cancellationToken);
+			LlmResult llmResult = await _llmProxy.ContinueAsync(planningConversation, _planningTools!, 16384, cancellationToken);
 			_logger.LogDebug("Manager planning response: {Response}", llmResult.Content);
-
-			if (llmResult.AccumulatedCost > 0)
-			{
-				TicketDto? updated = await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, llmResult.AccumulatedCost);
-				if (updated != null)
-				{
-					ticketHolder.Update(updated);
-				}
-			}
 
 			if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "planning_complete")
 			{
@@ -328,13 +307,15 @@ public class AgentOrchestrator
 			}
 			else if (llmResult.ExitReason == LlmExitReason.Completed)
 			{
-				planningConversation.AddUserMessage("Continue planning by adding tasks and subtasks. When finished, call planning_complete tool to begin implementation.");
+				await planningConversation.AddUserMessageAsync("Continue planning by adding tasks and subtasks. When finished, call planning_complete tool to begin implementation.", cancellationToken);
 			}
 			else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
 				_logger.LogWarning("Manager planning hit iteration limit, prompting to continue");
+
 				planningConversation.ResetIteration();
-				planningConversation.AddUserMessage("Are you making good progress? Keep adding tasks and subtasks as needed.  You must call planning_complete tool when ready to move onto implementation.");
+
+				await planningConversation.AddUserMessageAsync("Are you making good progress? Keep adding tasks and subtasks as needed.  You must call planning_complete tool when ready to move onto implementation.", cancellationToken);
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 			{
@@ -412,7 +393,9 @@ public class AgentOrchestrator
 			_logger.LogInformation("Started subtask: {SubtaskName}", subtaskName);
 
 			string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask tool when complete.";
-			_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, initialPrompt, memories, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
+			ICompaction developerCompaction = CreateCompaction();
+
+			_developerConversation = new LlmConversation(_prompts["developer"], initialPrompt, memories, developerCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev");
 
 			int iterationCount = 0;
 			bool subtaskComplete = false;
@@ -420,17 +403,7 @@ public class AgentOrchestrator
 
 			for (;;)
 			{
-				decimal remainingBudget = GetRemainingBudget(ticketHolder);
-				LlmResult llmResult = await _llmProxy.ContinueAsync(_developerConversation, _developerTools!, remainingBudget, null, cancellationToken);
-
-				if (llmResult.AccumulatedCost > 0)
-				{
-					updated = await _apiClient.AddLlmCostAsync(ticketHolder.Ticket.Id, llmResult.AccumulatedCost);
-					if (updated != null)
-					{
-						ticketHolder.Update(updated);
-					}
-				}
+				LlmResult llmResult = await _llmProxy.ContinueAsync(_developerConversation, _developerTools!, null, cancellationToken);
 
 				if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
 				{
@@ -440,6 +413,7 @@ public class AgentOrchestrator
 				else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 				{
 					iterationCount++;
+
 					_developerConversation.ResetIteration();
 
 					if (iterationCount >= ContextResetThreshold)
@@ -453,7 +427,9 @@ public class AgentOrchestrator
 							Description: {subtaskDescription}
 							Call end_subtask tool when complete.
 							""";
-						_developerConversation = new LlmConversation(_llmProxy.CurrentModel, _developerPrompt, continuePrompt, memories, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev-");
+						ICompaction continueCompaction = CreateCompaction();
+
+						_developerConversation = new LlmConversation(_prompts["developer"], continuePrompt, memories, continueCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev");
 						if (_qaConversation != null)
 						{
 							await _qaConversation.FinalizeAsync(cancellationToken);
@@ -464,11 +440,12 @@ public class AgentOrchestrator
 					else if (iterationCount == ProgressCheckThreshold)
 					{
 						_logger.LogWarning("Progress check at {Count} iterations", iterationCount);
-						_developerConversation.AddUserMessage("This is god speaking. You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask tool when done.");
+
+						await _developerConversation.AddUserMessageAsync("This is god speaking. You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask tool when done.", cancellationToken);
 					}
 					else
 					{
-						_developerConversation.AddUserMessage("This is god speaking. Continue working or call end_subtask tool when done.");
+						await _developerConversation.AddUserMessageAsync("This is god speaking. Continue working or call end_subtask tool when done.", cancellationToken);
 					}
 				}
 				else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
@@ -516,26 +493,18 @@ public class AgentOrchestrator
 
 		if (_qaConversation == null)
 		{
-			_qaConversation = new LlmConversation(_llmProxy.CurrentModel, _qaPrompt, userPrompt, memories, false, "/workspace/logs", $"TIK-{_ticketHolder!.Ticket.Id}-qa-");
+			ICompaction qaCompaction = CreateCompaction();
+
+			_qaConversation = new LlmConversation(_prompts["qualityassurance"], userPrompt, memories, qaCompaction, false, "/workspace/logs", $"TIK-{_ticketHolder!.Ticket.Id}-qa");
 		}
 		else
 		{
-			_qaConversation.AddUserMessage(userPrompt);
+			await _qaConversation.AddUserMessageAsync(userPrompt, CancellationToken.None);
 		}
 
 		for (;;)
 		{
-			decimal remainingBudget = GetRemainingBudget(_ticketHolder!);
-			LlmResult llmResult = await _llmProxy.ContinueAsync(_qaConversation, _qaTools!, remainingBudget, 8192, CancellationToken.None);
-
-			if (llmResult.AccumulatedCost > 0)
-			{
-				TicketDto? updated = await _apiClient.AddLlmCostAsync(_ticketHolder!.Ticket.Id, llmResult.AccumulatedCost);
-				if (updated != null)
-				{
-					_ticketHolder.Update(updated);
-				}
-			}
+			LlmResult llmResult = await _llmProxy.ContinueAsync(_qaConversation, _qaTools!, 8192, CancellationToken.None);
 
 			if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
 			{
@@ -555,7 +524,8 @@ public class AgentOrchestrator
 			else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
 				_qaConversation.ResetIteration();
-				_qaConversation.AddUserMessage("Please review the work and call approve_subtask tool.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask tool.");
+
+				await _qaConversation.AddUserMessageAsync("Please review the work and call approve_subtask tool.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask tool.", CancellationToken.None);
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 			{
@@ -577,15 +547,6 @@ public class AgentOrchestrator
 			return;
 		}
 
-		decimal compactBudget = GetRemainingBudget(_ticketHolder!);
-		decimal compactCost = await _llmProxy.CompactAsync(_qaConversation, compactBudget, CancellationToken.None);
-		if (compactCost > 0)
-		{
-			TicketDto? updated = await _apiClient.AddLlmCostAsync(_ticketHolder!.Ticket.Id, compactCost);
-			if (updated != null)
-			{
-				_ticketHolder.Update(updated);
-			}
-		}
+		await _qaConversation.CompactNowAsync(CancellationToken.None);
 	}
 }

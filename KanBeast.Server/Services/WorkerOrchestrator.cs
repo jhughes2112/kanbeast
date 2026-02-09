@@ -13,7 +13,7 @@ public interface IWorkerOrchestrator
 }
 
 // Launches worker containers and tracks active worker processes.
-public class WorkerOrchestrator : IWorkerOrchestrator
+public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
 {
     private readonly Dictionary<string, string> _activeWorkers = new Dictionary<string, string>();
     private readonly ITicketService _ticketService;
@@ -129,6 +129,91 @@ public class WorkerOrchestrator : IWorkerOrchestrator
         Dictionary<string, string> activeWorkers = new Dictionary<string, string>(_activeWorkers);
 
         return Task.FromResult(activeWorkers);
+    }
+
+    public Task StartAsync(CancellationToken cancellationToken)
+    {
+        return Task.CompletedTask;
+    }
+
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await ShutdownAllWorkersAsync(cancellationToken);
+    }
+
+    // Stops all active worker containers and ensures their tickets are moved back to Backlog.
+    // Called during server shutdown. Workers receive SIGTERM and handle their own cleanup,
+    // but we force-move any tickets still Active as a safety net.
+    private async Task ShutdownAllWorkersAsync(CancellationToken cancellationToken)
+    {
+        List<(string TicketId, string ContainerId)> workers = new List<(string, string)>();
+        foreach ((string ticketId, string containerId) in _activeWorkers)
+        {
+            workers.Add((ticketId, containerId));
+        }
+
+        if (workers.Count == 0)
+        {
+            _logger.LogInformation("Graceful shutdown: no active workers");
+            return;
+        }
+
+        _logger.LogInformation("Graceful shutdown: stopping {Count} active workers", workers.Count);
+
+        // Stop all containers in parallel. Each worker receives SIGTERM, cancels its work,
+        // commits/pushes, and moves its ticket to Backlog before exiting.
+        List<Task> stopTasks = new List<Task>();
+        foreach ((string ticketId, string containerId) in workers)
+        {
+            stopTasks.Add(StopContainerForShutdownAsync(ticketId, containerId));
+        }
+        await Task.WhenAll(stopTasks);
+
+        // Safety net: force any tickets still Active to Backlog in case a worker crashed
+        // without cleaning up.
+        foreach ((string ticketId, string _) in workers)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                break;
+            }
+
+            try
+            {
+                Ticket? ticket = await _ticketService.GetTicketAsync(ticketId);
+                if (ticket != null && ticket.Status == TicketStatus.Active)
+                {
+                    _logger.LogWarning("Ticket #{TicketId} still Active after worker stop, forcing to Backlog", ticketId);
+                    await _ticketService.UpdateTicketStatusAsync(ticketId, TicketStatus.Backlog);
+                    await _ticketService.AddActivityLogAsync(ticketId, "Server: Moved to Backlog during server shutdown");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to update ticket #{TicketId} during shutdown: {Message}", ticketId, ex.Message);
+            }
+        }
+
+        _activeWorkers.Clear();
+        _logger.LogInformation("Graceful shutdown complete: all workers stopped");
+    }
+
+    private async Task StopContainerForShutdownAsync(string ticketId, string containerId)
+    {
+        try
+        {
+            _logger.LogInformation("Shutdown: stopping worker for ticket #{TicketId}", ticketId);
+            await _dockerClient.Containers.StopContainerAsync(containerId, new ContainerStopParameters { WaitBeforeKillSeconds = 30 });
+            _logger.LogInformation("Shutdown: worker for ticket #{TicketId} stopped", ticketId);
+        }
+        catch (DockerContainerNotFoundException)
+        {
+            _logger.LogInformation("Worker container for ticket #{TicketId} already removed", ticketId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to stop worker for ticket #{TicketId} during shutdown: {Message}", ticketId, ex.Message);
+        }
     }
 
     private async Task EnsureDockerNetworkAsync()

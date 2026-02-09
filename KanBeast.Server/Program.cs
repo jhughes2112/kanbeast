@@ -41,8 +41,16 @@ public class Program
         // Register application services
         builder.Services.AddSingleton<ITicketService, TicketService>();
         builder.Services.AddSingleton<ISettingsService, SettingsService>();
-        builder.Services.AddSingleton<IWorkerOrchestrator, WorkerOrchestrator>();
+        builder.Services.AddSingleton<WorkerOrchestrator>();
+        builder.Services.AddSingleton<IWorkerOrchestrator>(sp => sp.GetRequiredService<WorkerOrchestrator>());
+        builder.Services.AddHostedService<WorkerOrchestrator>(sp => sp.GetRequiredService<WorkerOrchestrator>());
         builder.Services.AddSingleton(containerContext);
+
+        // Give workers enough time to commit, push, and move tickets to Backlog during shutdown.
+        builder.Services.Configure<HostOptions>(options =>
+        {
+            options.ShutdownTimeout = TimeSpan.FromMinutes(2);
+        });
 
         WebApplication app = builder.Build();
 

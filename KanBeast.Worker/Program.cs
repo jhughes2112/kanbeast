@@ -58,15 +58,15 @@ public class Program
 
 			string repoDir = Path.GetFullPath(options.RepoPath);
 
-			string planningPrompt = config.GetPrompt("planning").Replace("{repoDir}", repoDir);
-			string qaPrompt = config.GetPrompt("qualityassurance").Replace("{repoDir}", repoDir);
-			string developerPrompt = config.GetPrompt("developer").Replace("{repoDir}", repoDir);
-			string compactionPrompt = config.GetPrompt("compaction").Replace("{repoDir}", repoDir);
+			Dictionary<string, string> prompts = new Dictionary<string, string>
+			{
+				{ "planning", config.GetPrompt("planning").Replace("{repoDir}", repoDir) },
+				{ "qualityassurance", config.GetPrompt("qualityassurance").Replace("{repoDir}", repoDir) },
+				{ "developer", config.GetPrompt("developer").Replace("{repoDir}", repoDir) },
+				{ "compaction", config.GetPrompt("compaction").Replace("{repoDir}", repoDir) }
+			};
 
 			GitService gitService = new GitService(config.GitConfig);
-			ICompaction compaction = BuildCompaction(config.Compaction, config.LLMConfigs, compactionPrompt);
-
-			LlmProxy llmProxy = new LlmProxy(config.LLMConfigs, compaction, config.JsonLogging);
 
 			logger.LogInformation("Fetching ticket details...");
 			TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId);
@@ -75,6 +75,10 @@ public class Program
 			{
 				logger.LogInformation("Ticket: {Title}", ticket.Title);
 				await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work");
+
+				TicketHolder ticketHolder = new TicketHolder(ticket);
+				LlmProxy llmProxy = new LlmProxy(config.LLMConfigs, apiClient, ticketHolder, config.JsonLogging);
+
 				if (Directory.Exists(repoDir))
 				{
 					Directory.Delete(repoDir, true);
@@ -98,12 +102,12 @@ public class Program
 						await apiClient.SetBranchNameAsync(ticket.Id, branchName);
 					}
 
-					AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, llmProxy, planningPrompt, qaPrompt, developerPrompt);
+					AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, llmProxy, prompts, config.Compaction, config.LLMConfigs);
 					logger.LogInformation("Starting agent orchestrator...");
 
 					try
 					{
-						await orchestrator.StartAgents(ticket, repoDir, cts.Token);
+						await orchestrator.StartAgents(ticketHolder, repoDir, cts.Token);
 					}
 					finally
 					{
@@ -281,20 +285,6 @@ public class Program
         {
             return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "prompts"));
         }
-
-        private static ICompaction BuildCompaction(CompactionSettings settings, List<LLMConfig> llmConfigs, string compactionPrompt)
-        {
-            ICompaction compaction = new CompactionNone();
-
-            if (string.Equals(settings.Type, "summarize", StringComparison.OrdinalIgnoreCase) && llmConfigs.Count > 0)
-            {
-                LLMConfig currentLlm = llmConfigs[0];
-                int threshold = (int)(currentLlm.ContextLength * settings.ContextSizePercent);
-                compaction = new CompactionSummarizer(compactionPrompt, threshold);
-            }
-
-            return compaction;
-        }
     }
 
     public class WorkerOptions
@@ -305,8 +295,8 @@ public class Program
     [Option("server-url", Required = true, HelpText = "Server URL for the worker.")]
     public required string ServerUrl { get; set; }
 
-    [Option("repo", Required = false, Default = "./repo", HelpText = "Path where the git repository will be cloned.")]
-    public string RepoPath { get; set; } = "./repo";
+    [Option("repo", Required = false, Default = "/repo", HelpText = "Path where the git repository will be cloned.")]
+    public string RepoPath { get; set; } = string.Empty;
 
     [Option("json", Required = false, Default = false, HelpText = "Output logs in JSON format instead of friendly format.")]
     public bool JsonLogging { get; set; }

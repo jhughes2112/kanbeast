@@ -33,18 +33,23 @@ public class LlmConversation
     private readonly bool _jsonLogging;
     private readonly LlmMemories _memories;
     private readonly List<string> _chapterSummaries;
+    private readonly ICompaction _compaction;
+    private readonly string _logDirectory;
+    private readonly string _logPrefix;
     private string _logPath;
     private int _rewriteCount;
 
-    public LlmConversation(string model, string systemPrompt, string userPrompt, LlmMemories memories, bool jsonLogging, string logDirectory, string logPrefix)
+    public LlmConversation(string systemPrompt, string userPrompt, LlmMemories memories, ICompaction compaction, bool jsonLogging, string logDirectory, string logPrefix)
     {
-        Model = model;
         StartedAt = DateTime.UtcNow.ToString("O");
         CompletedAt = string.Empty;
         Messages = new List<ChatMessage>();
         _memories = memories;
         _chapterSummaries = new List<string>();
+        _compaction = compaction;
         _jsonLogging = jsonLogging;
+        _logDirectory = logDirectory;
+        _logPrefix = logPrefix;
         _rewriteCount = 0;
 
         if (!string.IsNullOrWhiteSpace(logDirectory) && !string.IsNullOrWhiteSpace(logPrefix))
@@ -82,13 +87,13 @@ public class LlmConversation
                 Directory.CreateDirectory(directory);
             }
 
-            string header = $"# LLM Conversation Log\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
+            string header = $"# LLM Conversation Log\n**Started:** {StartedAt}\n---\n\n";
             Console.Write(header);
             File.WriteAllText(_logPath, header);
         }
         else
         {
-            string header = $"# LLM Conversation Log\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
+            string header = $"# LLM Conversation Log\n**Started:** {StartedAt}\n---\n\n";
             Console.Write(header);
         }
         AppendMessageToLog(systemMessage);
@@ -99,9 +104,6 @@ public class LlmConversation
 
     // Index of the first compressible message (after system, instructions, memories, and summaries)
     public const int FirstCompressibleIndex = 4;
-
-    [JsonPropertyName("model")]
-    public string Model { get; private set; }
 
     [JsonPropertyName("started_at")]
     public string StartedAt { get; }
@@ -119,6 +121,15 @@ public class LlmConversation
 	public IReadOnlyList<string> ChapterSummaries => _chapterSummaries;
 
 	[JsonIgnore]
+	public ICompaction Compaction => _compaction;
+
+	[JsonIgnore]
+	public string LogDirectory => _logDirectory;
+
+	[JsonIgnore]
+	public string LogPrefix => _logPrefix;
+
+	[JsonIgnore]
 	public int Iteration { get; private set; }
 
 	public int MaxIterations { get; set; } = 25;
@@ -133,11 +144,6 @@ public class LlmConversation
 	public void ResetIteration()
 	{
 		Iteration = 0;
-	}
-
-	public void SetModel(string model)
-	{
-		Model = model;
 	}
 
 	public void AddMemory(string memory)
@@ -208,36 +214,48 @@ public class LlmConversation
         Messages[3] = new ChatMessage { Role = "user", Content = summariesContent };
     }
 
-    public void AddUserMessage(string content)
-    {
-        ChatMessage message = new ChatMessage
-        {
-            Role = "user",
-            Content = content
-        };
-        Messages.Add(message);
-        AppendMessageToLog(message);
-    }
+	public async Task AddUserMessageAsync(string content, CancellationToken cancellationToken)
+	{
+		ChatMessage message = new ChatMessage
+		{
+			Role = "user",
+			Content = content
+		};
+		Messages.Add(message);
+		AppendMessageToLog(message);
 
-    public void AddAssistantMessage(ChatMessage message)
-    {
-        Messages.Add(message);
-        AppendMessageToLog(message);
-    }
+		await _compaction.CompactIfNeededAsync(this, cancellationToken);
+	}
 
-    public void AddToolMessage(string toolCallId, string toolResult)
-    {
-        ChatMessage message = new ChatMessage
-        {
-            Role = "tool",
-            Content = toolResult,
-            ToolCallId = toolCallId
-        };
-        Messages.Add(message);
-        AppendMessageToLog(message);
-    }
+	public async Task AddAssistantMessageAsync(ChatMessage message, CancellationToken cancellationToken)
+	{
+		Messages.Add(message);
+		AppendMessageToLog(message);
 
-    // Deletes messages from startIndex to endIndex (exclusive), preserving messages before and after.
+		await _compaction.CompactIfNeededAsync(this, cancellationToken);
+	}
+
+	public async Task AddToolMessageAsync(string toolCallId, string toolResult, CancellationToken cancellationToken)
+	{
+		ChatMessage message = new ChatMessage
+		{
+			Role = "tool",
+			Content = toolResult,
+			ToolCallId = toolCallId
+		};
+		Messages.Add(message);
+		AppendMessageToLog(message);
+
+		await _compaction.CompactIfNeededAsync(this, cancellationToken);
+	}
+
+	// Forces a compaction pass on the conversation to hoist memories before the conversation is discarded.
+	public async Task CompactNowAsync(CancellationToken cancellationToken)
+	{
+		await _compaction.CompactNowAsync(this, cancellationToken);
+	}
+
+	// Deletes messages from startIndex to endIndex (exclusive), preserving messages before and after.
     // Indices are clamped to protect the first 4 messages (system, instructions, facts, summaries).
     // Closes current log and starts a new one with incremented rewrite count.
     public async Task DeleteRangeAsync(int startIndex, int endIndex, CancellationToken cancellationToken)
@@ -298,7 +316,7 @@ public class LlmConversation
                 Directory.CreateDirectory(directory);
             }
 
-            string header = $"# LLM Conversation Log (Compacted {_rewriteCount})\n**Model:** {Model}\n**Started:** {StartedAt}\n---\n\n";
+            string header = $"# LLM Conversation Log (Compacted {_rewriteCount})\n**Started:** {StartedAt}\n---\n\n";
             Console.Write(header);
             await File.WriteAllTextAsync(_logPath, header, cancellationToken);
 
