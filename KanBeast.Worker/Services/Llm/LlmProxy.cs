@@ -68,7 +68,7 @@ public class LlmProxy
 	// Runs the conversation, selecting available LLMs and retrying on rate limits or failures.
 	public async Task<LlmResult> ContinueAsync(LlmConversation conversation, List<Tool> tools, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
-		for (;;)
+		for (; ; )
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
@@ -108,7 +108,7 @@ public class LlmProxy
 				continue;
 			}
 
-				if (result.ExitReason == LlmExitReason.LlmCallFailed)
+			if (result.ExitReason == LlmExitReason.LlmCallFailed)
 			{
 				Console.WriteLine($"LLM ({service.Model}) failed: {result.ErrorMessage}. Trying next available...");
 				continue;

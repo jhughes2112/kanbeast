@@ -10,51 +10,51 @@ namespace KanBeast.Worker.Services;
 // A message in the chat conversation.
 public class ChatMessage
 {
-    [JsonPropertyName("role")]
-    public string Role { get; set; } = string.Empty;
+	[JsonPropertyName("role")]
+	public string Role { get; set; } = string.Empty;
 
-    [JsonPropertyName("content")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? Content { get; set; }
+	[JsonPropertyName("content")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public string? Content { get; set; }
 
-    [JsonPropertyName("tool_calls")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public List<ToolCallMessage>? ToolCalls { get; set; }
+	[JsonPropertyName("tool_calls")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public List<ToolCallMessage>? ToolCalls { get; set; }
 
-    [JsonPropertyName("tool_call_id")]
-    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-    public string? ToolCallId { get; set; }
+	[JsonPropertyName("tool_call_id")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public string? ToolCallId { get; set; }
 }
 
 public class ToolCallMessage
 {
-    [JsonPropertyName("id")]
-    public string Id { get; set; } = string.Empty;
+	[JsonPropertyName("id")]
+	public string Id { get; set; } = string.Empty;
 
-    [JsonPropertyName("type")]
-    public string Type { get; set; } = "function";
+	[JsonPropertyName("type")]
+	public string Type { get; set; } = "function";
 
-    [JsonPropertyName("function")]
-    public FunctionCallMessage Function { get; set; } = new();
+	[JsonPropertyName("function")]
+	public FunctionCallMessage Function { get; set; } = new();
 }
 
 public class FunctionCallMessage
 {
-    [JsonPropertyName("name")]
-    public string Name { get; set; } = string.Empty;
+	[JsonPropertyName("name")]
+	public string Name { get; set; } = string.Empty;
 
-    [JsonPropertyName("arguments")]
-    public string Arguments { get; set; } = string.Empty;
+	[JsonPropertyName("arguments")]
+	public string Arguments { get; set; } = string.Empty;
 }
 
 // OpenAI API request/response structures.
 public class ChatCompletionRequest
 {
-    [JsonPropertyName("model")]
-    public string Model { get; set; } = string.Empty;
+	[JsonPropertyName("model")]
+	public string Model { get; set; } = string.Empty;
 
-    [JsonPropertyName("messages")]
-    public List<ChatMessage> Messages { get; set; } = new();
+	[JsonPropertyName("messages")]
+	public List<ChatMessage> Messages { get; set; } = new();
 
 	[JsonPropertyName("tools")]
 	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -91,68 +91,68 @@ public class ChatCompletionRequest
 
 public class ToolDefinition
 {
-    [JsonPropertyName("type")]
-    public string Type { get; set; } = "function";
+	[JsonPropertyName("type")]
+	public string Type { get; set; } = "function";
 
-    [JsonPropertyName("function")]
-    public FunctionDefinition Function { get; set; } = new();
+	[JsonPropertyName("function")]
+	public FunctionDefinition Function { get; set; } = new();
 }
 
 public class FunctionDefinition
 {
-    [JsonPropertyName("name")]
-    public string Name { get; set; } = string.Empty;
+	[JsonPropertyName("name")]
+	public string Name { get; set; } = string.Empty;
 
-    [JsonPropertyName("description")]
-    public string Description { get; set; } = string.Empty;
+	[JsonPropertyName("description")]
+	public string Description { get; set; } = string.Empty;
 
-    [JsonPropertyName("parameters")]
-    public JsonObject Parameters { get; set; } = new();
+	[JsonPropertyName("parameters")]
+	public JsonObject Parameters { get; set; } = new();
 }
 
 public class ChatCompletionResponse
 {
-    [JsonPropertyName("id")]
-    public string Id { get; set; } = string.Empty;
+	[JsonPropertyName("id")]
+	public string Id { get; set; } = string.Empty;
 
-    [JsonPropertyName("choices")]
-    public List<ChatChoice> Choices { get; set; } = new();
+	[JsonPropertyName("choices")]
+	public List<ChatChoice> Choices { get; set; } = new();
 
-    [JsonPropertyName("usage")]
-    public UsageInfo? Usage { get; set; }
+	[JsonPropertyName("usage")]
+	public UsageInfo? Usage { get; set; }
 
-    [JsonPropertyName("error")]
-    public ApiError? Error { get; set; }
+	[JsonPropertyName("error")]
+	public ApiError? Error { get; set; }
 }
 
 public class ChatChoice
 {
-    [JsonPropertyName("message")]
-    public ChatMessage Message { get; set; } = new();
+	[JsonPropertyName("message")]
+	public ChatMessage Message { get; set; } = new();
 
-    [JsonPropertyName("finish_reason")]
-    public string? FinishReason { get; set; }
+	[JsonPropertyName("finish_reason")]
+	public string? FinishReason { get; set; }
 }
 
 public class ApiError
 {
-    [JsonPropertyName("message")]
-    public string Message { get; set; } = string.Empty;
+	[JsonPropertyName("message")]
+	public string Message { get; set; } = string.Empty;
 }
 
 public class UsageInfo
 {
-    [JsonPropertyName("prompt_tokens")]
-    public int PromptTokens { get; set; }
+	[JsonPropertyName("prompt_tokens")]
+	public int PromptTokens { get; set; }
 
-    [JsonPropertyName("completion_tokens")]
-    public int CompletionTokens { get; set; }
+	[JsonPropertyName("completion_tokens")]
+	public int CompletionTokens { get; set; }
 
-    [JsonPropertyName("total_tokens")]
-    public int TotalTokens { get; set; }
+	[JsonPropertyName("total_tokens")]
+	public int TotalTokens { get; set; }
 
-    [JsonPropertyName("cost")]
-    public decimal? Cost { get; set; }
+	[JsonPropertyName("cost")]
+	public decimal? Cost { get; set; }
 }
 
 public enum LlmExitReason
@@ -227,7 +227,7 @@ public class LlmService
 		int transientRetries = 0;
 		int maxTransientRetries = _hasSucceeded ? 3 : 1;
 
-		for (;;)
+		for (; ; )
 		{
 			if (conversation.HasReachedMaxIterations)
 			{
@@ -296,14 +296,14 @@ public class LlmService
 							}
 							else
 							{
-								accumulatedCost += response.Usage.PromptTokens * _config.InputTokenPrice;
-								accumulatedCost += response.Usage.CompletionTokens * _config.OutputTokenPrice;
+								accumulatedCost += (response.Usage.PromptTokens / 1_000_000m) * _config.InputTokenPrice;
+								accumulatedCost += (response.Usage.CompletionTokens / 1_000_000m) * _config.OutputTokenPrice;
 							}
 						}
 
-					ChatMessage assistantMessage = response.Choices[0].Message;
+						ChatMessage assistantMessage = response.Choices[0].Message;
 
-					await conversation.AddAssistantMessageAsync(assistantMessage, cancellationToken);
+						await conversation.AddAssistantMessageAsync(assistantMessage, _config.Model, cancellationToken);
 
 						if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
 						{

@@ -96,10 +96,10 @@ public class LlmConversation
             string header = $"# LLM Conversation Log\n**Started:** {StartedAt}\n---\n\n";
             Console.Write(header);
         }
-        AppendMessageToLog(systemMessage);
-        AppendMessageToLog(instructionsMessage);
-        AppendMessageToLog(memoriesMessage);
-        AppendMessageToLog(summariesMessage);
+        AppendMessageToLog(systemMessage, null);
+        AppendMessageToLog(instructionsMessage, null);
+        AppendMessageToLog(memoriesMessage, null);
+        AppendMessageToLog(summariesMessage, null);
     }
 
     // Index of the first compressible message (after system, instructions, memories, and summaries)
@@ -222,15 +222,15 @@ public class LlmConversation
 			Content = content
 		};
 		Messages.Add(message);
-		AppendMessageToLog(message);
+		AppendMessageToLog(message, null);
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
 
-	public async Task AddAssistantMessageAsync(ChatMessage message, CancellationToken cancellationToken)
+	public async Task AddAssistantMessageAsync(ChatMessage message, string modelName, CancellationToken cancellationToken)
 	{
 		Messages.Add(message);
-		AppendMessageToLog(message);
+		AppendMessageToLog(message, modelName);
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
@@ -244,7 +244,7 @@ public class LlmConversation
 			ToolCallId = toolCallId
 		};
 		Messages.Add(message);
-		AppendMessageToLog(message);
+		AppendMessageToLog(message, null);
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
@@ -301,7 +301,7 @@ public class LlmConversation
         foreach (ChatMessage msg in tailMessages)
         {
             Messages.Add(msg);
-        }
+            }
 
         // Start new log file
         _rewriteCount++;
@@ -322,7 +322,7 @@ public class LlmConversation
 
             foreach (ChatMessage msg in Messages)
             {
-                await AppendMessageToLogAsync(msg, cancellationToken);
+                await AppendMessageToLogAsync(msg, null, cancellationToken);
             }
         }
     }
@@ -349,9 +349,9 @@ public class LlmConversation
         }
     }
 
-    private void AppendMessageToLog(ChatMessage message)
+    private void AppendMessageToLog(ChatMessage message, string? modelName)
     {
-        string formattedMessage = FormatMessage(message);
+        string formattedMessage = FormatMessage(message, modelName);
         Console.Write(formattedMessage);
 
         if (!string.IsNullOrWhiteSpace(_logPath))
@@ -360,9 +360,9 @@ public class LlmConversation
         }
     }
 
-    private async Task AppendMessageToLogAsync(ChatMessage message, CancellationToken cancellationToken)
+    private async Task AppendMessageToLogAsync(ChatMessage message, string? modelName, CancellationToken cancellationToken)
     {
-        string formattedMessage = FormatMessage(message);
+        string formattedMessage = FormatMessage(message, modelName);
         Console.Write(formattedMessage);
 
         if (!string.IsNullOrWhiteSpace(_logPath))
@@ -371,33 +371,34 @@ public class LlmConversation
         }
     }
 
-    private static string FormatMessage(ChatMessage message)
+    private static string FormatMessage(ChatMessage message, string? modelName)
     {
         if (message.Role == "system")
         {
-            return $"## System:\n{message.Content ?? string.Empty}\n\n";
+            return $"system: {message.Content ?? string.Empty}\n";
         }
 
         if (message.Role == "user")
         {
-            return $"## User:\n{message.Content ?? string.Empty}\n\n";
+            return $"user: {message.Content ?? string.Empty}\n";
         }
 
         if (message.Role == "assistant")
         {
-            string result = "## Assistant:\n";
+            string prefix = !string.IsNullOrWhiteSpace(modelName) ? $"[{modelName}] " : string.Empty;
+            string result = $"{prefix}assistant: ";
+
             if (!string.IsNullOrEmpty(message.Content))
             {
-                result += $"{message.Content}\n\n";
+                result += $"{message.Content}\n";
             }
 
             if (message.ToolCalls != null && message.ToolCalls.Count > 0)
             {
                 foreach (ToolCallMessage toolCall in message.ToolCalls)
                 {
-                    result += $"**Tool call:** {toolCall.Function.Name} {toolCall.Function.Arguments}\n";
+                    result += $"  tool call: {toolCall.Function.Name} {toolCall.Function.Arguments}\n";
                 }
-                result += "\n";
             }
 
             return result;
@@ -405,7 +406,7 @@ public class LlmConversation
 
         if (message.Role == "tool")
         {
-            return $"**Tool result:**\n```\n{message.Content ?? string.Empty}\n```\n\n";
+            return $"  tool result: {message.Content ?? string.Empty}\n";
         }
 
         return string.Empty;
