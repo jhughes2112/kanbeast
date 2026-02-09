@@ -28,6 +28,8 @@ KanBeast is a self-hosted system where AI agents autonomously work on tickets fr
 - **Simple settings** - All settings are GUI-configurable and straightforward (although git is still git)
 - **Realtime Web UI** - Simple Kanban board to manage tickets
 
+![KanBeast](env/wwwroot/kanbeast.gif)
+
 ## Quick Start
 
 ### Prerequisites
