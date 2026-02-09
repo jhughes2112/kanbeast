@@ -69,8 +69,8 @@ public class FileTools : IToolProvider
     [Description("Read the contents of a file.")]
     public async Task<ToolResult> ReadFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
-        [Description("Line number to center on (1-based, optional)")] int? offset,
-        [Description("Total number of lines to return around offset (optional)")] int? lines,
+        [Description("Line number to center on (1-based, or empty for whole file)")] string offset,
+        [Description("Total number of lines to return around offset (or empty for whole file)")] string lines,
         CancellationToken cancellationToken)
     {
         return await ReadFileContentAsync(filePath, offset, lines, cancellationToken);
@@ -79,14 +79,14 @@ public class FileTools : IToolProvider
     [Description("Get the contents of a file.")]
     public async Task<ToolResult> GetFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
-        [Description("Line number to center on (1-based, optional)")] int? offset,
-        [Description("Total number of lines to return around offset (optional)")] int? lines,
+        [Description("Line number to center on (1-based, or empty for whole file)")] string offset,
+        [Description("Total number of lines to return around offset (or empty for whole file)")] string lines,
         CancellationToken cancellationToken)
     {
         return await ReadFileContentAsync(filePath, offset, lines, cancellationToken);
     }
 
-    private async Task<ToolResult> ReadFileContentAsync(string filePath, int? offset, int? lines, CancellationToken cancellationToken)
+    private async Task<ToolResult> ReadFileContentAsync(string filePath, string offset, string lines, CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -110,37 +110,58 @@ public class FileTools : IToolProvider
                     cts.CancelAfter(DefaultTimeout);
                     string content = await File.ReadAllTextAsync(fullPath, cts.Token);
 
-                    if (offset.HasValue && lines.HasValue)
-                    {
-                        string[] allLines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-                        int totalLines = allLines.Length;
+                    bool hasOffset = !string.IsNullOrWhiteSpace(offset);
+                    bool hasLines = !string.IsNullOrWhiteSpace(lines);
 
-                        if (totalLines == 0)
+                    if (hasOffset && hasLines)
+                    {
+                        if (!int.TryParse(offset, out int offsetValue))
                         {
-                            result = new ToolResult($"File is empty: {filePath}");
+                            result = new ToolResult($"Error: Invalid offset value: {offset}");
+                        }
+                        else if (!int.TryParse(lines, out int linesValue))
+                        {
+                            result = new ToolResult($"Error: Invalid lines value: {lines}");
+                        }
+                        else if (offsetValue < 1)
+                        {
+                            result = new ToolResult("Error: offset must be >= 1");
+                        }
+                        else if (linesValue < 1)
+                        {
+                            result = new ToolResult("Error: lines must be >= 1");
                         }
                         else
                         {
-                            int centerLine = Math.Max(1, Math.Min(offset.Value, totalLines));
-                            int halfLines = lines.Value / 2;
-                            int startLine = Math.Max(1, centerLine - halfLines);
-                            int endLine = Math.Min(totalLines, startLine + lines.Value - 1);
+                            string[] allLines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+                            int totalLines = allLines.Length;
 
-                            // Adjust start if we hit the end boundary
-                            if (endLine == totalLines)
+                            if (totalLines == 0)
                             {
-                                startLine = Math.Max(1, endLine - lines.Value + 1);
+                                result = new ToolResult($"File is empty: {filePath}");
                             }
-
-                            StringBuilder sb = new StringBuilder();
-                            sb.AppendLine($"Lines {startLine}-{endLine} of {totalLines} from {filePath}:");
-
-                            for (int i = startLine - 1; i <= endLine - 1; i++)
+                            else
                             {
-                                sb.AppendLine($"{i + 1}: {allLines[i]}");
-                            }
+                                int centerLine = Math.Max(1, Math.Min(offsetValue, totalLines));
+                                int halfLines = linesValue / 2;
+                                int startLine = Math.Max(1, centerLine - halfLines);
+                                int endLine = Math.Min(totalLines, startLine + linesValue - 1);
 
-                            result = new ToolResult(sb.ToString());
+                                if (endLine == totalLines)
+                                {
+                                    startLine = Math.Max(1, endLine - linesValue + 1);
+                                }
+
+                                StringBuilder sb = new StringBuilder();
+                                sb.AppendLine($"Lines {startLine}-{endLine} of {totalLines} from {filePath}:");
+
+                                for (int i = startLine - 1; i <= endLine - 1; i++)
+                                {
+                                    sb.AppendLine($"{i + 1}: {allLines[i]}");
+                                }
+
+                                result = new ToolResult(sb.ToString());
+                            }
                         }
                     }
                     else
