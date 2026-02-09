@@ -2,74 +2,88 @@ namespace KanBeast.Worker.Services;
 
 // Holds persistent memories that survive conversation resets and compaction.
 // Shared across conversations so developer and QA see the same accumulated knowledge.
+// Organized by label: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM.
 public class LlmMemories
 {
-    private readonly List<string> _entries = new();
+    private readonly Dictionary<string, HashSet<string>> _memoriesByLabel = new();
 
-    public IReadOnlyList<string> Entries => _entries;
+    public IReadOnlyDictionary<string, HashSet<string>> MemoriesByLabel => _memoriesByLabel;
 
-    public void Add(string memory)
+    public void Add(string label, string memory)
     {
-        if (string.IsNullOrWhiteSpace(memory))
+        if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(memory))
         {
             return;
         }
 
-        _entries.Add(memory.Trim());
+        string normalizedLabel = label.Trim().ToUpperInvariant();
+        string trimmedMemory = memory.Trim();
+
+        if (!_memoriesByLabel.ContainsKey(normalizedLabel))
+        {
+            _memoriesByLabel[normalizedLabel] = new HashSet<string>();
+        }
+
+        _memoriesByLabel[normalizedLabel].Add(trimmedMemory);
     }
 
     // Tolerant of mistakes: finds the best match assuming it starts off similar.
-    public bool Remove(string memoryToRemove)
+    public bool Remove(string label, string memoryToRemove)
     {
-        if (string.IsNullOrWhiteSpace(memoryToRemove) || memoryToRemove.Trim().Length <= 5)
+        if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(memoryToRemove) || memoryToRemove.Trim().Length <= 5)
         {
             return false;
         }
 
+        string normalizedLabel = label.Trim().ToUpperInvariant();
+
+        if (!_memoriesByLabel.ContainsKey(normalizedLabel))
+        {
+            return false;
+        }
+
+        HashSet<string> memories = _memoriesByLabel[normalizedLabel];
         string searchText = memoryToRemove.Trim();
-        int bestMatchIndex = -1;
+        string? bestMatch = null;
         int bestMatchLength = 0;
 
-        for (int i = 0; i < _entries.Count; i++)
+        foreach (string entry in memories)
         {
-            string entry = _entries[i].Trim();
             int matchLength = GetCommonPrefixLength(entry, searchText);
             if (matchLength > bestMatchLength)
             {
                 bestMatchLength = matchLength;
-                bestMatchIndex = i;
+                bestMatch = entry;
             }
         }
 
-        if (bestMatchIndex >= 0 && bestMatchLength > 5)
+        if (bestMatch != null && bestMatchLength > 5)
         {
-            _entries.RemoveAt(bestMatchIndex);
+            memories.Remove(bestMatch);
+            if (memories.Count == 0)
+            {
+                _memoriesByLabel.Remove(normalizedLabel);
+            }
             return true;
         }
 
         return false;
     }
 
-    public string FormatForPrompt()
+    public string Format()
     {
-        if (_entries.Count == 0)
+        if (_memoriesByLabel.Count == 0)
         {
             return "[Memories: None yet]";
         }
 
-        string joined = string.Join("\n", _entries.Select(m => $"- {m}"));
-        return $"[Memories]\n{joined}";
-    }
-
-    public string FormatForCompaction()
-    {
-        if (_entries.Count == 0)
+        string sections = "[Memories]\n";
+        foreach ((string label, HashSet<string> memories) in _memoriesByLabel)
         {
-            return "[Current memories]\nNone";
+            sections += string.Join("\n", memories.Select(m => $"{label} {m}"));
         }
 
-        string joined = string.Join("\n", _entries.Select(m => $"- {m}"));
-        return $"[Current memories]\n{joined}";
+        return sections;
     }
 
     private static int GetCommonPrefixLength(string a, string b)

@@ -72,7 +72,7 @@ public class LlmConversation
         Messages.Add(instructionsMessage);
 
         // Message 2: Memories (reflects current state of shared memories)
-        ChatMessage memoriesMessage = new ChatMessage { Role = "user", Content = _memories.FormatForPrompt() };
+        ChatMessage memoriesMessage = new ChatMessage { Role = "user", Content = _memories.Format() };
         Messages.Add(memoriesMessage);
 
         // Message 3: Chapter summaries (empty initially)
@@ -146,15 +146,15 @@ public class LlmConversation
 		Iteration = 0;
 	}
 
-	public void AddMemory(string memory)
+	public void AddMemory(string label, string memory)
 	{
-		_memories.Add(memory);
+		_memories.Add(label, memory);
 		UpdateMemoriesMessage();
 	}
 
-	public bool RemoveMemory(string memoryToRemove)
+	public bool RemoveMemory(string label, string memoryToRemove)
 	{
-		bool removed = _memories.Remove(memoryToRemove);
+		bool removed = _memories.Remove(label, memoryToRemove);
 		if (removed)
 		{
 			UpdateMemoriesMessage();
@@ -189,7 +189,7 @@ public class LlmConversation
             return;
         }
 
-        string memoriesContent = _memories.FormatForPrompt();
+        string memoriesContent = _memories.Format();
 
         Messages[2] = new ChatMessage { Role = "user", Content = memoriesContent };
     }

@@ -47,6 +47,15 @@ public class CompactionSummarizer : ICompaction
 {
     private const int MinimumThreshold = 3072;
 
+    private static readonly HashSet<string> ValidLabels = new HashSet<string>
+    {
+        "INVARIANT",
+        "CONSTRAINT",
+        "DECISION",
+        "REFERENCE",
+        "OPEN_ITEM"
+    };
+
     private readonly string _compactionPrompt;
     private readonly LlmProxy _llmProxy;
     private readonly double _contextSizePercent;
@@ -110,47 +119,67 @@ public class CompactionSummarizer : ICompaction
             return;
         }
 
-        _targetConversation = conversation;
+		_targetConversation = conversation;
 
-        // Get the original task from message 1 (initial instructions)
-        string originalTask = conversation.Messages.Count > 1 ? conversation.Messages[1].Content ?? "" : "";
+		// Get the original task from message 1 (initial instructions)
+		string originalTask = conversation.Messages.Count > 1 ? conversation.Messages[1].Content ?? "" : "";
 
-        // Build memories section
-        string memoriesSection = conversation.Memories.FormatForCompaction();
+		// Build history block
+		string historyBlock = BuildHistoryBlock(conversation.Messages, startIndex, endIndex);
 
-        // Build history block
-        string historyBlock = BuildHistoryBlock(conversation.Messages, startIndex, endIndex);
+		string userPrompt = $"""
+			[Original task]
+			{originalTask}
+			""";
 
-        string userPrompt = $"""
-            [Original task]
-            {originalTask}
-            """;
+		List<Tool> compactionTools = BuildCompactionTools();
+		string compactLogDir = conversation.LogDirectory;
+		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.LogPrefix) ? $"{conversation.LogPrefix}-compact" : string.Empty;
+		ICompaction noCompaction = new CompactionNone();
 
-        List<Tool> compactionTools = BuildCompactionTools();
-        string compactLogDir = conversation.LogDirectory;
-        string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.LogPrefix) ? $"{conversation.LogPrefix}-compact" : string.Empty;
-        ICompaction noCompaction = new CompactionNone();
-
-        LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, noCompaction, false, compactLogDir, compactLogPrefix);
+		LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, noCompaction, false, compactLogDir, compactLogPrefix);
 		await summaryConversation.AddUserMessageAsync($"""
 			<history>
 			{historyBlock}
 			</history>
 
 			First, use add_memory and remove_memory to update the memories with important discoveries, decisions, or state changes from this history.
-			Then respond with a concise summary of the work done, as it pertains to solving the original task.
+			Finally, call summarize_history with a concise chapter summary as described in the instructions, which completes the compaction process.
 			""", cancellationToken);
-        LlmResult result = await _llmProxy.ContinueAsync(summaryConversation, compactionTools, null, cancellationToken);
 
-        _targetConversation = null;
+		for (;;)
+		{
+			LlmResult result = await _llmProxy.ContinueAsync(summaryConversation, compactionTools, null, cancellationToken);
 
-        // The final response is the summary
-        if (result.Success && !string.IsNullOrWhiteSpace(result.Content))
-        {
-            conversation.AddChapterSummary(result.Content);
-            await conversation.DeleteRangeAsync(startIndex, endIndex, cancellationToken);
-            Console.WriteLine($"[Compaction] Reduced to {GetMessageSize(conversation.Messages)} chars, now {conversation.ChapterSummaries.Count} chapters");
-        }
+			if (result.ExitReason == LlmExitReason.ToolRequestedExit && result.FinalToolCalled == "summarize_history")
+			{
+				conversation.AddChapterSummary(result.Content);
+				await conversation.DeleteRangeAsync(startIndex, endIndex, cancellationToken);
+				Console.WriteLine($"[Compaction] Reduced to {GetMessageSize(conversation.Messages)} chars, now {conversation.ChapterSummaries.Count} chapters");
+				break;
+			}
+			else if (result.ExitReason == LlmExitReason.Completed)
+			{
+				await summaryConversation.AddUserMessageAsync("Continue updating memories if needed, then call summarize_history tool with the summary.", cancellationToken);
+			}
+			else if (result.ExitReason == LlmExitReason.MaxIterationsReached)
+			{
+				summaryConversation.ResetIteration();
+				await summaryConversation.AddUserMessageAsync("Are you making forward progress?  Call summarize_history tool to complete the compaction process.", cancellationToken);
+			}
+			else if (result.ExitReason == LlmExitReason.CostExceeded)
+			{
+				Console.WriteLine("[Compaction] Cost budget exceeded during compaction");
+				break;
+			}
+			else
+			{
+				Console.WriteLine($"[Compaction] LLM failed during compaction: {result.ErrorMessage}");
+				break;
+			}
+		}
+
+		_targetConversation = null;
     }
 
     private static string BuildHistoryBlock(List<ChatMessage> messages, int startIndex, int endIndex)
@@ -208,7 +237,8 @@ public class CompactionSummarizer : ICompaction
         List<Tool> tools = new List<Tool>();
         ToolHelper.AddTools(tools, this,
             nameof(AddMemoryAsync),
-            nameof(RemoveMemoryAsync));
+            nameof(RemoveMemoryAsync),
+            nameof(SummarizeHistoryAsync));
         return tools;
     }
 
@@ -220,20 +250,22 @@ public class CompactionSummarizer : ICompaction
     {
         ToolResult result;
 
-        if (_targetConversation == null)
-        {
-            result = new ToolResult("Error: No active conversation");
-        }
-        else if (string.IsNullOrWhiteSpace(content))
+		if (string.IsNullOrWhiteSpace(content))
         {
             result = new ToolResult("Error: Content cannot be empty");
         }
         else
         {
-            string trimmedLabel = (label ?? "REFERENCE").Trim().ToUpperInvariant();
-            string entry = $"[{trimmedLabel}] {content.Trim()}";
-            _targetConversation.AddMemory(entry);
-            result = new ToolResult($"Added: {entry}");
+            string trimmedLabel = label.Trim().ToUpperInvariant();
+            if (!ValidLabels.Contains(trimmedLabel))
+            {
+                result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM");
+            }
+            else
+            {
+                _targetConversation!.AddMemory(trimmedLabel, content.Trim());
+                result = new ToolResult($"Added [{trimmedLabel}]: {content.Trim()}");
+            }
         }
 
         return Task.FromResult(result);
@@ -241,32 +273,46 @@ public class CompactionSummarizer : ICompaction
 
     [Description("Remove a memory that is no longer true, relevant, or has been superseded.")]
     public Task<ToolResult> RemoveMemoryAsync(
+        [Description("Label: INVARIANT, CONSTRAINT, DECISION, REFERENCE, or OPEN_ITEM")] string label,
         [Description("Text to match against existing memories (beginning of the memory entry)")] string memoryToRemove,
         CancellationToken cancellationToken)
     {
         ToolResult result;
 
-        if (_targetConversation == null)
-        {
-            result = new ToolResult("Error: No active conversation");
-        }
-        else if (string.IsNullOrWhiteSpace(memoryToRemove))
+		if (string.IsNullOrWhiteSpace(memoryToRemove))
         {
             result = new ToolResult("Error: Memory text cannot be empty");
         }
         else
         {
-            bool removed = _targetConversation.RemoveMemory(memoryToRemove);
-            if (removed)
+            string trimmedLabel = label.Trim().ToUpperInvariant();
+            if (!ValidLabels.Contains(trimmedLabel))
             {
-                result = new ToolResult($"Removed memory matching: {memoryToRemove}");
+                result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM");
             }
             else
             {
-                result = new ToolResult("No matching memory found (need >5 character match at start)");
+                bool removed = _targetConversation!.RemoveMemory(trimmedLabel, memoryToRemove);
+                if (removed)
+                {
+                    result = new ToolResult($"Removed [{trimmedLabel}] memory matching: {memoryToRemove}");
+                }
+                else
+                {
+                    result = new ToolResult($"No matching memory found in [{trimmedLabel}] (need >5 character match at start)");
+                }
             }
         }
 
+        return Task.FromResult(result);
+    }
+
+    [Description("Provide the final summary of the history block and complete the compaction process.")]
+    public Task<ToolResult> SummarizeHistoryAsync(
+        [Description("Concise summary of the work done, as it pertains to solving the original task")] string summary,
+        CancellationToken cancellationToken)
+    {
+        ToolResult result = new ToolResult(summary.Trim(), true, "summarize_history");
         return Task.FromResult(result);
     }
 
