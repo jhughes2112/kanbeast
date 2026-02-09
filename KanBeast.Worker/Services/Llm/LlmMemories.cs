@@ -80,7 +80,7 @@ public class LlmMemories
         string sections = "[Memories]\n";
         foreach ((string label, HashSet<string> memories) in _memoriesByLabel)
         {
-            sections += string.Join("\n", memories.Select(m => $"{label} {m}"));
+            sections += string.Join("\n", memories.Select(m => $"{label} {m}")) + '\n';
         }
 
         return sections;
