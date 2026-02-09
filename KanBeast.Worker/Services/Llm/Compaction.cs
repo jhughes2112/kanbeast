@@ -216,7 +216,8 @@ public class CompactionSummarizer : ICompaction
     [Description("Add a labeled memory to the persistent memories list. Memories survive compaction and are visible to the agent across the entire conversation.")]
     public Task<ToolResult> AddMemoryAsync(
         [Description("Label: INVARIANT (what is), CONSTRAINT (what cannot be), DECISION (what was chosen), REFERENCE (what was done), or OPEN_ITEM (what is unresolved)")] string label,
-        [Description("Terse, self-contained memory entry")] string content)
+        [Description("Terse, self-contained memory entry")] string content,
+        CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -241,7 +242,8 @@ public class CompactionSummarizer : ICompaction
 
     [Description("Remove a memory that is no longer true, relevant, or has been superseded.")]
     public Task<ToolResult> RemoveMemoryAsync(
-        [Description("Text to match against existing memories (beginning of the memory entry)")] string memoryToRemove)
+        [Description("Text to match against existing memories (beginning of the memory entry)")] string memoryToRemove,
+        CancellationToken cancellationToken)
     {
         ToolResult result;
 

@@ -316,7 +316,7 @@ public class LlmService
 
 						foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
 						{
-							ToolResult toolResult = await ExecuteTool(toolCall, tools);
+							ToolResult toolResult = await ExecuteTool(toolCall, tools, cancellationToken);
 
 							await conversation.AddToolMessageAsync(toolCall.Id, toolResult.Response, cancellationToken);
 
@@ -416,7 +416,7 @@ public class LlmService
 		}
 	}
 
-	private async Task<ToolResult> ExecuteTool(ToolCallMessage toolCall, List<Tool> tools)
+	private async Task<ToolResult> ExecuteTool(ToolCallMessage toolCall, List<Tool> tools, CancellationToken cancellationToken)
 	{
 		foreach (Tool tool in tools)
 		{
@@ -434,7 +434,7 @@ public class LlmService
 
 				try
 				{
-					return await tool.Handler(args);
+					return await tool.Handler(args, cancellationToken);
 				}
 				catch (Exception ex)
 				{

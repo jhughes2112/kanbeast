@@ -24,9 +24,9 @@ public static class ToolHelper
 
         JsonObject parameters = BuildParametersSchema(method);
 
-        Func<JsonObject, Task<ToolResult>> handler = async (JsonObject args) =>
+        Func<JsonObject, CancellationToken, Task<ToolResult>> handler = async (JsonObject args, CancellationToken cancellationToken) =>
         {
-            object?[] methodArgs = BuildMethodArguments(method, args);
+            object?[] methodArgs = BuildMethodArguments(method, args, cancellationToken);
             object? result = method.Invoke(instance, methodArgs);
 
             if (result is not Task<ToolResult> taskToolResult)
@@ -70,7 +70,7 @@ public static class ToolHelper
 
         foreach (ParameterInfo param in method.GetParameters())
         {
-            if (param.Name == null)
+            if (param.Name == null || param.ParameterType == typeof(CancellationToken))
             {
                 continue;
             }
@@ -115,7 +115,7 @@ public static class ToolHelper
         return schema;
     }
 
-    private static object?[] BuildMethodArguments(MethodInfo method, JsonObject args)
+    private static object?[] BuildMethodArguments(MethodInfo method, JsonObject args, CancellationToken cancellationToken)
     {
         ParameterInfo[] parameters = method.GetParameters();
         object?[] result = new object?[parameters.Length];
@@ -125,7 +125,11 @@ public static class ToolHelper
             ParameterInfo param = parameters[i];
             string paramName = param.Name ?? $"arg{i}";
 
-            if (args.TryGetPropertyValue(paramName, out JsonNode? node) && node != null)
+            if (param.ParameterType == typeof(CancellationToken))
+            {
+                result[i] = cancellationToken;
+            }
+            else if (args.TryGetPropertyValue(paramName, out JsonNode? node) && node != null)
             {
                 result[i] = ConvertJsonValue(node, param.ParameterType);
             }
@@ -255,7 +259,7 @@ public static class ToolHelper
     private const int TruncateTailLength = 2000;
 
     // Truncates long responses to first 2000 and last 2000 characters to save context window.
-    public static string TruncateResponse(string response)
+    private static string TruncateResponse(string response)
     {
         if (string.IsNullOrEmpty(response) || response.Length <= MaxResponseLength)
         {

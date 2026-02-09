@@ -68,19 +68,21 @@ public class FileTools : IToolProvider
 
     [Description("Read the contents of a file.")]
     public async Task<ToolResult> ReadFileAsync(
-        [Description("Path to the file (absolute or relative to repository)")] string filePath)
+        [Description("Path to the file (absolute or relative to repository)")] string filePath,
+        CancellationToken cancellationToken)
     {
-        return await ReadFileContentAsync(filePath);
+        return await ReadFileContentAsync(filePath, cancellationToken);
     }
 
     [Description("Get the contents of a file.")]
     public async Task<ToolResult> GetFileAsync(
-        [Description("Path to the file (absolute or relative to repository)")] string filePath)
+        [Description("Path to the file (absolute or relative to repository)")] string filePath,
+        CancellationToken cancellationToken)
     {
-        return await ReadFileContentAsync(filePath);
+        return await ReadFileContentAsync(filePath, cancellationToken);
     }
 
-    private async Task<ToolResult> ReadFileContentAsync(string filePath)
+    private async Task<ToolResult> ReadFileContentAsync(string filePath, CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -100,14 +102,15 @@ public class FileTools : IToolProvider
                 }
                 else
                 {
-                    using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                    using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    cts.CancelAfter(DefaultTimeout);
                     string content = await File.ReadAllTextAsync(fullPath, cts.Token);
                     result = new ToolResult(content);
                 }
             }
-            catch (TaskCanceledException)
+            catch (OperationCanceledException)
             {
-                result = new ToolResult($"Error: Timed out reading file: {filePath}");
+                result = new ToolResult($"Error: Timed out or cancelled reading file: {filePath}");
             }
             catch (Exception ex)
             {
@@ -121,7 +124,8 @@ public class FileTools : IToolProvider
     [Description("Write content to a file, creating or overwriting as needed.")]
     public async Task<ToolResult> WriteFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
-        [Description("Content to write")] string content)
+        [Description("Content to write")] string content,
+        CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -141,14 +145,15 @@ public class FileTools : IToolProvider
                     Directory.CreateDirectory(directory);
                 }
 
-                using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(DefaultTimeout);
                 await File.WriteAllTextAsync(fullPath, content ?? string.Empty, cts.Token);
 
                 result = new ToolResult($"File written: {filePath}");
             }
-            catch (TaskCanceledException)
+            catch (OperationCanceledException)
             {
-                result = new ToolResult($"Error: Timed out writing file: {filePath}");
+                result = new ToolResult($"Error: Timed out or cancelled writing file: {filePath}");
             }
             catch (Exception ex)
             {
@@ -163,7 +168,8 @@ public class FileTools : IToolProvider
     public async Task<ToolResult> EditFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
         [Description("Exact text to find and replace")] string oldContent,
-        [Description("Replacement text")] string newContent)
+        [Description("Replacement text")] string newContent,
+        CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -187,7 +193,8 @@ public class FileTools : IToolProvider
                 }
                 else
                 {
-                    using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                    using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    cts.CancelAfter(DefaultTimeout);
                     string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
 
                     int firstIndex = fileContent.IndexOf(oldContent, StringComparison.Ordinal);
@@ -211,9 +218,9 @@ public class FileTools : IToolProvider
                     }
                 }
             }
-            catch (TaskCanceledException)
+            catch (OperationCanceledException)
             {
-                result = new ToolResult($"Error: Timed out editing file: {filePath}");
+                result = new ToolResult($"Error: Timed out or cancelled editing file: {filePath}");
             }
             catch (Exception ex)
             {

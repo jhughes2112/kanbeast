@@ -30,7 +30,7 @@ public readonly struct ToolResult
 public class Tool
 {
     public required ToolDefinition Definition { get; init; }
-    public required Func<JsonObject, Task<ToolResult>> Handler { get; init; }
+    public required Func<JsonObject, CancellationToken, Task<ToolResult>> Handler { get; init; }
 }
 
 // Interface for classes that provide tools to LLM agents.

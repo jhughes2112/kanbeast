@@ -38,7 +38,6 @@ public class AgentOrchestrator
 	private List<Tool>? _qaTools;
 	private List<Tool>? _developerTools;
 
-	private LlmConversation? _qaConversation;
 	private LlmConversation? _developerConversation;
 
 	private TicketHolder? _ticketHolder;
@@ -103,12 +102,6 @@ public class AgentOrchestrator
 			await _apiClient.UpdateTicketStatusAsync(_ticketHolder.Ticket.Id, "Failed");
 		}
 
-		if (_qaConversation != null)
-		{
-			await _qaConversation.FinalizeAsync(cancellationToken);
-			_qaConversation = null;
-		}
-
 		if (_developerConversation != null)
 		{
 			await _developerConversation.FinalizeAsync(cancellationToken);
@@ -162,14 +155,14 @@ public class AgentOrchestrator
 	}
 
 	[Description("Signal that planning is complete and implementation should begin. Call this when all tasks and subtasks have been created.")]
-	public Task<ToolResult> PlanningCompleteAsync()
+	public Task<ToolResult> PlanningCompleteAsync(CancellationToken cancellationToken)
 	{
 		ToolResult result = new ToolResult("Planning complete. Beginning implementation phase.", true, "planning_complete");
 		return Task.FromResult(result);
 	}
 
 	[Description("Delete all tasks and subtasks to start planning over. Use this if the current plan is fundamentally wrong.")]
-	public async Task<ToolResult> DeleteAllTasksAsync()
+	public async Task<ToolResult> DeleteAllTasksAsync(CancellationToken cancellationToken)
 	{
 		ToolResult result;
 
@@ -198,7 +191,8 @@ public class AgentOrchestrator
 
 	[Description("Signal that you have finished working on the current subtask. Call this when your work is complete.")]
 	public async Task<ToolResult> EndSubtaskAsync(
-		[Description("Summary of what you accomplished")] string summary)
+		[Description("Summary of what you accomplished")] string summary,
+		CancellationToken cancellationToken)
 	{
 		ToolResult result;
 
@@ -212,12 +206,12 @@ public class AgentOrchestrator
 		}
 		else
 		{
-			QaResult qaResult = await RunQaAsync(summary, _developerConversation!.Memories);
+			QaResult qaResult = await RunQaAsync(summary, _developerConversation!.Memories, cancellationToken);
 
 			if (qaResult.Verdict == QaVerdict.Approved)
 			{
 				// Compact the developer conversation to hoist memories before it is discarded.
-				await _developerConversation.CompactNowAsync(CancellationToken.None);
+				await _developerConversation.CompactNowAsync(cancellationToken);
 
 				TicketDto? updated = await _apiClient.UpdateSubtaskStatusAsync(_ticketHolder.Ticket.Id, _currentTaskId, _currentSubtaskId, SubtaskStatus.Complete);
 				if (updated != null)
@@ -244,7 +238,8 @@ public class AgentOrchestrator
 
 	[Description("Approve the developer's work on this subtask. Call this when the work meets the acceptance criteria.")]
 	public Task<ToolResult> ApproveSubtaskAsync(
-		[Description("Summary of what was verified")] string notes)
+		[Description("Summary of what was verified")] string notes,
+		CancellationToken cancellationToken)
 	{
 		ToolResult result;
 
@@ -262,7 +257,8 @@ public class AgentOrchestrator
 
 	[Description("Reject the developer's work on this subtask. The developer will retry with your feedback.")]
 	public Task<ToolResult> RejectSubtaskAsync(
-		[Description("Specific feedback on what needs to be fixed")] string feedback)
+		[Description("Specific feedback on what needs to be fixed")] string feedback,
+		CancellationToken cancellationToken)
 	{
 		ToolResult result;
 
@@ -353,7 +349,7 @@ public class AgentOrchestrator
 	private async Task<bool> RunDeveloperAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
 		const int ProgressCheckThreshold = 3;  // 3 times that the LLM has returned without calling the end_subtask tool (or just has had a ton of tool calls).  This is an indication something is probably wrong.
-		const int ContextResetThreshold  = 7;  // 15 times is a whole lot.  Wipe the context and start fresh.
+		const int ContextResetThreshold  = 7;  // 7 times is a whole lot.  Wipe the context and start fresh.
 
 		_logger.LogInformation("Working on ticket");
 
@@ -363,13 +359,6 @@ public class AgentOrchestrator
 		foreach ((string taskId, string taskName, string subtaskId, string subtaskName, string subtaskDescription) in subtasks)
 		{
 			cancellationToken.ThrowIfCancellationRequested();
-
-			// Start fresh conversations for each subtask
-			if (_qaConversation != null)
-			{
-				await _qaConversation.FinalizeAsync(cancellationToken);
-				_qaConversation = null;
-			}
 
 			if (_developerConversation != null)
 			{
@@ -430,11 +419,6 @@ public class AgentOrchestrator
 						ICompaction continueCompaction = CreateCompaction();
 
 						_developerConversation = new LlmConversation(_prompts["developer"], continuePrompt, memories, continueCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev");
-						if (_qaConversation != null)
-						{
-							await _qaConversation.FinalizeAsync(cancellationToken);
-							_qaConversation = null;
-						}
 						iterationCount = 0;
 					}
 					else if (iterationCount == ProgressCheckThreshold)
@@ -481,7 +465,7 @@ public class AgentOrchestrator
 		return true;
 	}
 
-	private async Task<QaResult> RunQaAsync(string developerSummary, LlmMemories memories)
+	private async Task<QaResult> RunQaAsync(string developerSummary, LlmMemories memories, CancellationToken cancellationToken)
 	{
 		string userPrompt = $"""
 			Review the developer's work on this subtask.
@@ -491,62 +475,53 @@ public class AgentOrchestrator
 			Verify the work meets the acceptance criteria. Call approve_subtask tool if the work is complete and verified. Call reject_subtask tool with specific feedback if changes are needed, or if you are unable to review the work for some reason.
 			""";
 
-		if (_qaConversation == null)
-		{
-			ICompaction qaCompaction = CreateCompaction();
 
-			_qaConversation = new LlmConversation(_prompts["qualityassurance"], userPrompt, memories, qaCompaction, false, "/workspace/logs", $"TIK-{_ticketHolder!.Ticket.Id}-qa");
-		}
-		else
-		{
-			await _qaConversation.AddUserMessageAsync(userPrompt, CancellationToken.None);
-		}
+		// Start fresh conversations for each subtask
+		ICompaction qaCompaction = CreateCompaction();
+		LlmConversation? qaConversation = new LlmConversation(_prompts["qualityassurance"], userPrompt, memories, qaCompaction, false, "/workspace/logs", $"TIK-{_ticketHolder!.Ticket.Id}-qa");
 
-		for (;;)
+		try
 		{
-			LlmResult llmResult = await _llmProxy.ContinueAsync(_qaConversation, _qaTools!, 8192, CancellationToken.None);
-
-			if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
+			for (;;)
 			{
-				if (llmResult.FinalToolCalled == "approve_subtask")
+				LlmResult llmResult = await _llmProxy.ContinueAsync(qaConversation, _qaTools!, 8192, cancellationToken);
+
+				if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
 				{
-					_logger.LogInformation("QA approved: {Message}", llmResult.Content);
-					await CompactQaConversationAsync();
-					return new QaResult(QaVerdict.Approved, llmResult.Content);
+					if (llmResult.FinalToolCalled == "approve_subtask")
+					{
+						_logger.LogInformation("QA approved: {Message}", llmResult.Content);
+						await qaConversation.CompactNowAsync(cancellationToken);
+						return new QaResult(QaVerdict.Approved, llmResult.Content);
+					}
+					else if (llmResult.FinalToolCalled == "reject_subtask")
+					{
+						_logger.LogInformation("QA rejected: {Message}", llmResult.Content);
+						await qaConversation.CompactNowAsync(cancellationToken);
+						return new QaResult(QaVerdict.Rejected, llmResult.Content);
+					}
 				}
-				else if (llmResult.FinalToolCalled == "reject_subtask")
+				else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 				{
-					_logger.LogInformation("QA rejected: {Message}", llmResult.Content);
-					await CompactQaConversationAsync();
-					return new QaResult(QaVerdict.Rejected, llmResult.Content);
+					qaConversation.ResetIteration();
+
+					await qaConversation.AddUserMessageAsync("Please review the work and call approve_subtask tool.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask tool.", cancellationToken);
+				}
+				else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
+				{
+					_logger.LogWarning("QA exceeded cost budget");
+					return new QaResult(QaVerdict.Rejected, "QA review could not complete due to cost budget. Please verify your work is complete and try again.");
+				}
+				else
+				{
+					_logger.LogError("QA LLM failed: {Error}", llmResult.ErrorMessage);
+					return new QaResult(QaVerdict.Rejected, $"QA review failed: {llmResult.ErrorMessage ?? "Unknown error"}. Please verify your work is complete and try again.");
 				}
 			}
-			else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
-			{
-				_qaConversation.ResetIteration();
-
-				await _qaConversation.AddUserMessageAsync("Please review the work and call approve_subtask tool.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask tool.", CancellationToken.None);
-			}
-			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
-			{
-				_logger.LogWarning("QA exceeded cost budget");
-				return new QaResult(QaVerdict.Rejected, "QA review could not complete due to cost budget. Please verify your work is complete and try again.");
-			}
-			else
-			{
-				_logger.LogError("QA LLM failed: {Error}", llmResult.ErrorMessage);
-				return new QaResult(QaVerdict.Rejected, $"QA review failed: {llmResult.ErrorMessage ?? "Unknown error"}. Please verify your work is complete and try again.");
-			}
 		}
-	}
-
-	private async Task CompactQaConversationAsync()
-	{
-		if (_qaConversation == null)
+		finally
 		{
-			return;
+			await qaConversation.FinalizeAsync(cancellationToken);
 		}
-
-		await _qaConversation.CompactNowAsync(CancellationToken.None);
 	}
 }

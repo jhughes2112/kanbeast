@@ -59,7 +59,8 @@ public class ShellTools : IToolProvider
 	[Description("Execute a shell command.")]
 	public async Task<ToolResult> RunCommandAsync(
 		[Description("Command to execute")] string command,
-		[Description("Working directory (or empty for repository root)")] string workDir)
+		[Description("Working directory (or empty for repository root)")] string workDir,
+		CancellationToken cancellationToken)
 	{
 		ToolResult result;
 
@@ -115,7 +116,8 @@ public class ShellTools : IToolProvider
 
 					process.Start();
 
-					using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+					using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+					cts.CancelAfter(DefaultTimeout);
 
 					Task<string> outputTask = process.StandardOutput.ReadToEndAsync(cts.Token);
 					Task<string> errorTask = process.StandardError.ReadToEndAsync(cts.Token);
@@ -124,7 +126,7 @@ public class ShellTools : IToolProvider
 					{
 						await process.WaitForExitAsync(cts.Token);
 					}
-					catch (TaskCanceledException)
+					catch (OperationCanceledException)
 					{
 						try
 						{
@@ -134,7 +136,7 @@ public class ShellTools : IToolProvider
 						{
 						}
 
-						result = new ToolResult($"Error: Command timed out after {DefaultTimeout.TotalSeconds} seconds: {command}");
+						result = new ToolResult($"Error: Command timed out or cancelled after {DefaultTimeout.TotalSeconds} seconds: {command}");
 						return result;
 					}
 

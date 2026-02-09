@@ -53,7 +53,8 @@ public class TicketTools : IToolProvider
 
     [Description("Send a message to the human's display about discoveries, decisions, important details, occasional jokes, etc.")]
     public async Task<ToolResult> LogMessageAsync(
-        [Description("Message to log")] string message)
+        [Description("Message to log")] string message,
+        CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -65,13 +66,14 @@ public class TicketTools : IToolProvider
         {
             try
             {
-                using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(DefaultTimeout);
                 await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, message);
                 result = new ToolResult("Message logged");
             }
-            catch (TaskCanceledException)
+            catch (OperationCanceledException)
             {
-                result = new ToolResult("Error: Request timed out while logging message");
+                result = new ToolResult("Error: Request timed out or cancelled while logging message");
             }
             catch (Exception ex)
             {
@@ -101,7 +103,8 @@ public class TicketTools : IToolProvider
     [Description("Create a new task for the ticket.")]
     public async Task<ToolResult> CreateTaskAsync(
         [Description("Name of the task")] string taskName,
-        [Description("Description of the task")] string taskDescription)
+        [Description("Description of the task")] string taskDescription,
+        CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -120,7 +123,8 @@ public class TicketTools : IToolProvider
                     Subtasks = new List<KanbanSubtask>()
                 };
 
-                using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(DefaultTimeout);
                 TicketDto? updated = await _apiClient.AddTaskToTicketAsync(_ticketHolder.Ticket.Id, task);
 
                 if (updated == null)
@@ -134,9 +138,9 @@ public class TicketTools : IToolProvider
                     result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created task '{taskName}'"));
                 }
             }
-            catch (TaskCanceledException)
+            catch (OperationCanceledException)
             {
-                result = new ToolResult("Error: Request timed out while creating task");
+                result = new ToolResult("Error: Request timed out or cancelled while creating task");
             }
             catch (Exception ex)
             {
@@ -151,7 +155,8 @@ public class TicketTools : IToolProvider
     public async Task<ToolResult> CreateSubtaskAsync(
         [Description("Name of the task to add the subtask to")] string taskName,
         [Description("Short name for the subtask")] string subtaskName,
-        [Description("Detailed description including acceptance criteria")] string subtaskDescription)
+        [Description("Detailed description including acceptance criteria")] string subtaskDescription,
+        CancellationToken cancellationToken)
     {
         ToolResult result;
 
@@ -182,7 +187,8 @@ public class TicketTools : IToolProvider
                         Status = SubtaskStatus.Incomplete
                     };
 
-                    using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
+                    using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    cts.CancelAfter(DefaultTimeout);
                     TicketDto? updated = await _apiClient.AddSubtaskToTaskAsync(_ticketHolder.Ticket.Id, taskId, subtask);
 
                     if (updated == null)
@@ -196,9 +202,9 @@ public class TicketTools : IToolProvider
                         result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created subtask '{subtaskName}' under task '{taskName}'"));
                     }
                 }
-                catch (TaskCanceledException)
+                catch (OperationCanceledException)
                 {
-                    result = new ToolResult("Error: Request timed out while creating subtask");
+                    result = new ToolResult("Error: Request timed out or cancelled while creating subtask");
                 }
                 catch (Exception ex)
                 {
