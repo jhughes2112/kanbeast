@@ -303,6 +303,17 @@ public class LlmService
 
 						ChatMessage assistantMessage = response.Choices[0].Message;
 
+						// If no native tool calls, try parsing XML-style tool calls from content.
+						if ((assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0) && !string.IsNullOrEmpty(assistantMessage.Content))
+						{
+							List<ToolCallMessage>? xmlToolCalls = TryParseXmlToolCalls(assistantMessage.Content, tools);
+							if (xmlToolCalls != null)
+							{
+								assistantMessage.ToolCalls = xmlToolCalls;
+								Console.WriteLine($"Parsed {xmlToolCalls.Count} XML-style tool call(s) from {_config.Model} response");
+							}
+						}
+
 						await conversation.AddAssistantMessageAsync(assistantMessage, _config.Model, cancellationToken);
 
 						if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
@@ -572,5 +583,125 @@ public class LlmService
 		long nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 		long delta = epochSeconds - nowSeconds + 1;
 		return delta > 0 ? (int)delta : 0;
+	}
+
+	// Scans content for <tool_call> or <function_call> XML blocks containing JSON payloads.
+	private List<ToolCallMessage>? TryParseXmlToolCalls(string content, List<Tool> tools)
+	{
+		List<ToolCallMessage> result = new List<ToolCallMessage>();
+		string[] tagNames = ["tool_call", "function_call"];
+
+		foreach (string tagName in tagNames)
+		{
+			string openTag = $"<{tagName}>";
+			string closeTag = $"</{tagName}>";
+			int searchStart = 0;
+
+			while (searchStart < content.Length)
+			{
+				int openIndex = content.IndexOf(openTag, searchStart, StringComparison.OrdinalIgnoreCase);
+				if (openIndex < 0)
+				{
+					break;
+				}
+
+				int contentStart = openIndex + openTag.Length;
+				int closeIndex = content.IndexOf(closeTag, contentStart, StringComparison.OrdinalIgnoreCase);
+				if (closeIndex < 0)
+				{
+					break;
+				}
+
+				string inner = content.Substring(contentStart, closeIndex - contentStart).Trim();
+				searchStart = closeIndex + closeTag.Length;
+
+				ToolCallMessage? toolCall = TryParseXmlToolCallJson(inner, tools);
+				if (toolCall != null)
+				{
+					result.Add(toolCall);
+				}
+			}
+		}
+
+		if (result.Count == 0)
+		{
+			return null;
+		}
+
+		return result;
+	}
+
+	// Parses a single JSON payload from an XML tool call block, validates tool name and argument keys.
+	private ToolCallMessage? TryParseXmlToolCallJson(string json, List<Tool> tools)
+	{
+		try
+		{
+			JsonObject? obj = JsonNode.Parse(json)?.AsObject();
+			if (obj == null)
+			{
+				return null;
+			}
+
+			string? name = null;
+			if (obj.TryGetPropertyValue("name", out JsonNode? nameNode))
+			{
+				name = nameNode?.GetValue<string>();
+			}
+
+			if (string.IsNullOrEmpty(name))
+			{
+				return null;
+			}
+
+			JsonObject args = new JsonObject();
+			if (obj.TryGetPropertyValue("arguments", out JsonNode? argsNode) || obj.TryGetPropertyValue("parameters", out argsNode))
+			{
+				JsonObject? parsed = argsNode?.AsObject();
+				if (parsed != null)
+				{
+					args = parsed;
+				}
+			}
+
+			Tool? matchedTool = null;
+			foreach (Tool tool in tools)
+			{
+				if (tool.Definition.Function.Name == name)
+				{
+					matchedTool = tool;
+					break;
+				}
+			}
+
+			if (matchedTool == null)
+			{
+				return null;
+			}
+
+			JsonObject? definedProperties = matchedTool.Definition.Function.Parameters["properties"]?.AsObject();
+
+			foreach (KeyValuePair<string, JsonNode?> arg in args)
+			{
+				if (definedProperties == null || !definedProperties.ContainsKey(arg.Key))
+				{
+					return null;
+				}
+			}
+
+			return new ToolCallMessage
+			{
+				Id = $"xmltc_{Guid.NewGuid():N}",
+				Type = "function",
+				Function = new FunctionCallMessage
+				{
+					Name = name,
+					Arguments = args.ToJsonString()
+				}
+			};
+		}
+		catch
+		{
+			return null;
+		}
 	}
 }
