@@ -212,6 +212,7 @@ public class LlmService
 		}
 
 		_httpClient = new HttpClient();
+		_httpClient.Timeout = TimeSpan.FromMinutes(5);  // ridiculously long timeout, because sometimes openrouter takes its time
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 

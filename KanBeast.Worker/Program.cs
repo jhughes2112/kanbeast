@@ -66,10 +66,10 @@ public class Program
 
 			Dictionary<string, string> prompts = new Dictionary<string, string>
 			{
-				{ "planning", config.GetPrompt("planning").Replace("{repoDir}", repoDir) },
-				{ "qualityassurance", config.GetPrompt("qualityassurance").Replace("{repoDir}", repoDir) },
-				{ "developer", config.GetPrompt("developer").Replace("{repoDir}", repoDir) },
-				{ "compaction", config.GetPrompt("compaction").Replace("{repoDir}", repoDir) }
+				{ "planning", config.GetPrompt("planning").Replace("{repoDir}", repoDir).Replace("{currentDate}", DateTime.Now.ToString()).Replace("{ticketId}", config.TicketId) },
+				{ "qualityassurance", config.GetPrompt("qualityassurance").Replace("{repoDir}", repoDir).Replace("{currentDate}", DateTime.Now.ToString()).Replace("{ticketId}", config.TicketId) },
+				{ "developer", config.GetPrompt("developer").Replace("{repoDir}", repoDir).Replace("{currentDate}", DateTime.Now.ToString()).Replace("{ticketId}", config.TicketId) },
+				{ "compaction", config.GetPrompt("compaction").Replace("{repoDir}", repoDir).Replace("{currentDate}", DateTime.Now.ToString()).Replace("{ticketId}", config.TicketId) }
 			};
 
 			GitService gitService = new GitService(config.GitConfig);

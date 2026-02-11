@@ -58,26 +58,52 @@ public static class FileToolsTests
 
 	private static void TestReadWithOffsetLines(TestContext ctx, FileTools fileTools)
 	{
-		// Write a multi-line file.
+		// Write a multi-line file (10 lines, indices 0-9).
 		string multiLine = "line1\nline2\nline3\nline4\nline5\nline6\nline7\nline8\nline9\nline10";
 		fileTools.WriteFileAsync("multiline.txt", multiLine, CancellationToken.None).GetAwaiter().GetResult();
 
-		// Read with offset=5, lines=3.
-		ToolResult windowed = fileTools.ReadFileAsync("multiline.txt", "5", "3", CancellationToken.None).GetAwaiter().GetResult();
-		ctx.Assert(windowed.Response.Contains("line5"), "FileTools: windowed read includes center line");
-		ctx.Assert(windowed.Response.Contains("Lines"), "FileTools: windowed read has line range header");
+		// offset=3, lines=4 → start at index 3 (display line 4), read 4 lines → display lines 4-7.
+		ToolResult windowed = fileTools.ReadFileAsync("multiline.txt", "3", "4", CancellationToken.None).GetAwaiter().GetResult();
+		ctx.Assert(windowed.Response.Contains("4: line4"), "FileTools: windowed read starts at correct offset");
+		ctx.Assert(windowed.Response.Contains("7: line7"), "FileTools: windowed read ends at correct line");
+		ctx.Assert(!windowed.Response.Contains("3: line3"), "FileTools: windowed read excludes line before offset");
+		ctx.Assert(windowed.Response.Contains("Lines 4-7 of 10"), "FileTools: windowed read has correct header");
+
+		// Blank offset defaults to 0, lines=3 → first 3 lines.
+		ToolResult blankOffset = fileTools.ReadFileAsync("multiline.txt", "", "3", CancellationToken.None).GetAwaiter().GetResult();
+		ctx.Assert(blankOffset.Response.Contains("1: line1"), "FileTools: blank offset defaults to start");
+		ctx.Assert(blankOffset.Response.Contains("Lines 1-3 of 10"), "FileTools: blank offset header correct");
+
+		// offset=7, blank lines → read all remaining from index 7 (display lines 8-10).
+		ToolResult blankLines = fileTools.ReadFileAsync("multiline.txt", "7", "", CancellationToken.None).GetAwaiter().GetResult();
+		ctx.Assert(blankLines.Response.Contains("8: line8"), "FileTools: blank lines reads to end");
+		ctx.Assert(blankLines.Response.Contains("10: line10"), "FileTools: blank lines includes last line");
+		ctx.Assert(blankLines.Response.Contains("Lines 8-10 of 10"), "FileTools: blank lines header correct");
+
+		// Both blank → returns raw content (no line numbers).
+		ToolResult rawContent = fileTools.ReadFileAsync("multiline.txt", "", "", CancellationToken.None).GetAwaiter().GetResult();
+		ctx.Assert(!rawContent.Response.Contains("Lines"), "FileTools: both blank returns raw content");
+
+		// offset=0, lines=0 explicitly → same as both blank, returns raw content.
+		ToolResult zeros = fileTools.ReadFileAsync("multiline.txt", "0", "0", CancellationToken.None).GetAwaiter().GetResult();
+		ctx.Assert(!zeros.Response.Contains("Lines"), "FileTools: explicit zeros returns raw content");
 
 		// Invalid offset value.
 		ToolResult badOffset = fileTools.ReadFileAsync("multiline.txt", "abc", "3", CancellationToken.None).GetAwaiter().GetResult();
 		ctx.Assert(badOffset.Response.Contains("Error"), "FileTools: invalid offset returns error");
 
-		// Zero offset.
-		ToolResult zeroOffset = fileTools.ReadFileAsync("multiline.txt", "0", "3", CancellationToken.None).GetAwaiter().GetResult();
-		ctx.Assert(zeroOffset.Response.Contains("Error"), "FileTools: zero offset returns error");
+		// Negative offset.
+		ToolResult negOffset = fileTools.ReadFileAsync("multiline.txt", "-1", "3", CancellationToken.None).GetAwaiter().GetResult();
+		ctx.Assert(negOffset.Response.Contains("Error"), "FileTools: negative offset returns error");
 
-		// Zero lines.
-		ToolResult zeroLines = fileTools.ReadFileAsync("multiline.txt", "5", "0", CancellationToken.None).GetAwaiter().GetResult();
-		ctx.Assert(zeroLines.Response.Contains("Error"), "FileTools: zero lines returns error");
+		// Offset beyond file length clamps to last line.
+		ToolResult beyondOffset = fileTools.ReadFileAsync("multiline.txt", "99", "5", CancellationToken.None).GetAwaiter().GetResult();
+		ctx.Assert(beyondOffset.Response.Contains("10: line10"), "FileTools: offset beyond length clamps to last line");
+
+		// Lines exceeding remainder clamps to end.
+		ToolResult beyondLines = fileTools.ReadFileAsync("multiline.txt", "8", "50", CancellationToken.None).GetAwaiter().GetResult();
+		ctx.Assert(beyondLines.Response.Contains("9: line9"), "FileTools: lines beyond remainder clamps to end");
+		ctx.Assert(beyondLines.Response.Contains("10: line10"), "FileTools: clamped read includes last line");
 	}
 
 	private static void TestEditFile(TestContext ctx, FileTools fileTools)

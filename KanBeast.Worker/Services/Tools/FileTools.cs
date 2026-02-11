@@ -69,8 +69,8 @@ public class FileTools : IToolProvider
     [Description("Read the contents of a file.")]
     public async Task<ToolResult> ReadFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
-        [Description("Line number to center on (1-based, or empty for whole file)")] string offset,
-        [Description("Total number of lines to return around offset (or empty for whole file)")] string lines,
+        [Description("0-based line index to start reading from (default: 0 for start of file)")] string offset,
+        [Description("Number of lines to read forward from offset (default: all remaining lines)")] string lines,
         CancellationToken cancellationToken)
     {
         return await ReadFileContentAsync(filePath, offset, lines, cancellationToken);
@@ -79,8 +79,8 @@ public class FileTools : IToolProvider
     [Description("Get the contents of a file.")]
     public async Task<ToolResult> GetFileAsync(
         [Description("Path to the file (absolute or relative to repository)")] string filePath,
-        [Description("Line number to center on (1-based, or empty for whole file)")] string offset,
-        [Description("Total number of lines to return around offset (or empty for whole file)")] string lines,
+        [Description("0-based line index to start reading from (default: 0 for start of file)")] string offset,
+        [Description("Number of lines to read forward from offset (default: all remaining lines)")] string lines,
         CancellationToken cancellationToken)
     {
         return await ReadFileContentAsync(filePath, offset, lines, cancellationToken);
@@ -110,63 +110,57 @@ public class FileTools : IToolProvider
                     cts.CancelAfter(DefaultTimeout);
                     string content = await File.ReadAllTextAsync(fullPath, cts.Token);
 
-                    bool hasOffset = !string.IsNullOrWhiteSpace(offset);
-                    bool hasLines = !string.IsNullOrWhiteSpace(lines);
+                    int offsetValue = 0;
+                    bool offsetValid = string.IsNullOrWhiteSpace(offset) || int.TryParse(offset, out offsetValue);
 
-                    if (hasOffset && hasLines)
+                    int linesValue = 0;
+                    bool linesValid = string.IsNullOrWhiteSpace(lines) || int.TryParse(lines, out linesValue);
+
+                    if (!offsetValid)
                     {
-                        if (!int.TryParse(offset, out int offsetValue))
-                        {
-                            result = new ToolResult($"Error: Invalid offset value: {offset}");
-                        }
-                        else if (!int.TryParse(lines, out int linesValue))
-                        {
-                            result = new ToolResult($"Error: Invalid lines value: {lines}");
-                        }
-                        else if (offsetValue < 1)
-                        {
-                            result = new ToolResult("Error: offset must be >= 1");
-                        }
-                        else if (linesValue < 1)
-                        {
-                            result = new ToolResult("Error: lines must be >= 1");
-                        }
-                        else
-                        {
-                            string[] allLines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-                            int totalLines = allLines.Length;
-
-                            if (totalLines == 0)
-                            {
-                                result = new ToolResult($"File is empty: {filePath}");
-                            }
-                            else
-                            {
-                                int centerLine = Math.Max(1, Math.Min(offsetValue, totalLines));
-                                int halfLines = linesValue / 2;
-                                int startLine = Math.Max(1, centerLine - halfLines);
-                                int endLine = Math.Min(totalLines, startLine + linesValue - 1);
-
-                                if (endLine == totalLines)
-                                {
-                                    startLine = Math.Max(1, endLine - linesValue + 1);
-                                }
-
-                                StringBuilder sb = new StringBuilder();
-                                sb.AppendLine($"Lines {startLine}-{endLine} of {totalLines} from {filePath}:");
-
-                                for (int i = startLine - 1; i <= endLine - 1; i++)
-                                {
-                                    sb.AppendLine($"{i + 1}: {allLines[i]}");
-                                }
-
-                                result = new ToolResult(sb.ToString());
-                            }
-                        }
+                        result = new ToolResult($"Error: Invalid offset value: {offset}");
+                    }
+                    else if (!linesValid)
+                    {
+                        result = new ToolResult($"Error: Invalid lines value: {lines}");
+                    }
+                    else if (offsetValue < 0)
+                    {
+                        result = new ToolResult("Error: offset must be >= 0");
+                    }
+                    else if (linesValue < 0)
+                    {
+                        result = new ToolResult("Error: lines must be >= 0");
+                    }
+                    else if (offsetValue == 0 && linesValue == 0)
+                    {
+                        result = new ToolResult(content);
                     }
                     else
                     {
-                        result = new ToolResult(content);
+                        string[] allLines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
+                        int totalLines = allLines.Length;
+
+                        if (totalLines == 0)
+                        {
+                            result = new ToolResult($"File is empty: {filePath}");
+                        }
+                        else
+                        {
+                            int startIndex = Math.Min(offsetValue, totalLines - 1);
+                            int count = linesValue > 0 ? linesValue : totalLines - startIndex;
+                            int endIndex = Math.Min(startIndex + count - 1, totalLines - 1);
+
+                            StringBuilder sb = new StringBuilder();
+                            sb.AppendLine($"Lines {startIndex + 1}-{endIndex + 1} of {totalLines} from {filePath}:");
+
+                            for (int i = startIndex; i <= endIndex; i++)
+                            {
+                                sb.AppendLine($"{i + 1}: {allLines[i]}");
+                            }
+
+                            result = new ToolResult(sb.ToString());
+                        }
                     }
                 }
             }
