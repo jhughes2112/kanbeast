@@ -2,6 +2,7 @@
 using CommandLine;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
+using KanBeast.Worker.Tests;
 using Microsoft.Extensions.Logging;
 
 namespace KanBeast.Worker;
@@ -10,6 +11,11 @@ public class Program
 {
 	public static async Task<int> Main(string[] args)
 	{
+		if (args.Length > 0 && args[0] == "--test")
+		{
+			return TestRunner.RunAll();
+		}
+
 		using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
 		{
 			builder.AddConsole();
