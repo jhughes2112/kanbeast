@@ -70,6 +70,7 @@ public class Program
 				{ "planning", config.GetPrompt("planning").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
 				{ "qualityassurance", config.GetPrompt("qualityassurance").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
 				{ "developer", config.GetPrompt("developer").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
+				{ "subagent", config.GetPrompt("subagent").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
 				{ "compaction", config.GetPrompt("compaction").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) }
 			};
 
@@ -201,13 +202,27 @@ public class Program
 			throw new DirectoryNotFoundException($"Prompt directory not found: {resolvedPromptDirectory}");
 		}
 
-		Dictionary<string, string> prompts = new Dictionary<string, string>
+		string[] requiredPrompts = new string[] { "planning", "qualityassurance", "developer", "subagent", "compaction" };
+
+		Dictionary<string, string> prompts = new Dictionary<string, string>();
+		string[] promptFiles = Directory.GetFiles(resolvedPromptDirectory, "*.txt");
+
+		foreach (string filePath in promptFiles)
 		{
-			["planning"] = LoadPromptFromDisk(resolvedPromptDirectory, "planning"),
-			["qualityassurance"] = LoadPromptFromDisk(resolvedPromptDirectory, "qualityassurance"),
-			["developer"] = LoadPromptFromDisk(resolvedPromptDirectory, "developer"),
-			["compaction"] = LoadPromptFromDisk(resolvedPromptDirectory, "compaction")
-		};
+			string key = Path.GetFileNameWithoutExtension(filePath);
+			string content = File.ReadAllText(filePath);
+			prompts[key] = content;
+			Console.WriteLine($"Loaded prompt: {key}");
+		}
+
+		foreach (string required in requiredPrompts)
+		{
+			if (!prompts.ContainsKey(required))
+			{
+				Console.WriteLine($"Error: Required prompt file not found: {required}.txt");
+				throw new FileNotFoundException($"Required prompt file not found: {required}.txt", Path.Combine(resolvedPromptDirectory, $"{required}.txt"));
+			}
+		}
 
 		WorkerConfig config = new WorkerConfig
 		{
@@ -222,18 +237,6 @@ public class Program
 		};
 
 		return config;
-	}
-
-	private static string LoadPromptFromDisk(string promptDirectory, string promptName)
-	{
-		string filePath = Path.Combine(promptDirectory, $"{promptName}.txt");
-		if (!File.Exists(filePath))
-		{
-			Console.WriteLine($"Error: Required prompt file not found: {filePath}");
-			throw new FileNotFoundException($"Required prompt file not found: {filePath}", filePath);
-		}
-
-		return File.ReadAllText(filePath);
 	}
 
 	private static WorkerSettings LoadWorkerSettings()

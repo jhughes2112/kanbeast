@@ -9,6 +9,18 @@ public class LlmMemories
 
     public IReadOnlyDictionary<string, HashSet<string>> MemoriesByLabel => _memoriesByLabel;
 
+    public LlmMemories()
+    {
+    }
+
+    public LlmMemories(LlmMemories source)
+    {
+        foreach ((string label, HashSet<string> memories) in source._memoriesByLabel)
+        {
+            _memoriesByLabel[label] = new HashSet<string>(memories);
+        }
+    }
+
     public void Add(string label, string memory)
     {
         if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(memory))

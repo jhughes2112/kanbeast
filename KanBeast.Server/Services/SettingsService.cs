@@ -121,29 +121,47 @@ public class SettingsService : ISettingsService
             throw new DirectoryNotFoundException($"Prompt directory not found: {_promptDirectory}");
         }
 
-        List<PromptTemplate> prompts = new List<PromptTemplate>
+        List<PromptTemplate> prompts = new List<PromptTemplate>();
+        string[] promptFiles = Directory.GetFiles(_promptDirectory, "*.txt");
+
+        foreach (string filePath in promptFiles)
         {
-            LoadPromptTemplate("planning", "Planning"),
-            LoadPromptTemplate("qualityassurance", "Quality Assurance"),
-            LoadPromptTemplate("developer", "Developer"),
-            LoadPromptTemplate("compaction", "Compaction"),
-        };
+            string fileName = Path.GetFileName(filePath);
+            string key = Path.GetFileNameWithoutExtension(filePath);
+            string displayName = GenerateDisplayName(key);
+            string content = File.ReadAllText(filePath);
+
+            Console.WriteLine($"Loaded prompt: {key}");
+
+            prompts.Add(new PromptTemplate
+            {
+                Key = key,
+                DisplayName = displayName,
+                FileName = fileName,
+                Content = content
+            });
+        }
 
         return prompts;
     }
 
-    private PromptTemplate LoadPromptTemplate(string key, string displayName)
+    private static string GenerateDisplayName(string key)
     {
-        string fileName = $"{key}.txt";
-        string content = LoadPromptFromDisk(_promptDirectory, key);
-
-        return new PromptTemplate
+        if (string.IsNullOrWhiteSpace(key))
         {
-            Key = key,
-            DisplayName = displayName,
-            FileName = fileName,
-            Content = content
-        };
+            return string.Empty;
+        }
+
+        string[] words = key.Split(new[] { '_', '-' }, StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < words.Length; i++)
+        {
+            if (words[i].Length > 0)
+            {
+                words[i] = char.ToUpper(words[i][0]) + words[i].Substring(1);
+            }
+        }
+
+        return string.Join(" ", words);
     }
 
     private List<PromptTemplate> UpdatePromptFiles(IEnumerable<PromptTemplate> prompts)
