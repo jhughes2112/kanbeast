@@ -327,19 +327,32 @@ public class LlmService
 							}, accumulatedCost);
 						}
 
+						// Start all tool calls concurrently.
+						List<(ToolCallMessage Call, Task<ToolResult> Task)> pendingTools = new List<(ToolCallMessage, Task<ToolResult>)>();
 						foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
 						{
-							ToolResult toolResult = await ExecuteTool(toolCall, tools, conversation.ToolContext);
+							Task<ToolResult> task = ExecuteTool(toolCall, tools, conversation.ToolContext);
+							pendingTools.Add((toolCall, task));
+						}
 
-							await conversation.AddToolMessageAsync(toolCall.Id, toolResult.Response, cancellationToken);
+						// Await each task and add messages in order.
+						foreach ((ToolCallMessage call, Task<ToolResult> task) in pendingTools)
+						{
+							ToolResult toolResult = await task;
+							await conversation.AddToolMessageAsync(call.Id, toolResult.Response, cancellationToken);
+						}
 
+						// Check for exit after all messages are added.
+						foreach ((ToolCallMessage call, Task<ToolResult> task) in pendingTools)
+						{
+							ToolResult toolResult = task.Result;
 							if (toolResult.ExitLoop)
 							{
 								return (new LlmResult
 								{
 									ExitReason = LlmExitReason.ToolRequestedExit,
 									Content = toolResult.Response,
-									FinalToolCalled = toolResult.ToolName
+									FinalToolCalled = call.Function.Name
 								}, accumulatedCost);
 							}
 						}
@@ -451,12 +464,12 @@ public class LlmService
 				}
 				catch (Exception ex)
 				{
-					return new ToolResult($"Error: {ex.Message}", false, toolCall.Function.Name);
+					return new ToolResult($"Error: {ex.Message}", false);
 				}
 			}
 		}
 
-		return new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false, null);
+		return new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false);
 	}
 
 	// Checks whether a 4xx error is a known configuration mismatch and adapts settings for retry.

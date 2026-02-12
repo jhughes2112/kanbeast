@@ -4,9 +4,55 @@ using KanBeast.Worker.Models;
 
 namespace KanBeast.Worker.Services.Tools;
 
-// Tools for LLM to interact with the ticket system (planning phase only).
+// Tools for LLM to interact with the ticket system.
 public static class TicketTools
 {
+    [Description("Signal that planning is complete and implementation should begin. Call this when all tasks and subtasks have been created.")]
+    public static Task<ToolResult> PlanningCompleteAsync(ToolContext context)
+    {
+        ToolResult result = new ToolResult("Planning complete. Beginning implementation phase.", true);
+        return Task.FromResult(result);
+    }
+
+    [Description("Signal that you have finished working on the current subtask. Call this when your work is complete or is blocked in some way.")]
+    public static Task<ToolResult> EndSubtaskAsync(
+        [Description("Summary of what you accomplished or a detailed explanation of what the blockers are")] string summary,
+        ToolContext context)
+    {
+        ToolResult result;
+
+        if (string.IsNullOrWhiteSpace(summary))
+        {
+            result = new ToolResult("Error: Summary cannot be empty", false);
+        }
+        else
+        {
+            result = new ToolResult(summary, true);
+        }
+
+        return Task.FromResult(result);
+    }
+
+    [Description("Delete all tasks and subtasks to start planning over. Use this if the current plan is fundamentally wrong.")]
+    public static async Task<ToolResult> DeleteAllTasksAsync(ToolContext context)
+    {
+        ToolResult result;
+
+        TicketDto? updated = await WorkerSession.ApiClient.DeleteAllTasksAsync(WorkerSession.TicketHolder.Ticket.Id, WorkerSession.CancellationToken);
+        if (updated != null)
+        {
+            WorkerSession.TicketHolder.Update(updated);
+            await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, "Manager: Deleted all tasks to restart planning", WorkerSession.CancellationToken);
+            result = new ToolResult("All tasks and subtasks deleted. You can now create a new plan.", false);
+        }
+        else
+        {
+            result = new ToolResult("Error: Failed to delete tasks", false);
+        }
+
+        return result;
+    }
+
     [Description("Send a message to the human's display about discoveries, decisions, important details, occasional jokes, etc.")]
     public static async Task<ToolResult> LogMessageAsync(
         [Description("Message to log")] string message,
@@ -16,22 +62,22 @@ public static class TicketTools
 
         if (string.IsNullOrWhiteSpace(message))
         {
-            result = new ToolResult("Error: Message cannot be empty");
+            result = new ToolResult("Error: Message cannot be empty", false);
         }
         else
         {
             try
             {
-                await context.ApiClient!.AddActivityLogAsync(context.TicketHolder!.Ticket.Id, message, context.CancellationToken);
-                result = new ToolResult("Message logged");
+                await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, message, WorkerSession.CancellationToken);
+                result = new ToolResult("Message logged", false);
             }
             catch (OperationCanceledException)
             {
-                result = new ToolResult("Error: Request timed out or cancelled while logging message");
+                result = new ToolResult("Error: Request timed out or cancelled while logging message", false);
             }
             catch (Exception ex)
             {
-                result = new ToolResult($"Error: Failed to log message: {ex.Message}");
+                result = new ToolResult($"Error: Failed to log message: {ex.Message}", false);
             }
         }
 
@@ -48,7 +94,7 @@ public static class TicketTools
 
         if (string.IsNullOrWhiteSpace(taskName))
         {
-            result = new ToolResult("Error: Task name cannot be empty");
+            result = new ToolResult("Error: Task name cannot be empty", false);
         }
         else
         {
@@ -61,26 +107,26 @@ public static class TicketTools
                     Subtasks = new List<KanbanSubtask>()
                 };
 
-                TicketDto? updated = await context.ApiClient!.AddTaskToTicketAsync(context.TicketHolder!.Ticket.Id, task, context.CancellationToken);
+                TicketDto? updated = await WorkerSession.ApiClient.AddTaskToTicketAsync(WorkerSession.TicketHolder.Ticket.Id, task, WorkerSession.CancellationToken);
 
                 if (updated == null)
                 {
-                    result = new ToolResult("Error: API returned null when creating task");
+                    result = new ToolResult("Error: API returned null when creating task", false);
                 }
                 else
                 {
-                    context.TicketHolder.Update(updated);
-                    await context.ApiClient.AddActivityLogAsync(context.TicketHolder.Ticket.Id, $"Created task '{taskName}'", context.CancellationToken);
-                    result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created task '{taskName}'"));
+                    WorkerSession.TicketHolder.Update(updated);
+                    await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Created task '{taskName}'", WorkerSession.CancellationToken);
+                    result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created task '{taskName}'"), false);
                 }
             }
             catch (OperationCanceledException)
             {
-                result = new ToolResult("Error: Request timed out or cancelled while creating task");
+                result = new ToolResult("Error: Request timed out or cancelled while creating task", false);
             }
             catch (Exception ex)
             {
-                result = new ToolResult($"Error: Failed to create task: {ex.Message}");
+                result = new ToolResult($"Error: Failed to create task: {ex.Message}", false);
             }
         }
 
@@ -98,19 +144,19 @@ public static class TicketTools
 
         if (string.IsNullOrWhiteSpace(taskName))
         {
-            result = new ToolResult("Error: Task name cannot be empty");
+            result = new ToolResult("Error: Task name cannot be empty", false);
         }
         else if (string.IsNullOrWhiteSpace(subtaskName))
         {
-            result = new ToolResult("Error: Subtask name cannot be empty");
+            result = new ToolResult("Error: Subtask name cannot be empty", false);
         }
         else
         {
-            string? taskId = context.TicketHolder!.Ticket.FindTaskIdByName(taskName);
+            string? taskId = WorkerSession.TicketHolder.Ticket.FindTaskIdByName(taskName);
 
             if (taskId == null)
             {
-                result = new ToolResult($"Error: Task '{taskName}' not found");
+                result = new ToolResult($"Error: Task '{taskName}' not found", false);
             }
             else
             {
@@ -123,26 +169,26 @@ public static class TicketTools
                         Status = SubtaskStatus.Incomplete
                     };
 
-                    TicketDto? updated = await context.ApiClient!.AddSubtaskToTaskAsync(context.TicketHolder!.Ticket.Id, taskId, subtask, context.CancellationToken);
+                    TicketDto? updated = await WorkerSession.ApiClient.AddSubtaskToTaskAsync(WorkerSession.TicketHolder.Ticket.Id, taskId, subtask, WorkerSession.CancellationToken);
 
                     if (updated == null)
                     {
-                        result = new ToolResult("Error: API returned null when creating subtask");
+                        result = new ToolResult("Error: API returned null when creating subtask", false);
                     }
                     else
                     {
-                        context.TicketHolder.Update(updated);
-                        await context.ApiClient.AddActivityLogAsync(context.TicketHolder.Ticket.Id, $"Created subtask '{subtaskName}' under task '{taskName}'", context.CancellationToken);
-                        result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created subtask '{subtaskName}' under task '{taskName}'"));
+                        WorkerSession.TicketHolder.Update(updated);
+                        await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Created subtask '{subtaskName}' under task '{taskName}'", WorkerSession.CancellationToken);
+                        result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created subtask '{subtaskName}' under task '{taskName}'"), false);
                     }
                 }
                 catch (OperationCanceledException)
                 {
-                    result = new ToolResult("Error: Request timed out or cancelled while creating subtask");
+                    result = new ToolResult("Error: Request timed out or cancelled while creating subtask", false);
                 }
                 catch (Exception ex)
                 {
-                    result = new ToolResult($"Error: Failed to create subtask: {ex.Message}");
+                    result = new ToolResult($"Error: Failed to create subtask: {ex.Message}", false);
                 }
             }
         }

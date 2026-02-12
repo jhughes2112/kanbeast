@@ -33,23 +33,23 @@ public static class ShellTools
 		ToolContext context)
 	{
 		ToolResult result;
-		CancellationToken cancellationToken = context.CancellationToken;
+		CancellationToken cancellationToken = WorkerSession.CancellationToken;
 
 		if (string.IsNullOrWhiteSpace(command))
 		{
-			result = new ToolResult("Error: Command cannot be empty");
+			result = new ToolResult("Error: Command cannot be empty", false);
 		}
 		else if (!string.IsNullOrWhiteSpace(workDir) && !Path.IsPathRooted(workDir))
 		{
-			result = new ToolResult($"Error: Working directory must be an absolute path: {workDir}");
+			result = new ToolResult($"Error: Working directory must be an absolute path: {workDir}", false);
 		}
 		else
 		{
-			string effectiveWorkDir = string.IsNullOrWhiteSpace(workDir) ? context.WorkDir : Path.GetFullPath(workDir);
+			string effectiveWorkDir = string.IsNullOrWhiteSpace(workDir) ? WorkerSession.WorkDir : Path.GetFullPath(workDir);
 
 			if (!Directory.Exists(effectiveWorkDir))
 			{
-				result = new ToolResult($"Error: Working directory does not exist: {workDir}");
+				result = new ToolResult($"Error: Working directory does not exist: {workDir}", false);
 			}
 			else
 			{
@@ -111,7 +111,7 @@ public static class ShellTools
 						{
 						}
 
-						result = new ToolResult($"Error: Command timed out or cancelled after {DefaultTimeout.TotalSeconds} seconds: {command}");
+						result = new ToolResult($"Error: Command timed out or cancelled after {DefaultTimeout.TotalSeconds} seconds: {command}", false);
 						return result;
 					}
 
@@ -129,7 +129,7 @@ public static class ShellTools
 						}
 						catch (ArgumentException ex)
 						{
-							result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}");
+							result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}", false);
 							return result;
 						}
 					}
@@ -156,11 +156,11 @@ public static class ShellTools
 						response += $"\nStderr:\n{errorOutput}";
 					}
 
-					result = new ToolResult(response);
+					result = new ToolResult(response, false);
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: Failed to execute command: {ex.Message}");
+					result = new ToolResult($"Error: Failed to execute command: {ex.Message}", false);
 				}
 			}
 		}

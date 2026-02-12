@@ -1,3 +1,4 @@
+using KanBeast.Worker.Services;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Tests;
@@ -13,7 +14,9 @@ public static class ShellToolsTests
 
 		try
 		{
-			ToolContext tc = new ToolContext(null, null, tempDir, null, null, null, null, CancellationToken.None);
+			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None);
+			LlmMemories testMemories = new LlmMemories();
+			ToolContext tc = new ToolContext(null, null, null, testMemories);
 
 			TestEdgeCases(ctx, tc);
 			TestRunCommand(ctx, tc);

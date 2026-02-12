@@ -109,8 +109,9 @@ public class Program
 						await apiClient.SetBranchNameAsync(ticket.Id, branchName, cts.Token);
 					}
 
-					AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), apiClient, llmProxy, prompts, config.Compaction, config.LLMConfigs, ticketHolder, repoDir);
+					AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), config.Compaction, config.LLMConfigs);
 
+					WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cts.Token);
 					logger.LogInformation("Starting agent orchestrator...");
 
 					try
@@ -119,6 +120,7 @@ public class Program
 					}
 					finally
 					{
+						WorkerSession.Stop();
 						bool pushed = await gitService.CommitAndPushAsync(repoDir, $"[KanBeast] Work on ticket {ticket.Id}");
 						if (pushed)
 						{

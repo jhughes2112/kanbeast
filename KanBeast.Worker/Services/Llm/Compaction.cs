@@ -129,7 +129,7 @@ public class CompactionSummarizer : ICompaction
 			""";
 
 		ToolContext parentContext = conversation.ToolContext;
-		ToolContext compactionContext = new ToolContext(parentContext.ApiClient, parentContext.TicketHolder, parentContext.WorkDir, conversation, parentContext.CurrentTaskId, parentContext.CurrentSubtaskId, null, cancellationToken);
+		ToolContext compactionContext = new ToolContext(conversation, parentContext.CurrentTaskId, parentContext.CurrentSubtaskId, parentContext.Memories);
 		string compactLogDir = conversation.LogDirectory;
 		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.LogPrefix) ? $"{conversation.LogPrefix}-compact" : string.Empty;
 		ICompaction noCompaction = new CompactionNone();
@@ -237,19 +237,19 @@ public class CompactionSummarizer : ICompaction
 
 		if (string.IsNullOrWhiteSpace(content))
 		{
-			result = new ToolResult("Error: Content cannot be empty");
+			result = new ToolResult("Error: Content cannot be empty", false);
 		}
 		else
 		{
 			string trimmedLabel = label.Trim().ToUpperInvariant();
 			if (!ValidLabels.Contains(trimmedLabel))
 			{
-				result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM");
+				result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM", false);
 			}
 			else
 			{
 				context.CompactionTarget!.AddMemory(trimmedLabel, content.Trim());
-				result = new ToolResult($"Added [{trimmedLabel}]: {content.Trim()}");
+				result = new ToolResult($"Added [{trimmedLabel}]: {content.Trim()}", false);
 			}
 		}
 
@@ -266,25 +266,25 @@ public class CompactionSummarizer : ICompaction
 
 		if (string.IsNullOrWhiteSpace(memoryToRemove))
 		{
-			result = new ToolResult("Error: Memory text cannot be empty");
+			result = new ToolResult("Error: Memory text cannot be empty", false);
 		}
 		else
 		{
 			string trimmedLabel = label.Trim().ToUpperInvariant();
 			if (!ValidLabels.Contains(trimmedLabel))
 			{
-				result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM");
+				result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM", false);
 			}
 			else
 			{
 				bool removed = context.CompactionTarget!.RemoveMemory(trimmedLabel, memoryToRemove);
 				if (removed)
 				{
-					result = new ToolResult($"Removed [{trimmedLabel}] memory matching: {memoryToRemove}");
+					result = new ToolResult($"Removed [{trimmedLabel}] memory matching: {memoryToRemove}", false);
 				}
 				else
 				{
-					result = new ToolResult($"No matching memory found in [{trimmedLabel}] (need >5 character match at start)");
+					result = new ToolResult($"No matching memory found in [{trimmedLabel}] (need >5 character match at start)", false);
 				}
 			}
 		}
@@ -297,7 +297,7 @@ public class CompactionSummarizer : ICompaction
 		[Description("Concise summary of the work done, as it pertains to solving the original task")] string summary,
 		ToolContext context)
 	{
-		ToolResult result = new ToolResult(summary.Trim(), true, "summarize_history");
+		ToolResult result = new ToolResult(summary.Trim(), true);
 		return Task.FromResult(result);
 	}
 

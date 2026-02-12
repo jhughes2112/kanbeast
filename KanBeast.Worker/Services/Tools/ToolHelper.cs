@@ -40,7 +40,7 @@ public static class ToolHelper
             }
 
             ToolResult toolResult = await taskToolResult;
-            return new ToolResult(TruncateResponse(toolResult.Response), toolResult.ExitLoop, toolName);
+            return new ToolResult(TruncateResponse(toolResult.Response), toolResult.ExitLoop);
         };
 
         tools.Add(new Tool
@@ -154,7 +154,7 @@ public static class ToolHelper
             }
             else if (param.ParameterType == typeof(CancellationToken))
             {
-                result[i] = context.CancellationToken;
+                result[i] = WorkerSession.CancellationToken;
             }
             else if (args.TryGetPropertyValue(paramName, out JsonNode? node) && node != null)
             {

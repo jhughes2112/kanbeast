@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using KanBeast.Worker.Services;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Tests;
@@ -14,7 +15,9 @@ public static class FileToolsTests
 
 		try
 		{
-			ToolContext tc = new ToolContext(null, null, tempDir, null, null, null, null, CancellationToken.None);
+			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None);
+			LlmMemories testMemories = new LlmMemories();
+			ToolContext tc = new ToolContext(null, null, null, testMemories);
 
 			TestWriteAndRead(ctx, tc, tempDir);
 			TestCatNFormat(ctx, tc, tempDir);

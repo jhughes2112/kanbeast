@@ -27,16 +27,16 @@ public static class SearchTools
 		[Description("Absolute full path to the directory to search from.")] string path,
 		ToolContext context)
 	{
-		CancellationToken cancellationToken = context.CancellationToken;
+		CancellationToken cancellationToken = WorkerSession.CancellationToken;
 		ToolResult result;
 
 		if (string.IsNullOrWhiteSpace(pattern))
 		{
-			result = new ToolResult("Error: Pattern cannot be empty");
+			result = new ToolResult("Error: Pattern cannot be empty", false);
 		}
 		else if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path))
 		{
-			result = new ToolResult($"Error: Path must be an absolute directory path: {path}");
+			result = new ToolResult($"Error: Path must be an absolute directory path: {path}", false);
 		}
 		else
 		{
@@ -44,7 +44,7 @@ public static class SearchTools
 
 			if (!Directory.Exists(searchDir))
 			{
-				result = new ToolResult($"Error: Directory not found: {path}");
+				result = new ToolResult($"Error: Directory not found: {path}", false);
 			}
 			else
 			{
@@ -70,7 +70,7 @@ public static class SearchTools
 
 					if (matches.Count == 0)
 					{
-						result = new ToolResult($"No files found matching: {pattern}");
+						result = new ToolResult($"No files found matching: {pattern}", false);
 					}
 					else
 					{
@@ -82,12 +82,12 @@ public static class SearchTools
 							sb.AppendLine(relativePath);
 						}
 
-						result = new ToolResult(sb.ToString());
+						result = new ToolResult(sb.ToString(), false);
 					}
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: {ex.Message}");
+					result = new ToolResult($"Error: {ex.Message}", false);
 				}
 			}
 		}
@@ -106,12 +106,12 @@ public static class SearchTools
 		[Description("List of glob patterns to ignore")] string[] ignore,
 		ToolContext context)
 	{
-		CancellationToken cancellationToken = context.CancellationToken;
+		CancellationToken cancellationToken = WorkerSession.CancellationToken;
 		ToolResult result;
 
 		if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path))
 		{
-			result = new ToolResult($"Error: Path must be an absolute directory path: {path}");
+			result = new ToolResult($"Error: Path must be an absolute directory path: {path}", false);
 		}
 		else
 		{
@@ -119,7 +119,7 @@ public static class SearchTools
 
 			if (!Directory.Exists(targetDir))
 			{
-				result = new ToolResult($"Error: Directory not found: {path}");
+				result = new ToolResult($"Error: Directory not found: {path}", false);
 			}
 			else
 			{
@@ -186,16 +186,16 @@ public static class SearchTools
 
 					if (sb.Length == 0)
 					{
-						result = new ToolResult($"Directory is empty: {path}");
+						result = new ToolResult($"Directory is empty: {path}", false);
 					}
 					else
 					{
-						result = new ToolResult(sb.ToString());
+						result = new ToolResult(sb.ToString(), false);
 					}
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: {ex.Message}");
+					result = new ToolResult($"Error: {ex.Message}", false);
 				}
 			}
 		}
@@ -221,16 +221,16 @@ public static class SearchTools
 		[Description("Limit output to first N lines/entries, equivalent to \"| head -N\". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Pass empty string for no limit.")] string maxResults,
 		ToolContext toolContext)
 	{
-		CancellationToken cancellationToken = toolContext.CancellationToken;
+		CancellationToken cancellationToken = WorkerSession.CancellationToken;
 		ToolResult result;
 
 		if (string.IsNullOrWhiteSpace(pattern))
 		{
-			result = new ToolResult("Error: Pattern cannot be empty");
+			result = new ToolResult("Error: Pattern cannot be empty", false);
 		}
 		else if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path))
 		{
-			result = new ToolResult($"Error: Path must be absolute: {path}");
+			result = new ToolResult($"Error: Path must be absolute: {path}", false);
 		}
 		else
 		{
@@ -241,7 +241,7 @@ public static class SearchTools
 
 			if (!isFile && !isDir)
 			{
-				result = new ToolResult($"Error: Path not found: {path}");
+				result = new ToolResult($"Error: Path not found: {path}", false);
 			}
 			else
 			{
@@ -415,7 +415,7 @@ public static class SearchTools
 
 					if (sb.Length == 0)
 					{
-						result = new ToolResult($"No matches found for: {pattern}");
+						result = new ToolResult($"No matches found for: {pattern}", false);
 					}
 					else
 					{
@@ -424,16 +424,16 @@ public static class SearchTools
 							sb.AppendLine($"Total: {totalMatches} matches");
 						}
 
-						result = new ToolResult(sb.ToString());
+						result = new ToolResult(sb.ToString(), false);
 					}
 				}
 				catch (RegexParseException ex)
 				{
-					result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}");
+					result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}", false);
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: {ex.Message}");
+					result = new ToolResult($"Error: {ex.Message}", false);
 				}
 			}
 		}

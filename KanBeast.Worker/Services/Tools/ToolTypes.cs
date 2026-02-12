@@ -9,41 +9,31 @@ public enum LlmRole
 	Planning,
 	QA,
 	Developer,
-	Compaction
+	Compaction,
+	SubAgent
 }
 
-// Carries per-conversation dependencies into every tool call.
+// Per-conversation state for tool calls.
 public class ToolContext
 {
-	public CancellationToken CancellationToken { get; }
-	public IKanbanApiClient? ApiClient { get; }
-	public TicketHolder? TicketHolder { get; }
-	public string WorkDir { get; }
 	public HashSet<string> ReadFiles { get; }
 	public LlmConversation? CompactionTarget { get; }
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
 	public ShellState? Shell { get; internal set; }
+	public LlmMemories Memories { get; }
 
 	public ToolContext(
-		IKanbanApiClient? apiClient,
-		TicketHolder? ticketHolder,
-		string workDir,
 		LlmConversation? compactionTarget,
 		string? currentTaskId,
 		string? currentSubtaskId,
-		ShellState? shell,
-		CancellationToken cancellationToken)
+		LlmMemories memories)
 	{
-		ApiClient = apiClient;
-		TicketHolder = ticketHolder;
-		WorkDir = workDir;
 		ReadFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		CompactionTarget = compactionTarget;
 		CurrentTaskId = currentTaskId;
 		CurrentSubtaskId = currentSubtaskId;
-		Shell = shell;
-		CancellationToken = cancellationToken;
+		Memories = memories;
 	}
 
 	// Disposes and removes the persistent shell if one exists.
@@ -62,13 +52,11 @@ public readonly struct ToolResult
 {
 	public string Response { get; init; }
 	public bool ExitLoop { get; init; }
-	public string? ToolName { get; init; }
 
-	public ToolResult(string response, bool exitLoop = false, string? toolName = null)
+	public ToolResult(string response, bool exitLoop)
 	{
 		Response = response;
 		ExitLoop = exitLoop;
-		ToolName = toolName;
 	}
 }
 

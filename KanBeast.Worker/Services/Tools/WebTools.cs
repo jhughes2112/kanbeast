@@ -16,16 +16,16 @@ public static class WebTools
         [Description("The fully-formed URL to fetch content from.")] string url,
         ToolContext context)
     {
-        CancellationToken cancellationToken = context.CancellationToken;
+        CancellationToken cancellationToken = WorkerSession.CancellationToken;
         ToolResult result;
 
         if (string.IsNullOrWhiteSpace(url))
         {
-            result = new ToolResult("Error: URL cannot be empty.");
+            result = new ToolResult("Error: URL cannot be empty.", false);
         }
         else if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
         {
-            result = new ToolResult($"Error: Invalid URL format: {url}");
+            result = new ToolResult($"Error: Invalid URL format: {url}", false);
         }
         else
         {
@@ -37,7 +37,7 @@ public static class WebTools
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    result = new ToolResult($"Error: HTTP {(int)response.StatusCode} {response.ReasonPhrase} for URL: {url}");
+                    result = new ToolResult($"Error: HTTP {(int)response.StatusCode} {response.ReasonPhrase} for URL: {url}", false);
                 }
                 else
                 {
@@ -51,25 +51,25 @@ public static class WebTools
 
                     if (string.IsNullOrWhiteSpace(text))
                     {
-                        result = new ToolResult($"Error: No readable text content found at URL: {url}");
+                        result = new ToolResult($"Error: No readable text content found at URL: {url}", false);
                     }
                     else
                     {
-                        result = new ToolResult(text);
+                        result = new ToolResult(text, false);
                     }
                 }
             }
             catch (OperationCanceledException)
             {
-                result = new ToolResult($"Error: Request timed out or cancelled for URL: {url}");
+                result = new ToolResult($"Error: Request timed out or cancelled for URL: {url}", false);
             }
             catch (HttpRequestException ex)
             {
-                result = new ToolResult($"Error: Network error fetching URL {url}: {ex.Message}");
+                result = new ToolResult($"Error: Network error fetching URL {url}: {ex.Message}", false);
             }
             catch (Exception ex)
             {
-                result = new ToolResult($"Error: Failed to fetch URL {url}: {ex.Message}");
+                result = new ToolResult($"Error: Failed to fetch URL {url}: {ex.Message}", false);
             }
         }
 
@@ -82,12 +82,12 @@ public static class WebTools
         [Description("Maximum number of results to return (1-20). Pass empty string for default of 10.")] string maxResults,
         ToolContext context)
     {
-        CancellationToken cancellationToken = context.CancellationToken;
+        CancellationToken cancellationToken = WorkerSession.CancellationToken;
         ToolResult result;
 
         if (string.IsNullOrWhiteSpace(query))
         {
-            result = new ToolResult("Error: Search query cannot be empty.");
+            result = new ToolResult("Error: Search query cannot be empty.", false);
         }
         else
         {
@@ -109,19 +109,19 @@ public static class WebTools
 
             try
             {
-                result = new ToolResult(await SearchDuckDuckGoAsync(query, limit, cancellationToken));
+                result = new ToolResult(await SearchDuckDuckGoAsync(query, limit, cancellationToken), false);
             }
             catch (OperationCanceledException)
             {
-                result = new ToolResult($"Error: Search request timed out or cancelled for query: {query}");
+                result = new ToolResult($"Error: Search request timed out or cancelled for query: {query}", false);
             }
             catch (HttpRequestException ex)
             {
-                result = new ToolResult($"Error: Network error during search: {ex.Message}");
+                result = new ToolResult($"Error: Network error during search: {ex.Message}", false);
             }
             catch (Exception ex)
             {
-                result = new ToolResult($"Error: Search failed: {ex.Message}");
+                result = new ToolResult($"Error: Search failed: {ex.Message}", false);
             }
         }
 

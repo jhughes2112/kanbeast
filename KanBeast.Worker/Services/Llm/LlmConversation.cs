@@ -340,28 +340,23 @@ public class LlmConversation
     // Records the cost of an LLM call and syncs it with the server, updating the ticket holder.
     public async Task RecordCostAsync(decimal cost, CancellationToken cancellationToken)
     {
-        if (cost > 0 && ToolContext.ApiClient != null && ToolContext.TicketHolder != null)
+        if (cost > 0)
         {
-            TicketDto? updated = await ToolContext.ApiClient.AddLlmCostAsync(ToolContext.TicketHolder.Ticket.Id, cost, cancellationToken);
-            ToolContext.TicketHolder.Update(updated);
+            TicketDto? updated = await WorkerSession.ApiClient.AddLlmCostAsync(WorkerSession.TicketHolder.Ticket.Id, cost, cancellationToken);
+            WorkerSession.TicketHolder.Update(updated);
         }
     }
 
     // Returns the remaining budget for this conversation based on the ticket's max cost.
     public decimal GetRemainingBudget()
     {
-        if (ToolContext.TicketHolder == null)
-        {
-            return 0;
-        }
-
-        decimal maxCost = ToolContext.TicketHolder.Ticket.MaxCost;
+        decimal maxCost = WorkerSession.TicketHolder.Ticket.MaxCost;
         if (maxCost <= 0)
         {
             return 0;
         }
 
-        decimal currentCost = ToolContext.TicketHolder.Ticket.LlmCost;
+        decimal currentCost = WorkerSession.TicketHolder.Ticket.LlmCost;
         decimal remaining = maxCost - currentCost;
         return remaining > 0 ? remaining : 0;
     }
