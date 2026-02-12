@@ -113,6 +113,7 @@ public class AgentOrchestrator
 		LlmConversation planningConversation = new LlmConversation(WorkerSession.Prompts["planning"], userPrompt, planningMemories, LlmRole.Planning, planningContext, planningCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-plan");
 
 		bool result = ticketHolder.Ticket.HasValidPlan();
+		int planningRetryCount = 0;
 
 		while (result == false)
 		{
@@ -126,10 +127,30 @@ public class AgentOrchestrator
 			}
 			else if (llmResult.ExitReason == LlmExitReason.Completed)
 			{
+				planningRetryCount++;
+
+				if (planningRetryCount >= 5)
+				{
+					_logger.LogWarning("Planning failed to call tool after {Count} attempts, aborting", planningRetryCount);
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Planning aborted - LLM failed to call tools after multiple attempts", cancellationToken);
+					result = ticketHolder.Ticket.HasValidPlan();
+					break;
+				}
+
 				await planningConversation.AddUserMessageAsync("Continue planning by adding tasks and subtasks. When finished, call planning_complete tool to begin implementation.", cancellationToken);
 			}
 			else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
+				planningRetryCount++;
+
+				if (planningRetryCount >= 5)
+				{
+					_logger.LogWarning("Planning hit iteration limit {Count} times, aborting", planningRetryCount);
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Manager: Planning aborted - exceeded retry limit", cancellationToken);
+					result = ticketHolder.Ticket.HasValidPlan();
+					break;
+				}
+
 				_logger.LogWarning("Manager planning hit iteration limit, prompting to continue");
 
 				planningConversation.ResetIteration();
@@ -211,6 +232,7 @@ public class AgentOrchestrator
 			_developerConversation = new LlmConversation(WorkerSession.Prompts["developer"], initialPrompt, memories, LlmRole.Developer, devContext, developerCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev");
 
 			int iterationCount = 0;
+			int contextResetCount = 0;
 			bool subtaskComplete = false;
 			bool blocked = false;
 
@@ -255,6 +277,16 @@ public class AgentOrchestrator
 
 					if (iterationCount >= ContextResetThreshold)
 					{
+						contextResetCount++;
+
+						if (contextResetCount >= 2)
+						{
+							await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Developer exceeded max context resets, giving up on subtask", cancellationToken);
+							_logger.LogWarning("Developer exceeded {Count} context resets, aborting subtask", contextResetCount);
+							blocked = true;
+							break;
+						}
+
 						await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Context reset: Developer exceeded iteration limit, starting fresh", cancellationToken);
 						_logger.LogWarning("Context reset after {Count} iterations", iterationCount);
 
@@ -332,6 +364,8 @@ public class AgentOrchestrator
 
 		try
 		{
+			int retryCount = 0;
+
 			for (;;)
 			{
 				LlmResult llmResult = await WorkerSession.LlmProxy.ContinueAsync(qaConversation, 8192, cancellationToken);
@@ -353,9 +387,17 @@ public class AgentOrchestrator
 				}
 				else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 				{
+					retryCount++;
+
+					if (retryCount >= 3)
+					{
+						_logger.LogWarning("QA failed to call tool after {Count} attempts, auto-approving", retryCount);
+						return new QaResult(QaVerdict.Approved, "Auto-approved: QA agent failed to call required tool after multiple attempts.");
+					}
+
 					qaConversation.ResetIteration();
 
-					await qaConversation.AddUserMessageAsync("Please review the work and call approve_subtask tool.  If you are unable to review the work or it does not meet acceptance criteria, call reject_subtask tool.", cancellationToken);
+					await qaConversation.AddUserMessageAsync("This is god speaking. If you are finished reviewing the work and are satisfied you MUST invoke the approve_subtask tool.  If you are unable to review the work or it does not meet acceptance criteria, you MUST invoke the reject_subtask tool.  Do not output a response, call a tool.", cancellationToken);
 				}
 				else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 				{

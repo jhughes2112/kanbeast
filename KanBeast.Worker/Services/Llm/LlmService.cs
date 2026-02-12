@@ -194,12 +194,14 @@ public class LlmService
 	private ToolChoiceMode _toolChoiceMode = ToolChoiceMode.Required;
 	private bool _hasSucceeded;
 	private DateTimeOffset _availableAt = DateTimeOffset.MinValue;
+	private bool _isPermanentlyDown;
 
 	private enum ToolChoiceMode { Required, Auto, Omit }
 
 	public string Model => _config.Model;
 	public int ContextLength => _config.ContextLength;
-	public bool IsAvailable => DateTimeOffset.UtcNow >= _availableAt;
+	public bool IsAvailable => !_isPermanentlyDown && DateTimeOffset.UtcNow >= _availableAt;
+	public bool IsPermanentlyDown => _isPermanentlyDown;
 	public DateTimeOffset AvailableAt => _availableAt;
 
 	public LlmService(LLMConfig config)
@@ -410,7 +412,7 @@ public class LlmService
 				else
 				{
 					// Non-recoverable client error (4xx, not tool_choice, not rate limit).
-					MarkDown();
+					MarkPermanentlyDown();
 					return (new LlmResult
 					{
 						ExitReason = LlmExitReason.LlmCallFailed,
@@ -507,6 +509,12 @@ public class LlmService
 	{
 		_availableAt = DateTimeOffset.UtcNow + DownCooldown;
 		Console.WriteLine($"LLM {_config.Model} marked down until {_availableAt:HH:mm:ss}");
+	}
+
+	private void MarkPermanentlyDown()
+	{
+		_isPermanentlyDown = true;
+		Console.WriteLine($"LLM {_config.Model} permanently disabled due to non-recoverable error");
 	}
 
 	private DateTimeOffset ComputeRetryAfterTime(HttpResponseMessage response, string responseBody)

@@ -53,12 +53,17 @@ public class LlmProxy
 
 			if (service == null)
 			{
+				if (AreAllServicesPermanentlyDown())
+				{
+					return new LlmResult { ExitReason = LlmExitReason.LlmCallFailed, ErrorMessage = "All configured LLMs are permanently down" };
+				}
+
 				DateTimeOffset soonest = FindSoonestAvailableTime();
 				TimeSpan waitTime = soonest - DateTimeOffset.UtcNow;
 
 				if (waitTime > TimeSpan.FromMinutes(10))
 				{
-					return new LlmResult { ExitReason = LlmExitReason.LlmCallFailed, ErrorMessage = "All configured LLMs are down" };
+					return new LlmResult { ExitReason = LlmExitReason.LlmCallFailed, ErrorMessage = "All configured LLMs are unavailable for an extended period" };
 				}
 
 				if (waitTime > TimeSpan.Zero)
@@ -125,5 +130,18 @@ public class LlmProxy
 		}
 
 		return soonest;
+	}
+
+	private bool AreAllServicesPermanentlyDown()
+	{
+		foreach (LlmService service in _services)
+		{
+			if (!service.IsPermanentlyDown)
+			{
+				return false;
+			}
+		}
+
+		return true;
 	}
 }
