@@ -10,7 +10,7 @@ public static class WebToolsTests
 		Console.WriteLine("  WebToolsTests");
 
 		TestStripHtmlTags(ctx);
-		TestParseGoogleResults(ctx);
+		TestParseDuckDuckGoResults(ctx);
 		TestFormatSearchResults(ctx);
 	}
 
@@ -53,37 +53,28 @@ public static class WebToolsTests
 		ctx.Assert(!nested.Contains("<"), "StripHtmlTags: no angle brackets in output");
 	}
 
-	private static void TestParseGoogleResults(TestContext ctx)
+	private static void TestParseDuckDuckGoResults(TestContext ctx)
 	{
 		Type[] parseTypes = [typeof(string), typeof(int)];
 
-		// Valid JSON with items.
-		string validJson = "{\"items\":[{\"title\":\"Test Page\",\"link\":\"https://example.com\",\"snippet\":\"A test snippet\"},{\"title\":\"Page Two\",\"link\":\"https://two.com\",\"snippet\":\"Second result\"}]}";
-		object? parsed = Reflect.Static(typeof(WebTools), "ParseGoogleResults", parseTypes, [validJson, 10]);
+		// Build a minimal DDG HTML snippet with result__a and result__snippet classes.
+		string html = "<a class=\"result__a\" href=\"https://example.com\">Example Title</a><a class=\"result__snippet\">A snippet</a>"
+			+ "<a class=\"result__a\" href=\"https://two.com\">Page Two</a><a class=\"result__snippet\">Second</a>";
+
+		object? parsed = Reflect.Static(typeof(WebTools), "ParseDuckDuckGoResults", parseTypes, [html, 10]);
 		System.Collections.IList? resultList = parsed as System.Collections.IList;
-		ctx.AssertNotNull(resultList, "ParseGoogleResults: valid JSON returns list");
-		ctx.AssertEqual(2, resultList?.Count ?? -1, "ParseGoogleResults: two items parsed");
+		ctx.AssertNotNull(resultList, "ParseDuckDuckGoResults: valid HTML returns list");
+		ctx.AssertEqual(2, resultList?.Count ?? -1, "ParseDuckDuckGoResults: two items parsed");
 
 		// maxResults limits output.
-		object? limited = Reflect.Static(typeof(WebTools), "ParseGoogleResults", parseTypes, [validJson, 1]);
+		object? limited = Reflect.Static(typeof(WebTools), "ParseDuckDuckGoResults", parseTypes, [html, 1]);
 		System.Collections.IList? limitedList = limited as System.Collections.IList;
-		ctx.AssertEqual(1, limitedList?.Count ?? -1, "ParseGoogleResults: maxResults respected");
+		ctx.AssertEqual(1, limitedList?.Count ?? -1, "ParseDuckDuckGoResults: maxResults respected");
 
-		// Missing items key returns empty.
-		object? noItems = Reflect.Static(typeof(WebTools), "ParseGoogleResults", parseTypes, ["{\"searchInformation\":{}}", 10]);
-		System.Collections.IList? noItemsList = noItems as System.Collections.IList;
-		ctx.AssertEqual(0, noItemsList?.Count ?? -1, "ParseGoogleResults: no items key returns empty");
-
-		// Empty items array.
-		object? emptyItems = Reflect.Static(typeof(WebTools), "ParseGoogleResults", parseTypes, ["{\"items\":[]}", 10]);
-		System.Collections.IList? emptyList = emptyItems as System.Collections.IList;
-		ctx.AssertEqual(0, emptyList?.Count ?? -1, "ParseGoogleResults: empty items returns empty");
-
-		// Items missing title or link are skipped.
-		string partialJson = "{\"items\":[{\"title\":\"\",\"link\":\"https://a.com\",\"snippet\":\"x\"},{\"title\":\"Valid\",\"link\":\"https://b.com\",\"snippet\":\"y\"}]}";
-		object? partial = Reflect.Static(typeof(WebTools), "ParseGoogleResults", parseTypes, [partialJson, 10]);
-		System.Collections.IList? partialList = partial as System.Collections.IList;
-		ctx.AssertEqual(1, partialList?.Count ?? -1, "ParseGoogleResults: items without title skipped");
+		// No matching elements returns empty.
+		object? noResults = Reflect.Static(typeof(WebTools), "ParseDuckDuckGoResults", parseTypes, ["<div>no results here</div>", 10]);
+		System.Collections.IList? emptyList = noResults as System.Collections.IList;
+		ctx.AssertEqual(0, emptyList?.Count ?? -1, "ParseDuckDuckGoResults: no matches returns empty");
 	}
 
 	private static void TestFormatSearchResults(TestContext ctx)
@@ -93,9 +84,9 @@ public static class WebToolsTests
 		Type listType = typeof(List<>).MakeGenericType(searchResultType);
 		Type[] formatTypes = [listType];
 
-		// Parse real results then format them (integration test through both methods).
-		string json = "{\"items\":[{\"title\":\"Example\",\"link\":\"https://example.com\",\"snippet\":\"A snippet\"}]}";
-		object? parsed = Reflect.Static(typeof(WebTools), "ParseGoogleResults", [typeof(string), typeof(int)], [json, 10]);
+		// Build a result via ParseDuckDuckGoResults then format it.
+		string html = "<a class=\"result__a\" href=\"https://example.com\">Example</a><a class=\"result__snippet\">A snippet</a>";
+		object? parsed = Reflect.Static(typeof(WebTools), "ParseDuckDuckGoResults", [typeof(string), typeof(int)], [html, 10]);
 
 		string? formatted = (string?)Reflect.Static(typeof(WebTools), "FormatSearchResults", formatTypes, [parsed!]);
 		ctx.AssertNotNull(formatted, "FormatSearchResults: returns string");

@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using KanBeast.Worker.Models;
+using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
 
@@ -39,11 +41,13 @@ public class LlmConversation
     private string _logPath;
     private int _rewriteCount;
 
-    public LlmConversation(string systemPrompt, string userPrompt, LlmMemories memories, ICompaction compaction, bool jsonLogging, string logDirectory, string logPrefix)
+    public LlmConversation(string systemPrompt, string userPrompt, LlmMemories memories, LlmRole role, ToolContext toolContext, ICompaction compaction, bool jsonLogging, string logDirectory, string logPrefix)
     {
         StartedAt = DateTime.UtcNow.ToString("O");
         CompletedAt = string.Empty;
         Messages = new List<ChatMessage>();
+        Role = role;
+        ToolContext = toolContext;
         _memories = memories;
         _chapterSummaries = new List<string>();
         _compaction = compaction;
@@ -128,6 +132,12 @@ public class LlmConversation
 
 	[JsonIgnore]
 	public string LogPrefix => _logPrefix;
+
+	[JsonIgnore]
+	public LlmRole Role { get; set; }
+
+	[JsonIgnore]
+	public ToolContext ToolContext { get; }
 
 	[JsonIgnore]
 	public int Iteration { get; private set; }
@@ -325,6 +335,35 @@ public class LlmConversation
                 await AppendMessageToLogAsync(msg, null, cancellationToken);
             }
         }
+    }
+
+    // Records the cost of an LLM call and syncs it with the server, updating the ticket holder.
+    public async Task RecordCostAsync(decimal cost, CancellationToken cancellationToken)
+    {
+        if (cost > 0 && ToolContext.ApiClient != null && ToolContext.TicketHolder != null)
+        {
+            TicketDto? updated = await ToolContext.ApiClient.AddLlmCostAsync(ToolContext.TicketHolder.Ticket.Id, cost, cancellationToken);
+            ToolContext.TicketHolder.Update(updated);
+        }
+    }
+
+    // Returns the remaining budget for this conversation based on the ticket's max cost.
+    public decimal GetRemainingBudget()
+    {
+        if (ToolContext.TicketHolder == null)
+        {
+            return 0;
+        }
+
+        decimal maxCost = ToolContext.TicketHolder.Ticket.MaxCost;
+        if (maxCost <= 0)
+        {
+            return 0;
+        }
+
+        decimal currentCost = ToolContext.TicketHolder.Ticket.LlmCost;
+        decimal remaining = maxCost - currentCost;
+        return remaining > 0 ? remaining : 0;
     }
 
     public void MarkCompleted()

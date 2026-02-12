@@ -8,14 +8,19 @@ namespace KanBeast.Worker.Services.Tools;
 public static class ToolHelper
 {
     // Adds a tool from a method to the tools list.
-    public static void AddTool(List<Tool> tools, object instance, string methodName)
+    // For static methods, pass null as instance and specify the type.
+    public static void AddTool(List<Tool> tools, object? instance, string methodName, Type? type = null)
     {
-        Type type = instance.GetType();
-        MethodInfo? method = type.GetMethod(methodName, BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
+        Type targetType = type ?? instance?.GetType() ?? throw new ArgumentException("Either instance or type must be provided");
+        BindingFlags flags = instance == null 
+            ? BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static
+            : BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance;
+
+        MethodInfo? method = targetType.GetMethod(methodName, flags);
 
         if (method == null)
         {
-            throw new ArgumentException($"Method '{methodName}' not found on type '{type.Name}'");
+            throw new ArgumentException($"Method '{methodName}' not found on type '{targetType.Name}'");
         }
 
         string toolName = ToSnakeCase(methodName.Replace("Async", ""));
@@ -24,9 +29,9 @@ public static class ToolHelper
 
         JsonObject parameters = BuildParametersSchema(method);
 
-        Func<JsonObject, CancellationToken, Task<ToolResult>> handler = async (JsonObject args, CancellationToken cancellationToken) =>
+        Func<JsonObject, ToolContext, Task<ToolResult>> handler = async (JsonObject args, ToolContext context) =>
         {
-            object?[] methodArgs = BuildMethodArguments(method, args, cancellationToken);
+            object?[] methodArgs = BuildMethodArguments(method, args, context);
             object? result = method.Invoke(instance, methodArgs);
 
             if (result is not Task<ToolResult> taskToolResult)
@@ -55,11 +60,22 @@ public static class ToolHelper
     }
 
     // Adds multiple tools from methods.
-    public static void AddTools(List<Tool> tools, object instance, params string[] methodNames)
+    // For static methods, pass null as instance and specify the type.
+    public static void AddTools(List<Tool> tools, object? instance, params string[] methodNames)
+    {
+        Type? type = instance?.GetType();
+        foreach (string methodName in methodNames)
+        {
+            AddTool(tools, instance, methodName, type);
+        }
+    }
+
+    // Overload for specifying type explicitly (for static methods).
+    public static void AddTools(List<Tool> tools, Type type, params string[] methodNames)
     {
         foreach (string methodName in methodNames)
         {
-            AddTool(tools, instance, methodName);
+            AddTool(tools, null, methodName, type);
         }
     }
 
@@ -70,7 +86,7 @@ public static class ToolHelper
 
         foreach (ParameterInfo param in method.GetParameters())
         {
-            if (param.Name == null || param.ParameterType == typeof(CancellationToken))
+            if (param.Name == null || param.ParameterType == typeof(CancellationToken) || param.ParameterType == typeof(ToolContext))
             {
                 continue;
             }
@@ -90,6 +106,13 @@ public static class ToolHelper
                 paramSchema["items"] = new JsonObject
                 {
                     ["type"] = GetJsonType(elementType ?? typeof(string))
+                };
+            }
+            else if (param.ParameterType == typeof(JsonArray))
+            {
+                paramSchema["items"] = new JsonObject
+                {
+                    ["type"] = "object"
                 };
             }
 
@@ -115,7 +138,7 @@ public static class ToolHelper
         return schema;
     }
 
-    private static object?[] BuildMethodArguments(MethodInfo method, JsonObject args, CancellationToken cancellationToken)
+    private static object?[] BuildMethodArguments(MethodInfo method, JsonObject args, ToolContext context)
     {
         ParameterInfo[] parameters = method.GetParameters();
         object?[] result = new object?[parameters.Length];
@@ -125,9 +148,13 @@ public static class ToolHelper
             ParameterInfo param = parameters[i];
             string paramName = param.Name ?? $"arg{i}";
 
-            if (param.ParameterType == typeof(CancellationToken))
+            if (param.ParameterType == typeof(ToolContext))
             {
-                result[i] = cancellationToken;
+                result[i] = context;
+            }
+            else if (param.ParameterType == typeof(CancellationToken))
+            {
+                result[i] = context.CancellationToken;
             }
             else if (args.TryGetPropertyValue(paramName, out JsonNode? node) && node != null)
             {
@@ -172,10 +199,24 @@ public static class ToolHelper
         {
             if (node is JsonArray arr)
             {
-                return arr.Select(n => n?.ToString() ?? "").ToArray();
+                string[] items = new string[arr.Count];
+                for (int i = 0; i < arr.Count; i++)
+                {
+                    items[i] = arr[i]?.ToString() ?? "";
+                }
+                return items;
             }
 
             return Array.Empty<string>();
+        }
+        else if (targetType == typeof(JsonArray))
+        {
+            if (node is JsonArray arr)
+            {
+                return arr;
+            }
+
+            return new JsonArray();
         }
         else
         {
@@ -202,6 +243,10 @@ public static class ToolHelper
             return "boolean";
         }
         else if (type.IsArray)
+        {
+            return "array";
+        }
+        else if (type == typeof(JsonArray))
         {
             return "array";
         }
@@ -254,11 +299,11 @@ public static class ToolHelper
         return result.ToString();
     }
 
-    private const int MaxResponseLength = 4000;
-    private const int TruncateHeadLength = 2000;
-    private const int TruncateTailLength = 2000;
+    private const int MaxResponseLength = 160000;
+    private const int TruncateHeadLength = 80000;
+    private const int TruncateTailLength = 80000;
 
-    // Truncates long responses to first 2000 and last 2000 characters to save context window.
+    // Truncates long responses, keeping the first and last portions to save context window.
     private static string TruncateResponse(string response)
     {
         if (string.IsNullOrEmpty(response) || response.Length <= MaxResponseLength)

@@ -1,76 +1,51 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Text;
 
 namespace KanBeast.Worker.Services.Tools;
 
 // Tools for LLM to execute shell commands.
 // Default CWD is the git repository folder. Uses bash (via WSL on Windows).
-public class ShellTools : IToolProvider
+public static class ShellTools
 {
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
+	private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
 
-    private readonly string _workDir;
-    private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
+	[Description("""
+		Executes a single bash command and immediately returns the exit code, stdout, and stderr.
+		Output format is 'Exit Code: N' followed by 'Output:\\n...' and 'Stderr:\\n...' sections when present.
+		Commands time out after 60 seconds. Output is truncated if very long.
 
-    public ShellTools(string workDir)
-    {
-        _workDir = workDir;
-        _toolsByRole = BuildToolsByRole();
-    }
+		Do NOT use for file operations — use read_file, write_file, edit_file, multi_edit_file, list_directory instead of cat, head, tail, awk, sed, ls.
+		Do NOT use for search — use glob and grep tools instead of find, grep, rg.
+		Do NOT use interactive flags like git rebase -i or git add -i; they require TTY input that is not available.
+		Reserve run_command for: builds, tests, git commands, package management, installing tools, and system utilities.
 
-    private string ResolvePath(string path)
-    {
-        if (Path.IsPathRooted(path))
-        {
-            return Path.GetFullPath(path);
-        }
-
-        return Path.GetFullPath(Path.Combine(_workDir, path));
-    }
-
-    private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
-    {
-        List<Tool> sharedTools = new List<Tool>();
-        ToolHelper.AddTools(sharedTools, this, nameof(RunCommandAsync));
-
-		Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
-		{
-			[LlmRole.Planning] = sharedTools,
-			[LlmRole.QA] = sharedTools,
-			[LlmRole.Developer] = sharedTools,
-			[LlmRole.Compaction] = new List<Tool>()
-		};
-
-        return result;
-    }
-
-    public void AddTools(List<Tool> tools, LlmRole role)
-    {
-        if (_toolsByRole.TryGetValue(role, out List<Tool>? roleTools))
-        {
-            tools.AddRange(roleTools);
-        }
-        else
-        {
-            throw new ArgumentException($"Unhandled role: {role}");
-        }
-    }
-
-	[Description("Execute a shell command.")]
-	public async Task<ToolResult> RunCommandAsync(
-		[Description("Command to execute")] string command,
-		[Description("Working directory (or empty for repository root)")] string workDir,
-		CancellationToken cancellationToken)
+		Best practices:
+		- Always quote file paths containing spaces with double quotes.
+		- Use absolute paths to avoid working-directory confusion.
+		- Before creating directories or files, verify the parent exists with list_directory.
+		- Prefer the persistent shell (start_shell / send_shell) when you need cd, env vars, or venvs to persist across commands.
+		""")]
+	public static async Task<ToolResult> RunCommandAsync(
+		[Description("The bash command to execute. Use && to chain dependent commands (stops on failure). Use ; to chain independent commands. Do not use newlines; keep the command on one line.")] string command,
+		[Description("Absolute path to the working directory for this command. Pass empty string to use the repository root.")] string workDir,
+		[Description("Optional regular expression to filter the output lines. Only lines matching this regex will be included in the result.")] string matchRegex,
+		ToolContext context)
 	{
 		ToolResult result;
+		CancellationToken cancellationToken = context.CancellationToken;
 
 		if (string.IsNullOrWhiteSpace(command))
 		{
 			result = new ToolResult("Error: Command cannot be empty");
 		}
+		else if (!string.IsNullOrWhiteSpace(workDir) && !Path.IsPathRooted(workDir))
+		{
+			result = new ToolResult($"Error: Working directory must be an absolute path: {workDir}");
+		}
 		else
 		{
-			string effectiveWorkDir = string.IsNullOrWhiteSpace(workDir) ? _workDir : ResolvePath(workDir);
+			string effectiveWorkDir = string.IsNullOrWhiteSpace(workDir) ? context.WorkDir : Path.GetFullPath(workDir);
 
 			if (!Directory.Exists(effectiveWorkDir))
 			{
@@ -143,6 +118,22 @@ public class ShellTools : IToolProvider
 					string output = await outputTask;
 					string errorOutput = await errorTask;
 
+					// Apply regex filter if provided
+					if (!string.IsNullOrEmpty(matchRegex))
+					{
+						try
+						{
+							System.Text.RegularExpressions.Regex regex = new System.Text.RegularExpressions.Regex(matchRegex);
+							output = FilterLines(output, regex);
+							errorOutput = FilterLines(errorOutput, regex);
+						}
+						catch (ArgumentException ex)
+						{
+							result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}");
+							return result;
+						}
+					}
+
 					string response = $"Exit Code: {process.ExitCode}";
 
 					if (!string.IsNullOrWhiteSpace(output))
@@ -175,5 +166,27 @@ public class ShellTools : IToolProvider
 		}
 
 		return result;
+	}
+
+	private static string FilterLines(string text, System.Text.RegularExpressions.Regex regex)
+	{
+		if (string.IsNullOrEmpty(text))
+		{
+			return text;
+		}
+
+		string[] lines = text.Split('\n');
+		StringBuilder result = new StringBuilder();
+
+		foreach (string line in lines)
+		{
+			if (regex.IsMatch(line))
+			{
+				result.Append(line);
+				result.Append('\n');
+			}
+		}
+
+		return result.ToString();
 	}
 }

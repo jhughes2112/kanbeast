@@ -60,8 +60,6 @@ public class CompactionSummarizer : ICompaction
     private readonly LlmProxy _llmProxy;
     private readonly double _contextSizePercent;
 
-    private LlmConversation? _targetConversation;
-
     public CompactionSummarizer(string compactionPrompt, LlmProxy llmProxy, double contextSizePercent)
     {
         _compactionPrompt = compactionPrompt;
@@ -119,8 +117,6 @@ public class CompactionSummarizer : ICompaction
             return;
         }
 
-		_targetConversation = conversation;
-
 		// Get the original task from message 1 (initial instructions)
 		string originalTask = conversation.Messages.Count > 1 ? conversation.Messages[1].Content ?? "" : "";
 
@@ -132,12 +128,13 @@ public class CompactionSummarizer : ICompaction
 			{originalTask}
 			""";
 
-		List<Tool> compactionTools = BuildCompactionTools();
+		ToolContext parentContext = conversation.ToolContext;
+		ToolContext compactionContext = new ToolContext(parentContext.ApiClient, parentContext.TicketHolder, parentContext.WorkDir, conversation, parentContext.CurrentTaskId, parentContext.CurrentSubtaskId, null, cancellationToken);
 		string compactLogDir = conversation.LogDirectory;
 		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.LogPrefix) ? $"{conversation.LogPrefix}-compact" : string.Empty;
 		ICompaction noCompaction = new CompactionNone();
 
-		LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, noCompaction, false, compactLogDir, compactLogPrefix);
+		LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, LlmRole.Compaction, compactionContext, noCompaction, false, compactLogDir, compactLogPrefix);
 		await summaryConversation.AddUserMessageAsync($"""
 			<history>
 			{historyBlock}
@@ -149,7 +146,7 @@ public class CompactionSummarizer : ICompaction
 
 		for (;;)
 		{
-			LlmResult result = await _llmProxy.ContinueAsync(summaryConversation, compactionTools, null, cancellationToken);
+			LlmResult result = await _llmProxy.ContinueAsync(summaryConversation, null, cancellationToken);
 
 			if (result.ExitReason == LlmExitReason.ToolRequestedExit && result.FinalToolCalled == "summarize_history")
 			{
@@ -178,9 +175,7 @@ public class CompactionSummarizer : ICompaction
 				break;
 			}
 		}
-
-		_targetConversation = null;
-    }
+	}
 
     private static string BuildHistoryBlock(List<ChatMessage> messages, int startIndex, int endIndex)
     {
@@ -232,89 +227,79 @@ public class CompactionSummarizer : ICompaction
         return text.Replace("\"", "\\\"");
     }
 
-    private List<Tool> BuildCompactionTools()
-    {
-        List<Tool> tools = new List<Tool>();
-        ToolHelper.AddTools(tools, this,
-            nameof(AddMemoryAsync),
-            nameof(RemoveMemoryAsync),
-            nameof(SummarizeHistoryAsync));
-        return tools;
-    }
-
-    [Description("Add a labeled memory to the persistent memories list. Memories survive compaction and are visible to the agent across the entire conversation.")]
-    public Task<ToolResult> AddMemoryAsync(
-        [Description("Label: INVARIANT (what is), CONSTRAINT (what cannot be), DECISION (what was chosen), REFERENCE (what was done), or OPEN_ITEM (what is unresolved)")] string label,
-        [Description("Terse, self-contained memory entry")] string content,
-        CancellationToken cancellationToken)
-    {
-        ToolResult result;
+	[Description("Add a labeled memory to the persistent memories list. Memories survive compaction and are visible to the agent across the entire conversation.")]
+	public static Task<ToolResult> AddMemoryAsync(
+		[Description("Label: INVARIANT (what is), CONSTRAINT (what cannot be), DECISION (what was chosen), REFERENCE (what was done), or OPEN_ITEM (what is unresolved)")] string label,
+		[Description("Terse, self-contained memory entry")] string content,
+		ToolContext context)
+	{
+		ToolResult result;
 
 		if (string.IsNullOrWhiteSpace(content))
-        {
-            result = new ToolResult("Error: Content cannot be empty");
-        }
-        else
-        {
-            string trimmedLabel = label.Trim().ToUpperInvariant();
-            if (!ValidLabels.Contains(trimmedLabel))
-            {
-                result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM");
-            }
-            else
-            {
-                _targetConversation!.AddMemory(trimmedLabel, content.Trim());
-                result = new ToolResult($"Added [{trimmedLabel}]: {content.Trim()}");
-            }
-        }
+		{
+			result = new ToolResult("Error: Content cannot be empty");
+		}
+		else
+		{
+			string trimmedLabel = label.Trim().ToUpperInvariant();
+			if (!ValidLabels.Contains(trimmedLabel))
+			{
+				result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM");
+			}
+			else
+			{
+				context.CompactionTarget!.AddMemory(trimmedLabel, content.Trim());
+				result = new ToolResult($"Added [{trimmedLabel}]: {content.Trim()}");
+			}
+		}
 
-        return Task.FromResult(result);
-    }
+		return Task.FromResult(result);
+	}
 
-    [Description("Remove a memory that is no longer true, relevant, or has been superseded.")]
-    public Task<ToolResult> RemoveMemoryAsync(
-        [Description("Label: INVARIANT, CONSTRAINT, DECISION, REFERENCE, or OPEN_ITEM")] string label,
-        [Description("Text to match against existing memories (beginning of the memory entry)")] string memoryToRemove,
-        CancellationToken cancellationToken)
-    {
-        ToolResult result;
+	[Description("Remove a memory that is no longer true, relevant, or has been superseded.")]
+	public static Task<ToolResult> RemoveMemoryAsync(
+		[Description("Label: INVARIANT, CONSTRAINT, DECISION, REFERENCE, or OPEN_ITEM")] string label,
+		[Description("Text to match against existing memories (beginning of the memory entry)")] string memoryToRemove,
+		ToolContext context)
+	{
+		ToolResult result;
 
 		if (string.IsNullOrWhiteSpace(memoryToRemove))
-        {
-            result = new ToolResult("Error: Memory text cannot be empty");
-        }
-        else
-        {
-            string trimmedLabel = label.Trim().ToUpperInvariant();
-            if (!ValidLabels.Contains(trimmedLabel))
-            {
-                result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM");
-            }
-            else
-            {
-                bool removed = _targetConversation!.RemoveMemory(trimmedLabel, memoryToRemove);
-                if (removed)
-                {
-                    result = new ToolResult($"Removed [{trimmedLabel}] memory matching: {memoryToRemove}");
-                }
-                else
-                {
-                    result = new ToolResult($"No matching memory found in [{trimmedLabel}] (need >5 character match at start)");
-                }
-            }
-        }
+		{
+			result = new ToolResult("Error: Memory text cannot be empty");
+		}
+		else
+		{
+			string trimmedLabel = label.Trim().ToUpperInvariant();
+			if (!ValidLabels.Contains(trimmedLabel))
+			{
+				result = new ToolResult($"Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM");
+			}
+			else
+			{
+				bool removed = context.CompactionTarget!.RemoveMemory(trimmedLabel, memoryToRemove);
+				if (removed)
+				{
+					result = new ToolResult($"Removed [{trimmedLabel}] memory matching: {memoryToRemove}");
+				}
+				else
+				{
+					result = new ToolResult($"No matching memory found in [{trimmedLabel}] (need >5 character match at start)");
+				}
+			}
+		}
 
-        return Task.FromResult(result);
-    }
+		return Task.FromResult(result);
+	}
 
-    [Description("Provide the final summary of the history block and complete the compaction process.")]
-    public Task<ToolResult> SummarizeHistoryAsync(
-        [Description("Concise summary of the work done, as it pertains to solving the original task")] string summary,
-        CancellationToken cancellationToken)
-    {
-        ToolResult result = new ToolResult(summary.Trim(), true, "summarize_history");
-        return Task.FromResult(result);
-    }
+	[Description("Provide the final summary of the history block and complete the compaction process.")]
+	public static Task<ToolResult> SummarizeHistoryAsync(
+		[Description("Concise summary of the work done, as it pertains to solving the original task")] string summary,
+		ToolContext context)
+	{
+		ToolResult result = new ToolResult(summary.Trim(), true, "summarize_history");
+		return Task.FromResult(result);
+	}
 
     private static int GetMessageSize(List<ChatMessage> messages)
     {

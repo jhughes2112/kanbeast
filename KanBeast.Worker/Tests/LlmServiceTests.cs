@@ -54,7 +54,7 @@ public static class LlmServiceTests
 					}
 				}
 			},
-			Handler = (JsonObject args, CancellationToken ct) => Task.FromResult(new ToolResult("file content", false, "read_file"))
+			Handler = (JsonObject args, ToolContext ctx2) => Task.FromResult(new ToolResult("file content", false, "read_file"))
 		});
 
 		tools.Add(new Tool
@@ -77,7 +77,7 @@ public static class LlmServiceTests
 					}
 				}
 			},
-			Handler = (JsonObject args, CancellationToken ct) => Task.FromResult(new ToolResult("ok", false, "write_file"))
+			Handler = (JsonObject args, ToolContext ctx2) => Task.FromResult(new ToolResult("ok", false, "write_file"))
 		});
 
 		return tools;

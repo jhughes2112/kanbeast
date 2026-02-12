@@ -1,127 +1,134 @@
 using System.ComponentModel;
 using System.Net;
 using System.Text;
-using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace KanBeast.Worker.Services.Tools;
 
 // Tools for fetching web pages and searching the web.
-public class WebTools
+public static class WebTools
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    private static readonly HttpClient SharedHttpClient = new HttpClient();  // inherently thread safe and intended for reuse
 
-    private readonly HttpClient _httpClient;
-    private readonly string _searchProvider;
-    private readonly string? _googleApiKey;
-    private readonly string? _googleSearchEngineId;
-
-    public WebTools(HttpClient httpClient, string searchProvider, string? googleApiKey, string? googleSearchEngineId)
+	[Description("Fetch the contents of a web page at the specified URL. Returns the text content with HTML tags stripped.")]
+    public static async Task<ToolResult> GetWebPageAsync(
+        [Description("The fully-formed URL to fetch content from.")] string url,
+        ToolContext context)
     {
-        _httpClient = httpClient;
-        _searchProvider = searchProvider;
-        _googleApiKey = googleApiKey;
-        _googleSearchEngineId = googleSearchEngineId;
-    }
+        CancellationToken cancellationToken = context.CancellationToken;
+        ToolResult result;
 
-    [Description("Fetch the contents of a web page at the specified URL. Returns the text content with HTML tags stripped.")]
-    public async Task<string> GetWebPageAsync(string url)
-    {
         if (string.IsNullOrWhiteSpace(url))
         {
-            return "Error: URL cannot be empty.";
+            result = new ToolResult("Error: URL cannot be empty.");
         }
-
-        if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
+        else if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri))
         {
-            return $"Error: Invalid URL format: {url}";
+            result = new ToolResult($"Error: Invalid URL format: {url}");
         }
-
-        try
+        else
         {
-            using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-            HttpResponseMessage response = await _httpClient.GetAsync(uri, cts.Token);
-
-            if (!response.IsSuccessStatusCode)
+            try
             {
-                return $"Error: HTTP {(int)response.StatusCode} {response.ReasonPhrase} for URL: {url}";
+                using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(DefaultTimeout);
+                HttpResponseMessage response = await SharedHttpClient.GetAsync(uri, cts.Token);
+
+                if (!response.IsSuccessStatusCode)
+                {
+                    result = new ToolResult($"Error: HTTP {(int)response.StatusCode} {response.ReasonPhrase} for URL: {url}");
+                }
+                else
+                {
+                    string html = await response.Content.ReadAsStringAsync(cts.Token);
+                    string text = StripHtmlTags(html);
+
+                    if (text.Length > 50000)
+                    {
+                        text = text.Substring(0, 50000) + "\n\n[Content truncated at 50000 characters]";
+                    }
+
+                    if (string.IsNullOrWhiteSpace(text))
+                    {
+                        result = new ToolResult($"Error: No readable text content found at URL: {url}");
+                    }
+                    else
+                    {
+                        result = new ToolResult(text);
+                    }
+                }
             }
-
-            string html = await response.Content.ReadAsStringAsync(cts.Token);
-            string text = StripHtmlTags(html);
-
-            if (text.Length > 50000)
+            catch (OperationCanceledException)
             {
-                text = text.Substring(0, 50000) + "\n\n[Content truncated at 50000 characters]";
+                result = new ToolResult($"Error: Request timed out or cancelled for URL: {url}");
             }
-
-            if (string.IsNullOrWhiteSpace(text))
+            catch (HttpRequestException ex)
             {
-                return $"Error: No readable text content found at URL: {url}";
+                result = new ToolResult($"Error: Network error fetching URL {url}: {ex.Message}");
             }
+            catch (Exception ex)
+            {
+                result = new ToolResult($"Error: Failed to fetch URL {url}: {ex.Message}");
+            }
+        }
 
-            return text;
-        }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Request timed out after {DefaultTimeout.TotalSeconds} seconds for URL: {url}";
-        }
-        catch (HttpRequestException ex)
-        {
-            return $"Error: Network error fetching URL {url}: {ex.Message}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Failed to fetch URL {url}: {ex.Message}";
-        }
+        return result;
     }
 
-    [Description("Search the web for information. Returns a list of search results with titles, URLs, and snippets.")]
-    public async Task<string> SearchWebAsync(string query, int maxResults)
+    [Description("Search the web for information using DuckDuckGo. Returns a list of search results with titles, URLs, and snippets.")]
+    public static async Task<ToolResult> SearchWebAsync(
+        [Description("The search query to use.")] string query,
+        [Description("Maximum number of results to return (1-20). Pass empty string for default of 10.")] string maxResults,
+        ToolContext context)
     {
+        CancellationToken cancellationToken = context.CancellationToken;
+        ToolResult result;
+
         if (string.IsNullOrWhiteSpace(query))
         {
-            return "Error: Search query cannot be empty.";
+            result = new ToolResult("Error: Search query cannot be empty.");
         }
-
-        if (maxResults <= 0)
+        else
         {
-            maxResults = 10;
-        }
-
-        if (maxResults > 20)
-        {
-            maxResults = 20;
-        }
-
-        try
-        {
-            if (string.Equals(_searchProvider, "google", StringComparison.OrdinalIgnoreCase) &&
-                !string.IsNullOrEmpty(_googleApiKey) &&
-                !string.IsNullOrEmpty(_googleSearchEngineId))
+            int limit = 10;
+            if (!string.IsNullOrWhiteSpace(maxResults))
             {
-                return await SearchGoogleAsync(query, maxResults);
+                int.TryParse(maxResults, out limit);
             }
-            else
+
+            if (limit <= 0)
             {
-                return await SearchDuckDuckGoAsync(query, maxResults);
+                limit = 10;
+            }
+
+            if (limit > 20)
+            {
+                limit = 20;
+            }
+
+            try
+            {
+                result = new ToolResult(await SearchDuckDuckGoAsync(query, limit, cancellationToken));
+            }
+            catch (OperationCanceledException)
+            {
+                result = new ToolResult($"Error: Search request timed out or cancelled for query: {query}");
+            }
+            catch (HttpRequestException ex)
+            {
+                result = new ToolResult($"Error: Network error during search: {ex.Message}");
+            }
+            catch (Exception ex)
+            {
+                result = new ToolResult($"Error: Search failed: {ex.Message}");
             }
         }
-        catch (TaskCanceledException)
-        {
-            return $"Error: Search request timed out after {DefaultTimeout.TotalSeconds} seconds for query: {query}";
-        }
-        catch (HttpRequestException ex)
-        {
-            return $"Error: Network error during search: {ex.Message}";
-        }
-        catch (Exception ex)
-        {
-            return $"Error: Search failed: {ex.Message}";
-        }
+
+        return result;
     }
 
-    private async Task<string> SearchDuckDuckGoAsync(string query, int maxResults)
+    private static async Task<string> SearchDuckDuckGoAsync(string query, int maxResults, CancellationToken cancellationToken)
     {
         string encodedQuery = WebUtility.UrlEncode(query);
         string url = $"https://html.duckduckgo.com/html/?q={encodedQuery}";
@@ -129,8 +136,9 @@ public class WebTools
         HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
 
-        using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-        HttpResponseMessage response = await _httpClient.SendAsync(request, cts.Token);
+        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(DefaultTimeout);
+        HttpResponseMessage response = await SharedHttpClient.SendAsync(request, cts.Token);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -139,30 +147,6 @@ public class WebTools
 
         string html = await response.Content.ReadAsStringAsync(cts.Token);
         List<SearchResult> results = ParseDuckDuckGoResults(html, maxResults);
-
-        if (results.Count == 0)
-        {
-            return $"No search results found for: {query}";
-        }
-
-        return FormatSearchResults(results);
-    }
-
-    private async Task<string> SearchGoogleAsync(string query, int maxResults)
-    {
-        string encodedQuery = WebUtility.UrlEncode(query);
-        string url = $"https://www.googleapis.com/customsearch/v1?key={_googleApiKey}&cx={_googleSearchEngineId}&q={encodedQuery}&num={maxResults}";
-
-        using CancellationTokenSource cts = new CancellationTokenSource(DefaultTimeout);
-        HttpResponseMessage response = await _httpClient.GetAsync(url, cts.Token);
-
-        if (!response.IsSuccessStatusCode)
-        {
-            return $"Error: Google API returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
-        }
-
-        string json = await response.Content.ReadAsStringAsync(cts.Token);
-        List<SearchResult> results = ParseGoogleResults(json, maxResults);
 
         if (results.Count == 0)
         {
@@ -209,42 +193,6 @@ public class WebTools
                 {
                     Title = title,
                     Url = actualUrl,
-                    Snippet = snippet
-                });
-            }
-        }
-
-        return results;
-    }
-
-    private static List<SearchResult> ParseGoogleResults(string json, int maxResults)
-    {
-        List<SearchResult> results = new List<SearchResult>();
-
-        using JsonDocument doc = JsonDocument.Parse(json);
-
-        if (!doc.RootElement.TryGetProperty("items", out JsonElement items))
-        {
-            return results;
-        }
-
-        foreach (JsonElement item in items.EnumerateArray())
-        {
-            if (results.Count >= maxResults)
-            {
-                break;
-            }
-
-            string title = item.TryGetProperty("title", out JsonElement titleEl) ? titleEl.GetString() ?? "" : "";
-            string url = item.TryGetProperty("link", out JsonElement linkEl) ? linkEl.GetString() ?? "" : "";
-            string snippet = item.TryGetProperty("snippet", out JsonElement snippetEl) ? snippetEl.GetString() ?? "" : "";
-
-            if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(url))
-            {
-                results.Add(new SearchResult
-                {
-                    Title = title,
-                    Url = url,
                     Snippet = snippet
                 });
             }

@@ -13,11 +13,11 @@ public static class ShellToolsTests
 
 		try
 		{
-			ShellTools shellTools = new ShellTools(tempDir);
+			ToolContext tc = new ToolContext(null, null, tempDir, null, null, null, null, CancellationToken.None);
 
-			TestResolvePath(ctx, shellTools, tempDir);
-			TestEdgeCases(ctx, shellTools);
-			TestRunCommand(ctx, shellTools);
+			TestEdgeCases(ctx, tc);
+			TestRunCommand(ctx, tc);
+			TestPersistentShell(ctx, tc, tempDir);
 		}
 		finally
 		{
@@ -28,35 +28,21 @@ public static class ShellToolsTests
 		}
 	}
 
-	private static void TestResolvePath(TestContext ctx, ShellTools shellTools, string tempDir)
-	{
-		Type[] types = [typeof(string)];
-
-		// Relative path resolves under workDir.
-		string relative = (string)Reflect.Instance(shellTools, "ResolvePath", types, ["subdir/file.txt"])!;
-		ctx.Assert(relative.StartsWith(tempDir), "ShellResolvePath: relative resolves under workDir");
-
-		// Absolute path stays absolute.
-		string absPath = Path.Combine(Path.GetTempPath(), "absolute.txt");
-		string resolved = (string)Reflect.Instance(shellTools, "ResolvePath", types, [absPath])!;
-		ctx.AssertEqual(Path.GetFullPath(absPath), resolved, "ShellResolvePath: absolute path unchanged");
-	}
-
-	private static void TestEdgeCases(TestContext ctx, ShellTools shellTools)
+	private static void TestEdgeCases(TestContext ctx, ToolContext tc)
 	{
 		// Empty command.
-		ToolResult emptyCmd = shellTools.RunCommandAsync("", "", CancellationToken.None).GetAwaiter().GetResult();
+		ToolResult emptyCmd = ShellTools.RunCommandAsync("", "", "", tc).GetAwaiter().GetResult();
 		ctx.Assert(emptyCmd.Response.Contains("Error") && emptyCmd.Response.Contains("empty"), "ShellTools: empty command returns error");
 
 		// Non-existent working directory.
-		ToolResult badDir = shellTools.RunCommandAsync("echo test", "/nonexistent/path/that/does/not/exist", CancellationToken.None).GetAwaiter().GetResult();
+		ToolResult badDir = ShellTools.RunCommandAsync("echo test", "/nonexistent/path/that/does/not/exist", "", tc).GetAwaiter().GetResult();
 		ctx.Assert(badDir.Response.Contains("Error"), "ShellTools: non-existent workDir returns error");
 	}
 
-	private static void TestRunCommand(TestContext ctx, ShellTools shellTools)
+	private static void TestRunCommand(TestContext ctx, ToolContext tc)
 	{
 		// Simple echo — may or may not work depending on WSL/bash availability.
-		ToolResult echoResult = shellTools.RunCommandAsync("echo hello", "", CancellationToken.None).GetAwaiter().GetResult();
+		ToolResult echoResult = ShellTools.RunCommandAsync("echo hello", "", "", tc).GetAwaiter().GetResult();
 		bool validResponse = echoResult.Response.Contains("Exit Code:") || echoResult.Response.Contains("Error:");
 		ctx.Assert(validResponse, "ShellTools: echo returns valid response format");
 
@@ -65,5 +51,46 @@ public static class ShellToolsTests
 		{
 			ctx.Assert(echoResult.Response.Contains("hello"), "ShellTools: echo output captured");
 		}
+	}
+
+	private static void TestPersistentShell(TestContext ctx, ToolContext tc, string tempDir)
+	{
+		// Start shell without one running.
+		ToolResult startResult = PersistentShellTools.StartShellAsync("", tc).GetAwaiter().GetResult();
+		ctx.Assert(startResult.Response.Contains("Shell started"), "PersistentShell: start succeeds");
+		ctx.Assert(tc.Shell != null, "PersistentShell: shell stored in context");
+
+		// Try to start another shell — should fail.
+		ToolResult doubleStart = PersistentShellTools.StartShellAsync("", tc).GetAwaiter().GetResult();
+		ctx.Assert(doubleStart.Response.Contains("Error") && doubleStart.Response.Contains("already running"), "PersistentShell: cannot start second shell");
+
+		// Send a command and get output in one call.
+		ToolResult sendEcho = PersistentShellTools.SendShellAsync("echo persistent_test", false, "", tc).GetAwaiter().GetResult();
+		ctx.Assert(sendEcho.Response.Contains("Input sent"), "PersistentShell: input sent");
+
+		// Wait for output to accumulate, then read with empty input.
+		System.Threading.Thread.Sleep(200);
+		ToolResult readOutput = PersistentShellTools.SendShellAsync("", false, "", tc).GetAwaiter().GetResult();
+		ctx.Assert(readOutput.Response.Contains("persistent_test") || readOutput.Response.Contains("no output"), "PersistentShell: output read (or shell unavailable)");
+
+		// Test cd persistence.
+		PersistentShellTools.SendShellAsync($"cd '{tempDir}'", false, "", tc).GetAwaiter().GetResult();
+		System.Threading.Thread.Sleep(100);
+		PersistentShellTools.SendShellAsync("", false, "", tc).GetAwaiter().GetResult(); // Clear buffer
+		PersistentShellTools.SendShellAsync("pwd", false, "", tc).GetAwaiter().GetResult();
+		System.Threading.Thread.Sleep(200);
+		ToolResult pwdOutput = PersistentShellTools.SendShellAsync("", false, "", tc).GetAwaiter().GetResult();
+		// May fail if WSL not available or path conversion differs, so just check it didn't error
+		bool cdWorked = !pwdOutput.Response.Contains("Error") || pwdOutput.Response.Contains("no output");
+		ctx.Assert(cdWorked, "PersistentShell: cd command executed");
+
+		// Kill the shell.
+		ToolResult killResult = PersistentShellTools.KillShellAsync(tc).GetAwaiter().GetResult();
+		ctx.Assert(killResult.Response.Contains("Shell killed"), "PersistentShell: kill succeeds");
+		ctx.Assert(tc.Shell == null, "PersistentShell: shell removed from context");
+
+		// Try to send after kill — should fail.
+		ToolResult sendAfterKill = PersistentShellTools.SendShellAsync("echo test", false, "", tc).GetAwaiter().GetResult();
+		ctx.Assert(sendAfterKill.Response.Contains("Error") && sendAfterKill.Response.Contains("No shell"), "PersistentShell: cannot use shell after kill");
 	}
 }

@@ -5,56 +5,12 @@ using KanBeast.Worker.Models;
 namespace KanBeast.Worker.Services.Tools;
 
 // Tools for LLM to interact with the ticket system (planning phase only).
-public class TicketTools : IToolProvider
+public static class TicketTools
 {
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
-
-    private readonly IKanbanApiClient _apiClient;
-    private readonly TicketHolder _ticketHolder;
-    private readonly Dictionary<LlmRole, List<Tool>> _toolsByRole;
-
-    public TicketTools(IKanbanApiClient apiClient, TicketHolder ticketHolder)
-    {
-        _apiClient = apiClient;
-        _ticketHolder = ticketHolder;
-        _toolsByRole = BuildToolsByRole();
-    }
-
-    private Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
-    {
-        List<Tool> planningTools = new List<Tool>();
-        ToolHelper.AddTools(planningTools, this,
-            nameof(LogMessageAsync),
-            nameof(CreateTaskAsync),
-            nameof(CreateSubtaskAsync));
-
-        List<Tool> logOnlyTools = new List<Tool>();
-        ToolHelper.AddTools(logOnlyTools, this,
-            nameof(LogMessageAsync));
-
-        Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
-        {
-            [LlmRole.Planning] = planningTools,
-            [LlmRole.QA] = logOnlyTools,
-            [LlmRole.Developer] = logOnlyTools,
-            [LlmRole.Compaction] = new List<Tool>()
-        };
-
-        return result;
-    }
-
-    public void AddTools(List<Tool> tools, LlmRole role)
-    {
-        if (_toolsByRole.TryGetValue(role, out List<Tool>? roleTools))
-        {
-            tools.AddRange(roleTools);
-        }
-    }
-
     [Description("Send a message to the human's display about discoveries, decisions, important details, occasional jokes, etc.")]
-    public async Task<ToolResult> LogMessageAsync(
+    public static async Task<ToolResult> LogMessageAsync(
         [Description("Message to log")] string message,
-        CancellationToken cancellationToken)
+        ToolContext context)
     {
         ToolResult result;
 
@@ -66,9 +22,7 @@ public class TicketTools : IToolProvider
         {
             try
             {
-                using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(DefaultTimeout);
-                await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, message);
+                await context.ApiClient!.AddActivityLogAsync(context.TicketHolder!.Ticket.Id, message, context.CancellationToken);
                 result = new ToolResult("Message logged");
             }
             catch (OperationCanceledException)
@@ -84,27 +38,11 @@ public class TicketTools : IToolProvider
         return result;
     }
 
-    private string? FindTaskIdByName(string taskName)
-    {
-        string? result = null;
-
-        foreach (KanbanTaskDto task in _ticketHolder.Ticket.Tasks)
-        {
-            if (string.Equals(task.Name, taskName, StringComparison.Ordinal))
-            {
-                result = task.Id;
-                break;
-            }
-        }
-
-        return result;
-    }
-
     [Description("Create a new task for the ticket.")]
-    public async Task<ToolResult> CreateTaskAsync(
+    public static async Task<ToolResult> CreateTaskAsync(
         [Description("Name of the task")] string taskName,
         [Description("Description of the task")] string taskDescription,
-        CancellationToken cancellationToken)
+        ToolContext context)
     {
         ToolResult result;
 
@@ -123,9 +61,7 @@ public class TicketTools : IToolProvider
                     Subtasks = new List<KanbanSubtask>()
                 };
 
-                using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(DefaultTimeout);
-                TicketDto? updated = await _apiClient.AddTaskToTicketAsync(_ticketHolder.Ticket.Id, task);
+                TicketDto? updated = await context.ApiClient!.AddTaskToTicketAsync(context.TicketHolder!.Ticket.Id, task, context.CancellationToken);
 
                 if (updated == null)
                 {
@@ -133,8 +69,8 @@ public class TicketTools : IToolProvider
                 }
                 else
                 {
-                    _ticketHolder.Update(updated);
-                    await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created task '{taskName}'");
+                    context.TicketHolder.Update(updated);
+                    await context.ApiClient.AddActivityLogAsync(context.TicketHolder.Ticket.Id, $"Created task '{taskName}'", context.CancellationToken);
                     result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created task '{taskName}'"));
                 }
             }
@@ -152,11 +88,11 @@ public class TicketTools : IToolProvider
     }
 
     [Description("Create a subtask for an existing task. Include clear acceptance criteria in the description.")]
-    public async Task<ToolResult> CreateSubtaskAsync(
+    public static async Task<ToolResult> CreateSubtaskAsync(
         [Description("Name of the task to add the subtask to")] string taskName,
         [Description("Short name for the subtask")] string subtaskName,
         [Description("Detailed description including acceptance criteria")] string subtaskDescription,
-        CancellationToken cancellationToken)
+        ToolContext context)
     {
         ToolResult result;
 
@@ -170,7 +106,7 @@ public class TicketTools : IToolProvider
         }
         else
         {
-            string? taskId = FindTaskIdByName(taskName);
+            string? taskId = context.TicketHolder!.Ticket.FindTaskIdByName(taskName);
 
             if (taskId == null)
             {
@@ -187,9 +123,7 @@ public class TicketTools : IToolProvider
                         Status = SubtaskStatus.Incomplete
                     };
 
-                    using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    cts.CancelAfter(DefaultTimeout);
-                    TicketDto? updated = await _apiClient.AddSubtaskToTaskAsync(_ticketHolder.Ticket.Id, taskId, subtask);
+                    TicketDto? updated = await context.ApiClient!.AddSubtaskToTaskAsync(context.TicketHolder!.Ticket.Id, taskId, subtask, context.CancellationToken);
 
                     if (updated == null)
                     {
@@ -197,8 +131,8 @@ public class TicketTools : IToolProvider
                     }
                     else
                     {
-                        _ticketHolder.Update(updated);
-                        await _apiClient.AddActivityLogAsync(_ticketHolder.Ticket.Id, $"Created subtask '{subtaskName}' under task '{taskName}'");
+                        context.TicketHolder.Update(updated);
+                        await context.ApiClient.AddActivityLogAsync(context.TicketHolder.Ticket.Id, $"Created subtask '{subtaskName}' under task '{taskName}'", context.CancellationToken);
                         result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created subtask '{subtaskName}' under task '{taskName}'"));
                     }
                 }

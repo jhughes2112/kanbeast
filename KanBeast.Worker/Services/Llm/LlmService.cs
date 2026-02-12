@@ -216,8 +216,9 @@ public class LlmService
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<(LlmResult result, decimal cost)> RunAsync(LlmConversation conversation, List<Tool> tools, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
+	public async Task<(LlmResult result, decimal cost)> RunAsync(LlmConversation conversation, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
+		List<Tool> tools = ToolsFactory.GetTools(conversation.Role);
 		List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;
 		foreach (Tool tool in tools)
 		{
@@ -328,7 +329,7 @@ public class LlmService
 
 						foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
 						{
-							ToolResult toolResult = await ExecuteTool(toolCall, tools, cancellationToken);
+							ToolResult toolResult = await ExecuteTool(toolCall, tools, conversation.ToolContext);
 
 							await conversation.AddToolMessageAsync(toolCall.Id, toolResult.Response, cancellationToken);
 
@@ -428,7 +429,7 @@ public class LlmService
 		}
 	}
 
-	private async Task<ToolResult> ExecuteTool(ToolCallMessage toolCall, List<Tool> tools, CancellationToken cancellationToken)
+	private async Task<ToolResult> ExecuteTool(ToolCallMessage toolCall, List<Tool> tools, ToolContext context)
 	{
 		foreach (Tool tool in tools)
 		{
@@ -446,7 +447,7 @@ public class LlmService
 
 				try
 				{
-					return await tool.Handler(args, cancellationToken);
+					return await tool.Handler(args, context);
 				}
 				catch (Exception ex)
 				{

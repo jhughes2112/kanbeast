@@ -72,6 +72,7 @@ public static class TestRunner
 		FileToolsTests.Test(ctx);
 		ShellToolsTests.Test(ctx);
 		WebToolsTests.Test(ctx);
+		SearchToolsTests.Test(ctx);
 
 		Console.WriteLine($"=== Tests Complete: {ctx.Passed} passed, {ctx.Failed} failed ===");
 		int exitCode = ctx.Failed > 0 ? 1 : 0;

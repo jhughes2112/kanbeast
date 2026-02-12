@@ -50,6 +50,20 @@ public class TicketDto
 
         return result;
     }
+
+    // Finds a task ID by exact name match (used during planning to look up tasks by name).
+    public string? FindTaskIdByName(string taskName)
+    {
+        foreach (KanbanTaskDto task in Tasks)
+        {
+            if (string.Equals(task.Name, taskName, StringComparison.Ordinal))
+            {
+                return task.Id;
+            }
+        }
+
+        return null;
+    }
 }
 
 public class KanbanTaskDto

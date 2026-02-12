@@ -37,6 +37,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     zip \
     jq \
+	ripgrep \
     tree \
     htop \
     vim \

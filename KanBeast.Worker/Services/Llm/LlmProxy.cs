@@ -14,15 +14,11 @@ namespace KanBeast.Worker.Services;
 public class LlmProxy
 {
 	private readonly List<LlmService> _services;
-	private readonly IKanbanApiClient _apiClient;
-	private readonly TicketHolder _ticketHolder;
 	private int _preferredIndex;
 
-	public LlmProxy(List<LLMConfig> configs, IKanbanApiClient apiClient, TicketHolder ticketHolder, bool jsonLogging)
+	public LlmProxy(List<LLMConfig> configs, bool jsonLogging)
 	{
 		_preferredIndex = 0;
-		_apiClient = apiClient;
-		_ticketHolder = ticketHolder;
 
 		_services = new List<LlmService>();
 		foreach (LLMConfig config in configs)
@@ -33,31 +29,6 @@ public class LlmProxy
 
 	public string CurrentModel => _preferredIndex < _services.Count ? _services[_preferredIndex].Model : "none";
 
-	private async Task SyncCostAsync(decimal cost)
-	{
-		if (cost > 0)
-		{
-			TicketDto? updated = await _apiClient.AddLlmCostAsync(_ticketHolder.Ticket.Id, cost);
-			if (updated != null)
-			{
-				_ticketHolder.Update(updated);
-			}
-		}
-	}
-
-	private decimal GetRemainingBudget()
-	{
-		decimal maxCost = _ticketHolder.Ticket.MaxCost;
-		if (maxCost <= 0)
-		{
-			return 0;
-		}
-
-		decimal currentCost = _ticketHolder.Ticket.LlmCost;
-		decimal remaining = maxCost - currentCost;
-		return remaining > 0 ? remaining : 0;
-	}
-
 	// Resets preferred LLM to the first configured endpoint.
 	// Call at natural boundaries (new subtask, new conversation) to prefer the primary LLM again.
 	public void ResetFallback()
@@ -66,13 +37,13 @@ public class LlmProxy
 	}
 
 	// Runs the conversation, selecting available LLMs and retrying on rate limits or failures.
-	public async Task<LlmResult> ContinueAsync(LlmConversation conversation, List<Tool> tools, int? maxCompletionTokens, CancellationToken cancellationToken)
+	public async Task<LlmResult> ContinueAsync(LlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
 		for (; ; )
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
-			decimal remainingBudget = GetRemainingBudget();
+			decimal remainingBudget = conversation.GetRemainingBudget();
 			if (remainingBudget > 0 && remainingBudget <= 0)
 			{
 				return new LlmResult { ExitReason = LlmExitReason.CostExceeded };
@@ -99,8 +70,8 @@ public class LlmProxy
 				continue;
 			}
 
-			(LlmResult result, decimal cost) = await service.RunAsync(conversation, tools, remainingBudget, maxCompletionTokens, cancellationToken);
-			await SyncCostAsync(cost);
+			(LlmResult result, decimal cost) = await service.RunAsync(conversation, remainingBudget, maxCompletionTokens, cancellationToken);
+			await conversation.RecordCostAsync(cost, cancellationToken);
 
 			if (result.ExitReason == LlmExitReason.RateLimited)
 			{

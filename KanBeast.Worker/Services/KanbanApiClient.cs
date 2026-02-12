@@ -7,16 +7,16 @@ namespace KanBeast.Worker.Services;
 
 public interface IKanbanApiClient
 {
-    Task<TicketDto?> GetTicketAsync(string ticketId);
-    Task<TicketDto?> UpdateTicketStatusAsync(string ticketId, string status);
-    Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task);
-    Task<TicketDto?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask);
-    Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
-    Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId);
-    Task<TicketDto?> DeleteAllTasksAsync(string ticketId);
-    Task AddActivityLogAsync(string ticketId, string message);
-    Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName);
-    Task<TicketDto?> AddLlmCostAsync(string ticketId, decimal cost);
+    Task<TicketDto?> GetTicketAsync(string ticketId, CancellationToken cancellationToken);
+    Task<TicketDto?> UpdateTicketStatusAsync(string ticketId, string status, CancellationToken cancellationToken);
+    Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task, CancellationToken cancellationToken);
+    Task<TicketDto?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask, CancellationToken cancellationToken);
+    Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status, CancellationToken cancellationToken);
+    Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId, CancellationToken cancellationToken);
+    Task<TicketDto?> DeleteAllTasksAsync(string ticketId, CancellationToken cancellationToken);
+    Task AddActivityLogAsync(string ticketId, string message, CancellationToken cancellationToken);
+    Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName, CancellationToken cancellationToken);
+    Task<TicketDto?> AddLlmCostAsync(string ticketId, decimal cost, CancellationToken cancellationToken);
 }
 
 public class KanbanApiClient : IKanbanApiClient
@@ -34,132 +34,132 @@ public class KanbanApiClient : IKanbanApiClient
         _jsonOptions.Converters.Add(new JsonStringEnumConverter());
     }
 
-    public async Task<TicketDto?> GetTicketAsync(string ticketId)
+    public async Task<TicketDto?> GetTicketAsync(string ticketId, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = await _httpClient.GetFromJsonAsync<TicketDto>($"/api/tickets/{ticketId}", _jsonOptions);
+        TicketDto? ticket = await _httpClient.GetFromJsonAsync<TicketDto>($"/api/tickets/{ticketId}", _jsonOptions, cancellationToken);
 
         return ticket;
     }
 
-    public async Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId)
-    {
-        TicketDto? ticket = null;
-        string encodedTaskId = Uri.EscapeDataString(taskId);
-        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/complete", new { }, _jsonOptions);
-
-        if (response.IsSuccessStatusCode)
-        {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
-        }
-
-        return ticket;
-    }
-
-    public async Task<TicketDto?> UpdateTicketStatusAsync(string ticketId, string status)
-    {
-        TicketDto? ticket = null;
-        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/status", new { status }, _jsonOptions);
-
-        if (response.IsSuccessStatusCode)
-        {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
-        }
-
-        return ticket;
-    }
-
-    public async Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task)
-    {
-        TicketDto? ticket = null;
-        HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks", task, _jsonOptions);
-
-        if (response.IsSuccessStatusCode)
-        {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
-        }
-
-        return ticket;
-    }
-
-    public async Task<TicketDto?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask)
+    public async Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId, CancellationToken cancellationToken)
     {
         TicketDto? ticket = null;
         string encodedTaskId = Uri.EscapeDataString(taskId);
-        HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks", subtask, _jsonOptions);
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/complete", new { }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
     }
 
-    public async Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status)
+    public async Task<TicketDto?> UpdateTicketStatusAsync(string ticketId, string status, CancellationToken cancellationToken)
+    {
+        TicketDto? ticket = null;
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/status", new { status }, _jsonOptions, cancellationToken);
+
+        if (response.IsSuccessStatusCode)
+        {
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+        }
+
+        return ticket;
+    }
+
+    public async Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task, CancellationToken cancellationToken)
+    {
+        TicketDto? ticket = null;
+        HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks", task, _jsonOptions, cancellationToken);
+
+        if (response.IsSuccessStatusCode)
+        {
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+        }
+
+        return ticket;
+    }
+
+    public async Task<TicketDto?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask, CancellationToken cancellationToken)
+    {
+        TicketDto? ticket = null;
+        string encodedTaskId = Uri.EscapeDataString(taskId);
+        HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks", subtask, _jsonOptions, cancellationToken);
+
+        if (response.IsSuccessStatusCode)
+        {
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+        }
+
+        return ticket;
+    }
+
+    public async Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status, CancellationToken cancellationToken)
     {
         TicketDto? ticket = null;
         string encodedTaskId = Uri.EscapeDataString(taskId);
         string encodedSubtaskId = Uri.EscapeDataString(subtaskId);
-        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks/{encodedSubtaskId}", new { status }, _jsonOptions);
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks/{encodedSubtaskId}", new { status }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
     }
 
-    public async Task AddActivityLogAsync(string ticketId, string message)
+    public async Task AddActivityLogAsync(string ticketId, string message, CancellationToken cancellationToken)
     {
-        HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/activity", new { message }, _jsonOptions);
+        HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/activity", new { message }, _jsonOptions, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
-            string error = await response.Content.ReadAsStringAsync();
+            string error = await response.Content.ReadAsStringAsync(cancellationToken);
             Console.WriteLine($"Failed to add activity log: {response.StatusCode} - {error}");
         }
     }
 
-    public async Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName)
+    public async Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName, CancellationToken cancellationToken)
     {
         TicketDto? ticket = null;
-        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/branch", new { branchName }, _jsonOptions);
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/branch", new { branchName }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
     }
 
-    public async Task<TicketDto?> AddLlmCostAsync(string ticketId, decimal cost)
+    public async Task<TicketDto?> AddLlmCostAsync(string ticketId, decimal cost, CancellationToken cancellationToken)
     {
         TicketDto? ticket = null;
-        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/cost", new { cost }, _jsonOptions);
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/cost", new { cost }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
         }
         else
         {
-            string error = await response.Content.ReadAsStringAsync();
+            string error = await response.Content.ReadAsStringAsync(cancellationToken);
             Console.WriteLine($"Failed to add LLM cost: {response.StatusCode} - {error}");
         }
 
         return ticket;
     }
 
-    public async Task<TicketDto?> DeleteAllTasksAsync(string ticketId)
+    public async Task<TicketDto?> DeleteAllTasksAsync(string ticketId, CancellationToken cancellationToken)
     {
         TicketDto? ticket = null;
-        HttpResponseMessage response = await _httpClient.DeleteAsync($"/api/tickets/{ticketId}/tasks");
+        HttpResponseMessage response = await _httpClient.DeleteAsync($"/api/tickets/{ticketId}/tasks", cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions);
+            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
         }
 
         return ticket;

@@ -83,9 +83,10 @@ public static class ToolHelperTests
 		string emptyResult = (string)Reflect.Static(typeof(ToolHelper), "TruncateResponse", types, [""])!;
 		ctx.AssertEqual("", emptyResult, "TruncateResponse: empty unchanged");
 
-		string longInput = new string('x', 5000);
+		// MaxResponseLength is 160000, so use 200000 to trigger truncation
+		string longInput = new string('x', 200000);
 		string longResult = (string)Reflect.Static(typeof(ToolHelper), "TruncateResponse", types, [longInput])!;
-		ctx.Assert(longResult.Length < 5000, "TruncateResponse: long string truncated");
+		ctx.Assert(longResult.Length < 200000, "TruncateResponse: long string truncated");
 		ctx.Assert(longResult.Contains("characters omitted"), "TruncateResponse: contains omission marker");
 	}
 
