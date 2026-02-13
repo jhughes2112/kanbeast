@@ -10,7 +10,6 @@ public class WorkerConfig
     public required CompactionSettings Compaction { get; set; }
     public required Dictionary<string, string> Prompts { get; set; }
     public required string PromptDirectory { get; set; }
-    public bool JsonLogging { get; set; }
 
     public string GetPrompt(string key)
     {
@@ -55,7 +54,6 @@ public class WorkerSettings
         Email = string.Empty
     };
     public CompactionSettings Compaction { get; set; } = new();
-    public bool JsonLogging { get; set; }
 }
 
 public class CompactionSettings

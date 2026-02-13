@@ -17,7 +17,7 @@ public static class SearchToolsTests
 			{
 				CreateTestFiles(tempDir);
 
-				WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None);
+				WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null);
 				LlmMemories testMemories = new LlmMemories();
 				ToolContext tc = new ToolContext(null, null, null, testMemories);
 

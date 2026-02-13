@@ -36,6 +36,7 @@ async function init() {
             await loadTickets();
             await loadSettings();
             renderAllTickets();
+            connectAllTicketChats();
             setupSignalR();
             setupEventListeners();
             setupDragAndDrop();
@@ -146,6 +147,7 @@ async function handleTicketEvent() {
 async function refreshAllTickets() {
     await loadTickets();
     renderAllTickets();
+    connectAllTicketChats();
 }
 
 // Toggle activity log visibility
@@ -624,6 +626,10 @@ async function showTicketDetails(ticketId) {
         actionsHtml += `<button class="btn-secondary" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Reopen</button>`;
     }
 
+    if (ticket.containerName) {
+        actionsHtml += `<button class="btn-primary" onclick="openChat('${ticketId}')">💬 Chat</button>`;
+    }
+
     if (ticket.tasks && ticket.tasks.length > 0) {
         actionsHtml += `<button class="btn-secondary" onclick="clearTasks('${ticketId}')">🧹 Clear Tasks</button>`;
     }
@@ -843,6 +849,15 @@ async function deleteTicket(ticketId) {
         });
 
         if (response.ok) {
+            // Clean up chat connection and buffer for deleted ticket.
+            disconnectTicketChat(ticketId);
+            delete ticketChatMessages[ticketId];
+            delete ticketPendingToolCalls[ticketId];
+
+            if (chatModalTicketId === ticketId) {
+                closeChatModal();
+            }
+
             await refreshAllTickets();
 
             // Close detail modal
@@ -1081,6 +1096,10 @@ function setupEventListeners() {
 
                 if (modal.id === 'ticketDetailModal') {
                     currentDetailTicketId = null;
+                }
+
+                if (modal.id === 'chatModal') {
+                    closeChatModal();
                 }
             });
         }
@@ -1332,6 +1351,424 @@ window.updatePercentLabel = updatePercentLabel;
 // Make saveSettings available globally for onclick
 window.saveSettings = saveSettings;
 
+// ---- Chat functionality ----
+
+// Per-ticket WebSocket connections and message buffers.
+let ticketChatConnections = {};  // ticketId -> WebSocket
+let ticketChatMessages = {};     // ticketId -> [{...msg}]
+let ticketPendingToolCalls = {}; // ticketId -> {toolCallId -> domElement} (only used when modal is open)
+let chatModalTicketId = null;
+
+// Auto-connect WebSocket for every ticket that has a container.
+function connectAllTicketChats() {
+    tickets.forEach(ticket => {
+        if (ticket.containerName && !ticketChatConnections[ticket.id]) {
+            connectTicketChat(ticket.id, ticket.containerName, ticket.workerChatPort || 0);
+        }
+    });
+
+    // Disconnect tickets that no longer exist.
+    Object.keys(ticketChatConnections).forEach(id => {
+        const stillExists = tickets.some(t => t.id === id);
+        if (!stillExists) {
+            disconnectTicketChat(id);
+        }
+    });
+}
+
+function connectTicketChat(ticketId, containerName, chatPort) {
+    if (ticketChatConnections[ticketId]) {
+        return;
+    }
+
+    if (!ticketChatMessages[ticketId]) {
+        ticketChatMessages[ticketId] = [];
+    }
+
+    let wsUrl;
+    if (chatPort && chatPort > 0) {
+        wsUrl = `ws://${window.location.hostname}:${chatPort}/ws/`;
+    } else {
+        wsUrl = `ws://${containerName}:8081/ws/`;
+    }
+
+    let ws;
+    try {
+        ws = new WebSocket(wsUrl);
+    } catch {
+        return;
+    }
+
+    ticketChatConnections[ticketId] = ws;
+
+    ws.onopen = () => {
+        bufferChatMsg(ticketId, { type: 'status', text: 'Connected to worker.' });
+        if (chatModalTicketId === ticketId) {
+            updateChatConnectionStatus('connected', 'Connected');
+        }
+    };
+
+    ws.onclose = () => {
+        delete ticketChatConnections[ticketId];
+        bufferChatMsg(ticketId, { type: 'status', text: 'Disconnected from worker.' });
+        if (chatModalTicketId === ticketId) {
+            updateChatConnectionStatus('disconnected', 'Disconnected');
+        }
+
+        // Auto-reconnect after 5 seconds if ticket still exists.
+        setTimeout(() => {
+            const t = tickets.find(t => t.id === ticketId);
+            if (t && t.containerName) {
+                connectTicketChat(ticketId, t.containerName, t.workerChatPort || 0);
+            }
+        }, 5000);
+    };
+
+    ws.onerror = () => {
+        if (chatModalTicketId === ticketId) {
+            updateChatConnectionStatus('disconnected', 'Error');
+        }
+    };
+
+    ws.onmessage = (event) => {
+        let msg;
+        try {
+            msg = JSON.parse(event.data);
+        } catch {
+            return;
+        }
+
+        bufferChatMsg(ticketId, msg);
+
+        // If this ticket's chat modal is open, render the message live.
+        if (chatModalTicketId === ticketId) {
+            renderSingleChatMessage(msg);
+        }
+    };
+}
+
+function disconnectTicketChat(ticketId) {
+    const ws = ticketChatConnections[ticketId];
+    if (ws) {
+        ws.close();
+        delete ticketChatConnections[ticketId];
+    }
+}
+
+function bufferChatMsg(ticketId, msg) {
+    if (!ticketChatMessages[ticketId]) {
+        ticketChatMessages[ticketId] = [];
+    }
+
+    ticketChatMessages[ticketId].push(msg);
+
+    // Cap buffer at 2000 messages.
+    if (ticketChatMessages[ticketId].length > 2000) {
+        ticketChatMessages[ticketId].shift();
+    }
+}
+
+function openChat(ticketId) {
+    chatModalTicketId = ticketId;
+    ticketPendingToolCalls[ticketId] = {};
+
+    const modal = document.getElementById('chatModal');
+    const messagesDiv = document.getElementById('chatMessages');
+    const titleEl = document.getElementById('chatTitle');
+    titleEl.textContent = `💬 Live Chat — #${ticketId}`;
+    messagesDiv.innerHTML = '';
+
+    // Render buffered messages.
+    const buffered = ticketChatMessages[ticketId] || [];
+    buffered.forEach(msg => renderSingleChatMessage(msg));
+
+    // Update connection status.
+    const ws = ticketChatConnections[ticketId];
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        updateChatConnectionStatus('connected', 'Connected');
+    } else if (ws && ws.readyState === WebSocket.CONNECTING) {
+        updateChatConnectionStatus('connecting', 'Connecting...');
+    } else {
+        updateChatConnectionStatus('disconnected', 'Disconnected');
+    }
+
+    modal.classList.add('active');
+
+    const input = document.getElementById('chatInput');
+    input.value = '';
+    input.focus();
+}
+
+window.openChat = openChat;
+
+function closeChatModal() {
+    const modal = document.getElementById('chatModal');
+    modal.classList.remove('active');
+    chatModalTicketId = null;
+}
+
+function updateChatConnectionStatus(status, text) {
+    const statusEl = document.getElementById('chatConnectionStatus');
+    const textEl = document.getElementById('chatConnectionText');
+
+    if (statusEl && textEl) {
+        statusEl.className = 'chat-connection-status ' + status;
+        textEl.textContent = text;
+    }
+}
+
+function renderSingleChatMessage(msg) {
+    if (msg.type === 'status') {
+        appendChatSystem(msg.text || '');
+        return;
+    }
+
+    if (msg.type !== 'message') {
+        return;
+    }
+
+    if (msg.role === 'user') {
+        // All user messages → right side bubble.
+        const content = (msg.content || '').replace(/^\[Chat from user\]:\s*/, '');
+        appendChatUser(content);
+    } else if (msg.role === 'assistant') {
+        if (msg.content) {
+            appendChatAssistant(msg.content, msg.model);
+        }
+
+        if (msg.toolCalls && msg.toolCalls.length > 0) {
+            for (let i = 0; i < msg.toolCalls.length; i++) {
+                const tc = msg.toolCalls[i];
+                const el = appendChatToolCall(tc.id, tc.name, tc.arguments);
+                if (chatModalTicketId) {
+                    if (!ticketPendingToolCalls[chatModalTicketId]) {
+                        ticketPendingToolCalls[chatModalTicketId] = {};
+                    }
+                    ticketPendingToolCalls[chatModalTicketId][tc.id] = el;
+                }
+            }
+        }
+    } else if (msg.role === 'tool') {
+        const pending = chatModalTicketId && ticketPendingToolCalls[chatModalTicketId];
+        if (msg.toolCallId && pending && pending[msg.toolCallId]) {
+            appendToolResult(pending[msg.toolCallId], msg.content || '');
+            delete pending[msg.toolCallId];
+        } else {
+            appendChatToolCall('unknown', 'tool_result', msg.content || '');
+        }
+    }
+}
+
+function appendChatAssistant(content, model) {
+    const messagesDiv = document.getElementById('chatMessages');
+    const el = document.createElement('div');
+    el.className = 'chat-msg chat-msg-assistant';
+
+    let html = '';
+    if (model) {
+        html += `<div class="chat-model-tag">${escapeHtml(model)}</div>`;
+    }
+    html += renderMarkdown(content);
+    el.innerHTML = html;
+
+    messagesDiv.appendChild(el);
+    scrollChatToBottom();
+}
+
+function appendChatUser(content) {
+    const messagesDiv = document.getElementById('chatMessages');
+    const el = document.createElement('div');
+    el.className = 'chat-msg chat-msg-user';
+    el.textContent = content;
+
+    messagesDiv.appendChild(el);
+    scrollChatToBottom();
+}
+
+function appendChatSystem(content) {
+    const messagesDiv = document.getElementById('chatMessages');
+    const el = document.createElement('div');
+    el.className = 'chat-msg chat-msg-system';
+    el.textContent = content;
+
+    messagesDiv.appendChild(el);
+    scrollChatToBottom();
+}
+
+function appendChatToolCall(id, name, args) {
+    const messagesDiv = document.getElementById('chatMessages');
+    const el = document.createElement('div');
+    el.className = 'chat-tool-accordion';
+    el.dataset.toolCallId = id;
+
+    const firstLine = truncateToolLine(name, args);
+
+    el.innerHTML = `
+        <div class="chat-tool-header">
+            <span class="chat-tool-icon">▶</span>
+            <span class="chat-tool-name">${escapeHtml(name)}</span>
+            <span style="color: var(--gray-400); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(firstLine)}</span>
+        </div>
+        <div class="chat-tool-body">
+            <div class="chat-tool-section">
+                <div class="chat-tool-section-label">Request</div>
+                ${escapeHtml(formatJsonSafe(args))}
+            </div>
+        </div>
+    `;
+
+    el.querySelector('.chat-tool-header').addEventListener('click', () => {
+        const icon = el.querySelector('.chat-tool-icon');
+        const body = el.querySelector('.chat-tool-body');
+        const isOpen = body.classList.contains('open');
+
+        if (isOpen) {
+            body.classList.remove('open');
+            icon.classList.remove('open');
+        } else {
+            body.classList.add('open');
+            icon.classList.add('open');
+        }
+    });
+
+    messagesDiv.appendChild(el);
+    scrollChatToBottom();
+
+    return el;
+}
+
+function appendToolResult(accordionEl, result) {
+    const body = accordionEl.querySelector('.chat-tool-body');
+
+    const section = document.createElement('div');
+    section.className = 'chat-tool-section';
+    section.innerHTML = `<div class="chat-tool-section-label">Response</div>${escapeHtml(truncateToolResult(result))}`;
+    body.appendChild(section);
+
+    scrollChatToBottom();
+}
+
+function truncateToolLine(name, args) {
+    try {
+        const obj = JSON.parse(args);
+        const keys = Object.keys(obj);
+        if (keys.length > 0) {
+            const firstVal = String(obj[keys[0]]);
+            return firstVal.length > 80 ? firstVal.substring(0, 80) + '…' : firstVal;
+        }
+    } catch {
+        // Not valid JSON
+    }
+
+    if (args && args.length > 80) {
+        return args.substring(0, 80) + '…';
+    }
+
+    return args || '';
+}
+
+function truncateToolResult(result) {
+    if (result.length > 2000) {
+        return result.substring(0, 2000) + '\n… (truncated)';
+    }
+
+    return result;
+}
+
+function formatJsonSafe(jsonStr) {
+    try {
+        return JSON.stringify(JSON.parse(jsonStr), null, 2);
+    } catch {
+        return jsonStr;
+    }
+}
+
+function renderMarkdown(text) {
+    if (!text) {
+        return '';
+    }
+
+    let html = escapeHtml(text);
+
+    // Code blocks
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+
+    // Bold
+    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+    // Italic
+    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+    return html;
+}
+
+function sendChatMessage() {
+    const input = document.getElementById('chatInput');
+    const text = input.value.trim();
+
+    if (!text || !chatModalTicketId) {
+        return;
+    }
+
+    const ws = ticketChatConnections[chatModalTicketId];
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+        appendChatSystem('Not connected to worker.');
+        return;
+    }
+
+    appendChatUser(text);
+    ws.send(text);
+    input.value = '';
+    autoResizeChatInput();
+    input.focus();
+}
+
+function scrollChatToBottom() {
+    const messagesDiv = document.getElementById('chatMessages');
+    requestAnimationFrame(() => {
+        messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    });
+}
+
+function autoResizeChatInput() {
+    const input = document.getElementById('chatInput');
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+}
+
+function setupChatEventListeners() {
+    const input = document.getElementById('chatInput');
+    const sendBtn = document.getElementById('chatSendBtn');
+    const closeBtn = document.getElementById('chatCloseBtn');
+    const modal = document.getElementById('chatModal');
+
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendChatMessage();
+        }
+    });
+
+    input.addEventListener('input', autoResizeChatInput);
+
+    sendBtn.addEventListener('click', () => {
+        sendChatMessage();
+    });
+
+    closeBtn.addEventListener('click', () => {
+        closeChatModal();
+    });
+
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            closeChatModal();
+        }
+    });
+}
+
 // Utility functions
 function escapeHtml(text) {
     if (text == null) {
@@ -1345,4 +1782,7 @@ function escapeHtml(text) {
 }
 
 // Initialize on DOM ready
-document.addEventListener('DOMContentLoaded', init);
+document.addEventListener('DOMContentLoaded', () => {
+    init();
+    setupChatEventListeners();
+});

@@ -77,7 +77,7 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
             {
                 NetworkMode = _containerContext.Network,
                 Mounts = _containerContext.Mounts,
-                AutoRemove = true
+                AutoRemove = false
             }
         };
 
@@ -118,6 +118,15 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
         catch (DockerContainerNotFoundException)
         {
             _logger.LogInformation("Worker container for ticket {TicketId} already removed", ticketId);
+        }
+
+        try
+        {
+            await _dockerClient.Containers.RemoveContainerAsync(containerId, new ContainerRemoveParameters { Force = true });
+        }
+        catch (DockerContainerNotFoundException)
+        {
+            // Already gone.
         }
 
         _activeWorkers.Remove(ticketId);

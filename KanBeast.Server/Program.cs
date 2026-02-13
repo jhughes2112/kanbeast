@@ -47,6 +47,7 @@ public class Program
         // Register application services
         builder.Services.AddSingleton<ITicketService, TicketService>();
         builder.Services.AddSingleton<ISettingsService, SettingsService>();
+        builder.Services.AddSingleton<ConversationStore>();
         builder.Services.AddSingleton<WorkerOrchestrator>();
         builder.Services.AddSingleton<IWorkerOrchestrator>(sp => sp.GetRequiredService<WorkerOrchestrator>());
         builder.Services.AddHostedService<WorkerOrchestrator>(sp => sp.GetRequiredService<WorkerOrchestrator>());

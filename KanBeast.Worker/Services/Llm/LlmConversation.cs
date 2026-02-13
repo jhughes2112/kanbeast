@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KanBeast.Worker.Models;
@@ -32,7 +33,8 @@ public class LlmConversation
 
     private static int s_conversationIndex;
 
-    private readonly bool _jsonLogging;
+    private readonly string _id;
+    private readonly string _displayName;
     private readonly LlmMemories _memories;
     private readonly List<string> _chapterSummaries;
     private readonly ICompaction _compaction;
@@ -40,9 +42,14 @@ public class LlmConversation
     private readonly string _logPrefix;
     private string _logPath;
     private int _rewriteCount;
+    private int _lastSyncedCount;
+    private bool _registrationPending = true;
+    private bool _resetPending;
 
-    public LlmConversation(string systemPrompt, string userPrompt, LlmMemories memories, LlmRole role, ToolContext toolContext, ICompaction compaction, bool jsonLogging, string logDirectory, string logPrefix)
+    public LlmConversation(string systemPrompt, string userPrompt, LlmMemories memories, LlmRole role, ToolContext toolContext, ICompaction compaction, string logDirectory, string logPrefix, string displayName)
     {
+        _id = Guid.NewGuid().ToString();
+        _displayName = displayName;
         StartedAt = DateTime.UtcNow.ToString("O");
         CompletedAt = string.Empty;
         Messages = new List<ChatMessage>();
@@ -51,10 +58,10 @@ public class LlmConversation
         _memories = memories;
         _chapterSummaries = new List<string>();
         _compaction = compaction;
-        _jsonLogging = jsonLogging;
         _logDirectory = logDirectory;
         _logPrefix = logPrefix;
         _rewriteCount = 0;
+        _lastSyncedCount = 0;
 
         if (!string.IsNullOrWhiteSpace(logDirectory) && !string.IsNullOrWhiteSpace(logPrefix))
         {
@@ -108,6 +115,12 @@ public class LlmConversation
 
     // Index of the first compressible message (after system, instructions, memories, and summaries)
     public const int FirstCompressibleIndex = 4;
+
+    [JsonIgnore]
+    public string Id => _id;
+
+    [JsonIgnore]
+    public string DisplayName => _displayName;
 
     [JsonPropertyName("started_at")]
     public string StartedAt { get; }
@@ -202,6 +215,7 @@ public class LlmConversation
         string memoriesContent = _memories.Format();
 
         Messages[2] = new ChatMessage { Role = "user", Content = memoriesContent };
+        MarkDirty();
     }
 
     private void UpdateSummariesMessage()
@@ -222,6 +236,7 @@ public class LlmConversation
         }
 
         Messages[3] = new ChatMessage { Role = "user", Content = summariesContent };
+        MarkDirty();
     }
 
 	public async Task AddUserMessageAsync(string content, CancellationToken cancellationToken)
@@ -233,6 +248,7 @@ public class LlmConversation
 		};
 		Messages.Add(message);
 		AppendMessageToLog(message, null);
+		await FlushSyncAsync();
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
@@ -241,6 +257,7 @@ public class LlmConversation
 	{
 		Messages.Add(message);
 		AppendMessageToLog(message, modelName);
+		await FlushSyncAsync();
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
@@ -255,6 +272,7 @@ public class LlmConversation
 		};
 		Messages.Add(message);
 		AppendMessageToLog(message, null);
+		await FlushSyncAsync();
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
@@ -280,12 +298,6 @@ public class LlmConversation
         }
 
         endIndex = Math.Min(endIndex, Messages.Count);
-
-        // Write pre-delete JSON log if enabled
-        if (_jsonLogging && !string.IsNullOrWhiteSpace(_logPath))
-        {
-            await WriteLogAsync($"-pre-compact-{_rewriteCount}", cancellationToken);
-        }
 
         // Close current log
         if (!string.IsNullOrWhiteSpace(_logPath))
@@ -335,6 +347,9 @@ public class LlmConversation
                 await AppendMessageToLogAsync(msg, null, cancellationToken);
             }
         }
+
+        MarkDirty();
+        await FlushSyncAsync();
     }
 
     // Records the cost of an LLM call and syncs it with the server, updating the ticket holder.
@@ -377,9 +392,12 @@ public class LlmConversation
     public async Task FinalizeAsync(CancellationToken cancellationToken)
     {
         MarkCompleted();
-        if (_jsonLogging)
+        await FlushSyncAsync();
+
+        WorkerHubClient? hub = WorkerSession.HubClient;
+        if (hub != null)
         {
-            await WriteLogAsync("-complete", cancellationToken);
+            await hub.FinishConversationAsync(_id);
         }
     }
 
@@ -446,22 +464,83 @@ public class LlmConversation
         return string.Empty;
     }
 
-    public async Task WriteLogAsync(string suffix, CancellationToken cancellationToken)
+    // Marks that existing messages were modified in-place and a full reset is needed on next flush.
+    private void MarkDirty()
     {
-        if (string.IsNullOrWhiteSpace(_logPath))
+        _resetPending = true;
+    }
+
+    // Flushes all pending sync operations to the server hub.
+    // Handles registration, full resets, and append-only deltas in order.
+    private async Task FlushSyncAsync()
+    {
+        WorkerHubClient? hub = WorkerSession.HubClient;
+        if (hub == null)
         {
             return;
         }
 
-        string jsonPath = Path.ChangeExtension(_logPath, null) + suffix + ".json";
-
-        string? directory = Path.GetDirectoryName(jsonPath);
-        if (!string.IsNullOrWhiteSpace(directory))
+        if (_registrationPending)
         {
-            Directory.CreateDirectory(directory);
+            await hub.RegisterConversationAsync(_id, _displayName);
+            _registrationPending = false;
+            _resetPending = true;
         }
 
-        string content = JsonSerializer.Serialize(this, JsonOptions);
-        await File.WriteAllTextAsync(jsonPath, content, cancellationToken);
+        if (_resetPending)
+        {
+            List<ConversationMessage> allMessages = new List<ConversationMessage>();
+            foreach (ChatMessage msg in Messages)
+            {
+                allMessages.Add(ConvertToConversationMessage(msg));
+            }
+
+            await hub.ResetConversationAsync(_id, allMessages);
+            _lastSyncedCount = Messages.Count;
+            _resetPending = false;
+        }
+        else if (Messages.Count > _lastSyncedCount)
+        {
+            List<ConversationMessage> newMessages = new List<ConversationMessage>();
+            for (int i = _lastSyncedCount; i < Messages.Count; i++)
+            {
+                newMessages.Add(ConvertToConversationMessage(Messages[i]));
+            }
+
+            await hub.AppendMessagesAsync(_id, newMessages);
+            _lastSyncedCount = Messages.Count;
+        }
+    }
+
+    // Converts an LLM ChatMessage to a simplified ConversationMessage for storage/display.
+    private ConversationMessage ConvertToConversationMessage(ChatMessage message)
+    {
+        ConversationMessage convMsg = new ConversationMessage
+        {
+            Role = message.Role,
+            Content = message.Content
+        };
+
+        if (message.ToolCalls != null && message.ToolCalls.Count > 0)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (ToolCallMessage tc in message.ToolCalls)
+            {
+                if (sb.Length > 0)
+                {
+                    sb.AppendLine();
+                }
+                sb.Append($"{tc.Function.Name}({tc.Function.Arguments})");
+            }
+            convMsg.ToolCall = sb.ToString();
+        }
+
+        if (message.Role == "tool" && !string.IsNullOrEmpty(message.Content))
+        {
+            convMsg.ToolResult = message.Content;
+        }
+
+        return convMsg;
     }
 }
+

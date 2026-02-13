@@ -134,7 +134,7 @@ public class CompactionSummarizer : ICompaction
 		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.LogPrefix) ? $"{conversation.LogPrefix}-compact" : string.Empty;
 		ICompaction noCompaction = new CompactionNone();
 
-		LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, LlmRole.Compaction, compactionContext, noCompaction, false, compactLogDir, compactLogPrefix);
+		LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, LlmRole.Compaction, compactionContext, noCompaction, compactLogDir, compactLogPrefix, $"{conversation.DisplayName} (Compaction)");
 		await summaryConversation.AddUserMessageAsync($"""
 			<history>
 			{historyBlock}

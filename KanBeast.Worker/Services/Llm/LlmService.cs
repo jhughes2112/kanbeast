@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -244,6 +245,13 @@ public class LlmService
 			}
 
 			cancellationToken.ThrowIfCancellationRequested();
+
+			// Inject any pending user messages from the chat hub.
+			ConcurrentQueue<string> chatQueue = WorkerSession.GetChatQueue(conversation.Id);
+			while (chatQueue.TryDequeue(out string? chatMsg))
+			{
+				await conversation.AddUserMessageAsync($"[Chat from user]: {chatMsg}", cancellationToken);
+			}
 
 			string? toolChoice = null;
 			if (toolDefs != null)

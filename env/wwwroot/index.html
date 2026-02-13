@@ -89,6 +89,25 @@
 		</div>
 	</div>
 
+	<!-- Chat Modal -->
+	<div id="chatModal" class="modal">
+		<div class="modal-content chat-modal-content">
+			<div class="modal-header chat-modal-header">
+				<h2 id="chatTitle">💬 Live Chat</h2>
+				<div class="chat-connection-status" id="chatConnectionStatus">
+					<span class="status-dot"></span>
+					<span id="chatConnectionText">Disconnected</span>
+				</div>
+				<button class="close" id="chatCloseBtn" aria-label="Close">&times;</button>
+			</div>
+			<div id="chatMessages" class="chat-messages"></div>
+			<div class="chat-input-area">
+				<textarea id="chatInput" class="chat-input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
+				<button id="chatSendBtn" class="btn-primary chat-send-btn">Send</button>
+			</div>
+		</div>
+	</div>
+
 	<!-- Settings Modal -->
 	<div id="settingsModal" class="modal">
 		<div class="modal-content">

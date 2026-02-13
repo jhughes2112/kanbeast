@@ -57,94 +57,43 @@ public class Program
 
 		KanbanApiClient apiClient = new KanbanApiClient(options.ServerUrl);
 
+		// Connect to server's SignalR hub for chat relay.
+		WorkerHubClient? hubClient = null;
+		try
+		{
+			hubClient = new WorkerHubClient(options.ServerUrl, options.TicketId);
+			await hubClient.ConnectAsync(cts.Token);
+			logger.LogInformation("Connected to server hub for ticket {TicketId}", options.TicketId);
+		}
+		catch (Exception hubEx)
+		{
+			logger.LogWarning(hubEx, "Failed to connect to server hub: {Message}", hubEx.Message);
+			if (hubClient != null)
+			{
+				await hubClient.DisposeAsync();
+			}
+			hubClient = null;
+		}
+
 		try
 		{
 			WorkerConfig config = BuildConfiguration(options);
 			logger.LogInformation("Worker initialized for ticket: {TicketId}", config.TicketId);
 
 			string repoDir = Path.GetFullPath(options.RepoPath);
-			string dateNow = DateTime.Now.ToString();
 
-			Dictionary<string, string> prompts = new Dictionary<string, string>
-			{
-				{ "planning", config.GetPrompt("planning").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
-				{ "qualityassurance", config.GetPrompt("qualityassurance").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
-				{ "developer", config.GetPrompt("developer").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
-				{ "subagent", config.GetPrompt("subagent").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
-				{ "compaction", config.GetPrompt("compaction").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) }
-			};
+			await apiClient.AddActivityLogAsync(config.TicketId, "Worker: Container started, standing by", cts.Token);
 
-			GitService gitService = new GitService(config.GitConfig);
+			// Long-lived loop: poll ticket status, work when Active, idle otherwise.
+			await RunWorkerLoopAsync(logger, apiClient, config, repoDir, hubClient, cts.Token);
 
-			logger.LogInformation("Fetching ticket details...");
-			TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId, cts.Token);
-
-			if (ticket != null)
-			{
-				logger.LogInformation("Ticket: {Title}", ticket.Title);
-				await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work", cts.Token);
-
-				TicketHolder ticketHolder = new TicketHolder(ticket);
-				LlmProxy llmProxy = new LlmProxy(config.LLMConfigs, config.JsonLogging);
-
-				if (Directory.Exists(repoDir))
-				{
-					Directory.Delete(repoDir, true);
-				}
-				Directory.CreateDirectory(repoDir);
-				logger.LogInformation("Working directory: {WorkDir}", repoDir);
-
-				if (!string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
-				{
-					logger.LogInformation("Cloning repository...");
-					await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Cloning repository", cts.Token);
-					await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, repoDir);
-					await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, repoDir);
-
-					string branchName = ticket.BranchName ?? $"feature/ticket-{ticket.Id}";
-					logger.LogInformation("Branch: {BranchName}", branchName);
-					await gitService.CreateOrCheckoutBranchAsync(branchName, repoDir);
-
-					if (string.IsNullOrEmpty(ticket.BranchName))
-					{
-						await apiClient.SetBranchNameAsync(ticket.Id, branchName, cts.Token);
-					}
-
-					AgentOrchestrator orchestrator = new AgentOrchestrator(loggerFactory.CreateLogger<AgentOrchestrator>(), config.Compaction, config.LLMConfigs);
-
-					WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cts.Token);
-					logger.LogInformation("Starting agent orchestrator...");
-
-					try
-					{
-						await orchestrator.StartAgents(ticketHolder, repoDir, cts.Token);
-					}
-					finally
-					{
-						WorkerSession.Stop();
-						bool pushed = await gitService.CommitAndPushAsync(repoDir, $"[KanBeast] Work on ticket {ticket.Id}");
-						if (pushed)
-						{
-							logger.LogInformation("Changes committed and pushed to feature branch");
-						}
-					}
-
-					logger.LogInformation("Worker completed");
-					return 0;
-				}
-				else
-				{
-					logger.LogError("No repository URL configured");
-					await apiClient.AddActivityLogAsync(ticket.Id, "Worker: No repository URL configured", cts.Token);
-					await MoveTicketToBacklogAsync(logger, apiClient, ticket.Id, cts.Token);
-					return 1;
-				}
-			}
-			else
-			{
-				logger.LogError("Ticket {TicketId} not found", config.TicketId);
-				return 1;
-			}
+			logger.LogInformation("Worker exiting cleanly");
+			return 0;
+		}
+		catch (OperationCanceledException)
+		{
+			logger.LogInformation("Worker cancelled, shutting down");
+			return 0;
 		}
 		catch (Exception ex)
 		{
@@ -153,7 +102,6 @@ public class Program
 			try
 			{
 				await apiClient.AddActivityLogAsync(options.TicketId, $"Worker: Failed with error - {ex.Message}", cts.Token);
-				await MoveTicketToBacklogAsync(logger, apiClient, options.TicketId, cts.Token);
 			}
 			catch (Exception reportException)
 			{
@@ -164,6 +112,139 @@ public class Program
 			await Task.Delay(TimeSpan.FromSeconds(100));
 			return 1;
 		}
+		finally
+		{
+			if (hubClient != null)
+			{
+				await hubClient.DisposeAsync();
+			}
+		}
+	}
+
+	private static async Task RunWorkerLoopAsync(
+		ILogger<Program> logger,
+		KanbanApiClient apiClient,
+		WorkerConfig config,
+		string repoDir,
+		WorkerHubClient? hubClient,
+		CancellationToken cancellationToken)
+	{
+		bool hasWorkedBefore = false;
+
+		while (!cancellationToken.IsCancellationRequested)
+		{
+			TicketDto? ticket = await apiClient.GetTicketAsync(config.TicketId, cancellationToken);
+			if (ticket == null)
+			{
+				logger.LogWarning("Ticket {TicketId} not found, waiting...", config.TicketId);
+				await Task.Delay(TimeSpan.FromSeconds(5), cancellationToken);
+				continue;
+			}
+
+			if (ticket.Status != "Active")
+			{
+				// Idle — wait and poll again.
+				await Task.Delay(TimeSpan.FromSeconds(3), cancellationToken);
+				continue;
+			}
+
+			// Ticket is Active — do work.
+			logger.LogInformation("Ticket is Active, starting work: {Title}", ticket.Title);
+			await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Initialized and starting work", cancellationToken);
+
+			hasWorkedBefore = await DoWorkAsync(logger, apiClient, config, ticket, repoDir, hubClient, hasWorkedBefore, cancellationToken);
+		}
+	}
+
+	private static async Task<bool> DoWorkAsync(
+		ILogger<Program> logger,
+		KanbanApiClient apiClient,
+		WorkerConfig config,
+		TicketDto ticket,
+		string repoDir,
+		WorkerHubClient? hubClient,
+		bool hasWorkedBefore,
+		CancellationToken cancellationToken)
+	{
+		string dateNow = DateTime.Now.ToString();
+
+		Dictionary<string, string> prompts = new Dictionary<string, string>
+		{
+			{ "planning", config.GetPrompt("planning").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
+			{ "qualityassurance", config.GetPrompt("qualityassurance").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
+			{ "developer", config.GetPrompt("developer").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
+			{ "subagent", config.GetPrompt("subagent").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
+			{ "compaction", config.GetPrompt("compaction").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) }
+		};
+
+		GitService gitService = new GitService(config.GitConfig);
+		TicketHolder ticketHolder = new TicketHolder(ticket);
+		LlmProxy llmProxy = new LlmProxy(config.LLMConfigs);
+
+		if (string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
+		{
+			logger.LogError("No repository URL configured");
+			await apiClient.AddActivityLogAsync(ticket.Id, "Worker: No repository URL configured", cancellationToken);
+			await MoveTicketToBacklogAsync(logger, apiClient, ticket.Id, cancellationToken);
+			return hasWorkedBefore;
+		}
+
+		// Clone fresh on first run, re-use on subsequent runs.
+		if (!hasWorkedBefore || !Directory.Exists(repoDir) || !Directory.Exists(Path.Combine(repoDir, ".git")))
+		{
+			if (Directory.Exists(repoDir))
+			{
+				Directory.Delete(repoDir, true);
+			}
+			Directory.CreateDirectory(repoDir);
+
+			logger.LogInformation("Cloning repository...");
+			await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Cloning repository", cancellationToken);
+			await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, repoDir);
+			await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, repoDir);
+		}
+
+		logger.LogInformation("Working directory: {WorkDir}", repoDir);
+
+		string branchName = ticket.BranchName ?? $"feature/ticket-{ticket.Id}";
+		logger.LogInformation("Branch: {BranchName}", branchName);
+		await gitService.CreateOrCheckoutBranchAsync(branchName, repoDir);
+
+		if (string.IsNullOrEmpty(ticket.BranchName))
+		{
+			await apiClient.SetBranchNameAsync(ticket.Id, branchName, cancellationToken);
+		}
+
+		AgentOrchestrator orchestrator = new AgentOrchestrator(
+			LoggerFactory.Create(b => { b.AddConsole(); b.SetMinimumLevel(LogLevel.Information); }).CreateLogger<AgentOrchestrator>(),
+			config.Compaction,
+			config.LLMConfigs);
+
+		WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cancellationToken, hubClient);
+		logger.LogInformation("Starting agent orchestrator...");
+
+		try
+		{
+			await orchestrator.StartAgents(ticketHolder, repoDir, cancellationToken);
+		}
+		catch (Exception ex)
+		{
+			logger.LogError(ex, "Orchestrator failed: {Message}", ex.Message);
+			await apiClient.AddActivityLogAsync(ticket.Id, $"Worker: Orchestrator failed - {ex.Message}", cancellationToken);
+		}
+		finally
+		{
+			WorkerSession.Stop();
+
+			bool pushed = await gitService.CommitAndPushAsync(repoDir, $"[KanBeast] Work on ticket {ticket.Id}");
+			if (pushed)
+			{
+				logger.LogInformation("Changes committed and pushed to feature branch");
+			}
+		}
+
+		logger.LogInformation("Work cycle completed, standing by");
+		return true;
 	}
 
 	private static async Task MoveTicketToBacklogAsync(ILogger<Program> logger, KanbanApiClient apiClient, string ticketId, CancellationToken cancellationToken)
@@ -232,8 +313,7 @@ public class Program
 			LLMConfigs = settings.LLMConfigs,
 			Compaction = settings.Compaction,
 			Prompts = prompts,
-			PromptDirectory = resolvedPromptDirectory,
-			JsonLogging = options.JsonLogging
+			PromptDirectory = resolvedPromptDirectory
 		};
 
 		return config;
@@ -310,7 +390,4 @@ public class WorkerOptions
 
 	[Option("repo", Required = false, Default = "/repo", HelpText = "Path where the git repository will be cloned.")]
 	public string RepoPath { get; set; } = string.Empty;
-
-	[Option("json", Required = false, Default = false, HelpText = "Output logs in JSON format instead of friendly format.")]
-	public bool JsonLogging { get; set; }
 }

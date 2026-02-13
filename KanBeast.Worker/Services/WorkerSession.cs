@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
@@ -12,6 +13,17 @@ public static class WorkerSession
 	public static TicketHolder TicketHolder { get; private set; } = null!;
 	public static string WorkDir { get; private set; } = string.Empty;
 	public static CancellationToken CancellationToken { get; private set; }
+	public static WorkerHubClient? HubClient { get; private set; }
+
+	public static ConcurrentQueue<string> GetChatQueue(string conversationId)
+	{
+		if (HubClient != null)
+		{
+			return HubClient.GetChatQueue(conversationId);
+		}
+
+		return new ConcurrentQueue<string>();
+	}
 
 	public static void Start(
 		IKanbanApiClient apiClient,
@@ -19,7 +31,8 @@ public static class WorkerSession
 		Dictionary<string, string> prompts,
 		TicketHolder ticketHolder,
 		string workDir,
-		CancellationToken cancellationToken)
+		CancellationToken cancellationToken,
+		WorkerHubClient? hubClient)
 	{
 		ApiClient = apiClient;
 		LlmProxy = llmProxy;
@@ -27,6 +40,7 @@ public static class WorkerSession
 		TicketHolder = ticketHolder;
 		WorkDir = workDir;
 		CancellationToken = cancellationToken;
+		HubClient = hubClient;
 	}
 
 	public static void Stop()

@@ -16,7 +16,7 @@ public class LlmProxy
 	private readonly List<LlmService> _services;
 	private int _preferredIndex;
 
-	public LlmProxy(List<LLMConfig> configs, bool jsonLogging)
+	public LlmProxy(List<LLMConfig> configs)
 	{
 		_preferredIndex = 0;
 

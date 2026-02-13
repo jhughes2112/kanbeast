@@ -15,7 +15,7 @@ public static class FileToolsTests
 
 		try
 		{
-			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None);
+			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null);
 			LlmMemories testMemories = new LlmMemories();
 			ToolContext tc = new ToolContext(null, null, null, testMemories);
 

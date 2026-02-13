@@ -110,7 +110,7 @@ public class AgentOrchestrator
 
 		ICompaction planningCompaction = CreateCompaction();
 		ToolContext planningContext = new ToolContext(null, _currentTaskId, _currentSubtaskId, planningMemories);
-		LlmConversation planningConversation = new LlmConversation(WorkerSession.Prompts["planning"], userPrompt, planningMemories, LlmRole.Planning, planningContext, planningCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-plan");
+		LlmConversation planningConversation = new LlmConversation(WorkerSession.Prompts["planning"], userPrompt, planningMemories, LlmRole.Planning, planningContext, planningCompaction, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-plan", "Planning");
 
 		bool result = ticketHolder.Ticket.HasValidPlan();
 		int planningRetryCount = 0;
@@ -229,7 +229,7 @@ public class AgentOrchestrator
 			ICompaction developerCompaction = CreateCompaction();
 
 			ToolContext devContext = new ToolContext(null, _currentTaskId, _currentSubtaskId, memories);
-			_developerConversation = new LlmConversation(WorkerSession.Prompts["developer"], initialPrompt, memories, LlmRole.Developer, devContext, developerCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev");
+			_developerConversation = new LlmConversation(WorkerSession.Prompts["developer"], initialPrompt, memories, LlmRole.Developer, devContext, developerCompaction, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev", $"Developer - {subtaskName}");
 
 			int iterationCount = 0;
 			int contextResetCount = 0;
@@ -299,7 +299,7 @@ public class AgentOrchestrator
 						ICompaction continueCompaction = CreateCompaction();
 
 						ToolContext continueContext = new ToolContext(null, _currentTaskId, _currentSubtaskId, memories);
-						_developerConversation = new LlmConversation(WorkerSession.Prompts["developer"], continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, false, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev");
+						_developerConversation = new LlmConversation(WorkerSession.Prompts["developer"], continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, "/workspace/logs", $"TIK-{ticketHolder.Ticket.Id}-dev", $"Developer - {subtaskName} (retry)");
 						iterationCount = 0;
 					}
 					else if (iterationCount == ProgressCheckThreshold)
@@ -360,7 +360,7 @@ public class AgentOrchestrator
 		// Start fresh conversations for each subtask
 		ICompaction qaCompaction = CreateCompaction();
 		ToolContext qaContext = new ToolContext(null, _currentTaskId, _currentSubtaskId, memories);
-		LlmConversation? qaConversation = new LlmConversation(WorkerSession.Prompts["qualityassurance"], userPrompt, memories, LlmRole.QA, qaContext, qaCompaction, false, "/workspace/logs", $"TIK-{WorkerSession.TicketHolder.Ticket.Id}-qa");
+		LlmConversation? qaConversation = new LlmConversation(WorkerSession.Prompts["qualityassurance"], userPrompt, memories, LlmRole.QA, qaContext, qaCompaction, "/workspace/logs", $"TIK-{WorkerSession.TicketHolder.Ticket.Id}-qa", "QA Review");
 
 		try
 		{

@@ -13,17 +13,20 @@ public class TicketsController : ControllerBase
     private readonly ITicketService _ticketService;
     private readonly IWorkerOrchestrator _workerOrchestrator;
     private readonly IHubContext<KanbanHub, IKanbanHubClient> _hubContext;
+    private readonly ConversationStore _conversationStore;
     private readonly ILogger<TicketsController> _logger;
 
     public TicketsController(
         ITicketService ticketService,
         IWorkerOrchestrator workerOrchestrator,
         IHubContext<KanbanHub, IKanbanHubClient> hubContext,
+        ConversationStore conversationStore,
         ILogger<TicketsController> logger)
     {
         _ticketService = ticketService;
         _workerOrchestrator = workerOrchestrator;
         _hubContext = hubContext;
+        _conversationStore = conversationStore;
         _logger = logger;
     }
 
@@ -53,6 +56,28 @@ public class TicketsController : ControllerBase
     {
         Ticket createdTicket = await _ticketService.CreateTicketAsync(ticket);
         _logger.LogInformation("POST /tickets - created #{Id}: {Title}", createdTicket.Id, createdTicket.Title);
+
+        // Start a worker container for this ticket immediately.
+        if (_workerOrchestrator is WorkerOrchestrator orchestrator)
+        {
+            try
+            {
+                string workerId = await _workerOrchestrator.StartWorkerAsync(createdTicket.Id);
+                _logger.LogInformation("Worker container started: {WorkerId} for ticket #{Id}", workerId, createdTicket.Id);
+
+                // Re-fetch to get the containerName and port that were set during start.
+                Ticket? refreshed = await _ticketService.GetTicketAsync(createdTicket.Id);
+                if (refreshed != null)
+                {
+                    createdTicket = refreshed;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Could not start worker container for ticket #{Id}: {Message}", createdTicket.Id, ex.Message);
+            }
+        }
+
         await _hubContext.Clients.All.TicketCreated(createdTicket);
         return Ok(createdTicket);
     }
@@ -75,6 +100,20 @@ public class TicketsController : ControllerBase
     [HttpDelete("{id}")]
     public async Task<ActionResult> DeleteTicket(string id)
     {
+        // Stop the worker container before deleting the ticket.
+        try
+        {
+            bool stopped = await _workerOrchestrator.StopWorkerAsync(id);
+            if (stopped)
+            {
+                _logger.LogInformation("Stopped worker container for deleted ticket #{Id}", id);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to stop worker for ticket #{Id}: {Message}", id, ex.Message);
+        }
+
         bool result = await _ticketService.DeleteTicketAsync(id);
         if (!result)
         {
@@ -96,38 +135,6 @@ public class TicketsController : ControllerBase
         }
 
         _logger.LogInformation("PATCH /tickets/{Id}/status - changed to {Status}", id, update.Status);
-
-        // If moving to Backlog, stop any running worker
-        if (update.Status == TicketStatus.Backlog)
-        {
-            try
-            {
-                bool stopped = await _workerOrchestrator.StopWorkerAsync(id);
-                if (stopped)
-                {
-                    _logger.LogInformation("Stopped worker for cancelled ticket #{Id}", id);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to stop worker for ticket #{Id}: {Message}", id, ex.Message);
-            }
-        }
-
-        // If moving to Active, start a worker
-        if (update.Status == TicketStatus.Active)
-        {
-            try
-            {
-                _logger.LogInformation("Starting worker for ticket #{Id}...", id);
-                string workerId = await _workerOrchestrator.StartWorkerAsync(id);
-                _logger.LogInformation("Worker started: {WorkerId} for ticket #{Id}", workerId, id);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to start worker for ticket #{Id}: {Message}", id, ex.Message);
-            }
-        }
 
         await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
         await _hubContext.Clients.All.TicketUpdated(ticket);
