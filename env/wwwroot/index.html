@@ -81,11 +81,13 @@
 
 	<!-- Ticket Detail Modal -->
 	<div id="ticketDetailModal" class="modal">
-		<div class="modal-content">
+		<div class="modal-content detail-modal-content">
 			<div class="modal-header">
 				<h2 id="detailTitle">Ticket Details</h2>
 			</div>
-			<div id="ticketDetail"></div>
+			<div id="ticketDetail" class="detail-panes"></div>
+			<div id="ticketDetailActions" class="ticket-actions"></div>
+			<div class="detail-resize-handle" id="detailResizeHandle">⟡</div>
 		</div>
 	</div>
 
@@ -93,17 +95,14 @@
 	<div id="chatModal" class="modal">
 		<div class="modal-content chat-modal-content">
 			<div class="modal-header chat-modal-header">
-				<h2 id="chatTitle">💬 Live Chat</h2>
-				<div class="chat-connection-status" id="chatConnectionStatus">
-					<span class="status-dot"></span>
-					<span id="chatConnectionText">Disconnected</span>
-				</div>
+				<h2 id="chatTitle">💬 Conversations</h2>
+				<div id="chatConversationPicker" class="chat-conversation-picker"></div>
 				<button class="close" id="chatCloseBtn" aria-label="Close">&times;</button>
 			</div>
 			<div id="chatMessages" class="chat-messages"></div>
 			<div class="chat-input-area">
-				<textarea id="chatInput" class="chat-input" placeholder="Type a message... (Enter to send, Shift+Enter for newline)" rows="1"></textarea>
-				<button id="chatSendBtn" class="btn-primary chat-send-btn">Send</button>
+				<textarea id="chatInput" class="chat-input" placeholder="Select a conversation…" rows="1" disabled></textarea>
+				<button id="chatSendBtn" class="btn-primary chat-send-btn" disabled>→</button>
 			</div>
 		</div>
 	</div>

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using KanBeast.Server.Models;
+using KanBeast.Shared;
 
 namespace KanBeast.Server.Services;
 
@@ -61,8 +62,6 @@ public class SettingsService : ISettingsService
         {
             currentSettings.Compaction = incomingSettings.Compaction;
         }
-
-        currentSettings.JsonLogging = incomingSettings.JsonLogging;
 
         if (incomingSettings.SystemPrompts.Count > 0)
         {
@@ -252,7 +251,6 @@ public class SettingsService : ISettingsService
             GitConfig = fileSettings.GitConfig,
             Compaction = fileSettings.Compaction,
             WebSearch = fileSettings.WebSearch,
-            JsonLogging = fileSettings.JsonLogging,
             SystemPrompts = LoadPromptTemplates()
         };
 
@@ -266,8 +264,7 @@ public class SettingsService : ISettingsService
             LLMConfigs = settings.LLMConfigs,
             GitConfig = settings.GitConfig,
             Compaction = settings.Compaction,
-            WebSearch = settings.WebSearch,
-            JsonLogging = settings.JsonLogging
+            WebSearch = settings.WebSearch
         };
 
         return fileSettings;

@@ -1,0 +1,173 @@
+using System.ComponentModel;
+using KanBeast.Shared;
+
+namespace KanBeast.Worker.Services.Tools;
+
+// Tool that spawns a developer LLM conversation to implement a subtask.
+// Only available to the planning agent.
+public static class DeveloperTools
+{
+	[Description("""
+		Launch a developer agent to implement a specific subtask from the plan.
+		The developer has full capabilities: shell, files, search, web, and the ability to launch sub-agents.
+
+		When to use:
+		- After planning is complete and the ticket status is Active, call this for each subtask that needs implementation.
+		- The developer will work autonomously on the subtask and return a summary of what was accomplished.
+		- You receive the developer's final report and can decide whether to move on or re-try the subtask with different instructions.
+
+		Usage notes:
+		1. Provide the task name, subtask name, and full description so the developer has complete context.
+		2. Each invocation is a full developer session — the developer works until it calls end_subtask.
+		3. The developer can read files, write code, run commands, search, and launch sub-agents to assist.
+		4. After the developer returns, review its report and decide the next step.
+		""")]
+	public static async Task<ToolResult> StartDeveloperAsync(
+		[Description("The name of the parent task")] string taskName,
+		[Description("The name of the subtask to implement")] string subtaskName,
+		[Description("Full description and acceptance criteria for the subtask")] string subtaskDescription,
+		[Description("The task ID from the ticket")] string taskId,
+		[Description("The subtask ID from the ticket")] string subtaskId,
+		ToolContext context)
+	{
+		ToolResult result;
+
+		if (string.IsNullOrWhiteSpace(subtaskName) || string.IsNullOrWhiteSpace(subtaskDescription))
+		{
+			result = new ToolResult("Error: subtaskName and subtaskDescription are required", false);
+		}
+		else
+		{
+			try
+			{
+				await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(
+					WorkerSession.TicketHolder.Ticket.Id, taskId, subtaskId,
+					SubtaskStatus.InProgress, WorkerSession.CancellationToken);
+
+				await WorkerSession.ApiClient.AddActivityLogAsync(
+					WorkerSession.TicketHolder.Ticket.Id,
+					$"Started subtask: {subtaskName}",
+					WorkerSession.CancellationToken);
+
+				string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask tool when complete.";
+
+				string systemPrompt = WorkerSession.Prompts.TryGetValue("developer", out string? devPrompt) ? devPrompt : string.Empty;
+				ConversationMemories memories = new ConversationMemories(context.Memories);
+				ICompaction compaction = new CompactionSummarizer(
+					WorkerSession.Prompts.TryGetValue("compaction", out string? compPrompt) ? compPrompt : string.Empty,
+					WorkerSession.LlmProxy,
+					0.9);
+
+				ToolContext devContext = new ToolContext(null, taskId, subtaskId, memories);
+
+				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
+				LlmConversation conversation = new LlmConversation(
+					systemPrompt,
+					initialPrompt,
+					memories,
+					LlmRole.Developer,
+					devContext,
+					compaction,
+					"/workspace/logs",
+					$"TIK-{ticketId}-dev",
+					$"Developer - {subtaskName}");
+
+				string content = string.Empty;
+				int iterationCount = 0;
+				int contextResetCount = 0;
+				bool subtaskComplete = false;
+
+				for (;;)
+				{
+					LlmResult llmResult = await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
+
+					if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
+					{
+						content = llmResult.Content;
+
+						Ticket? subtaskUpdate = await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(
+							ticketId, taskId, subtaskId,
+							SubtaskStatus.Complete, WorkerSession.CancellationToken);
+
+						if (subtaskUpdate != null)
+						{
+							WorkerSession.TicketHolder.Update(subtaskUpdate);
+						}
+
+						await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, $"Subtask completed: {content}", WorkerSession.CancellationToken);
+						subtaskComplete = true;
+						break;
+					}
+					else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
+					{
+						iterationCount++;
+						conversation.ResetIteration();
+
+						if (iterationCount >= 7)
+						{
+							contextResetCount++;
+
+							if (contextResetCount >= 2)
+							{
+								await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Developer exceeded max context resets, giving up on subtask", WorkerSession.CancellationToken);
+								content = "Developer exceeded max context resets and could not complete the subtask.";
+								break;
+							}
+
+							await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+
+							string continuePrompt = $"You were working on subtask '{subtaskName}' but got stuck. Look at the local changes and decide if you should continue or take a fresh approach.\nDescription: {subtaskDescription}\nCall end_subtask tool when complete.";
+							ICompaction continueCompaction = new CompactionSummarizer(
+								WorkerSession.Prompts.TryGetValue("compaction", out string? cp) ? cp : string.Empty,
+								WorkerSession.LlmProxy,
+								0.9);
+
+							ToolContext continueContext = new ToolContext(null, taskId, subtaskId, memories);
+							conversation = new LlmConversation(systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, "/workspace/logs", $"TIK-{ticketId}-dev", $"Developer - {subtaskName} (retry)");
+							iterationCount = 0;
+						}
+						else if (iterationCount == 3)
+						{
+							await conversation.AddUserMessageAsync("You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask tool when done.", WorkerSession.CancellationToken);
+						}
+						else
+						{
+							await conversation.AddUserMessageAsync("Continue working or call end_subtask tool when done.", WorkerSession.CancellationToken);
+						}
+					}
+					else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
+					{
+						content = "Developer stopped: cost budget exceeded.";
+						break;
+					}
+					else
+					{
+						content = $"Developer failed: {llmResult.ErrorMessage}";
+						break;
+					}
+				}
+
+				await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+
+				if (subtaskComplete)
+				{
+					result = new ToolResult($"Developer completed subtask '{subtaskName}': {content}", false);
+				}
+				else
+				{
+					result = new ToolResult($"Developer could not complete subtask '{subtaskName}': {content}", false);
+				}
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch (Exception ex)
+			{
+				result = new ToolResult($"Error: Developer failed: {ex.Message}", false);
+			}
+		}
+
+		return result;
+	}
+}

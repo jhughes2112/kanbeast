@@ -1,6 +1,6 @@
 using System.ComponentModel;
 using System.Text;
-using KanBeast.Worker.Models;
+using KanBeast.Shared;
 
 namespace KanBeast.Worker.Services.Tools;
 
@@ -38,7 +38,7 @@ public static class TicketTools
     {
         ToolResult result;
 
-        TicketDto? updated = await WorkerSession.ApiClient.DeleteAllTasksAsync(WorkerSession.TicketHolder.Ticket.Id, WorkerSession.CancellationToken);
+        Ticket? updated = await WorkerSession.ApiClient.DeleteAllTasksAsync(WorkerSession.TicketHolder.Ticket.Id, WorkerSession.CancellationToken);
         if (updated != null)
         {
             WorkerSession.TicketHolder.Update(updated);
@@ -123,7 +123,7 @@ public static class TicketTools
                     Subtasks = new List<KanbanSubtask>()
                 };
 
-                TicketDto? updated = await WorkerSession.ApiClient.AddTaskToTicketAsync(WorkerSession.TicketHolder.Ticket.Id, task, WorkerSession.CancellationToken);
+                Ticket? updated = await WorkerSession.ApiClient.AddTaskToTicketAsync(WorkerSession.TicketHolder.Ticket.Id, task, WorkerSession.CancellationToken);
 
                 if (updated == null)
                 {
@@ -196,7 +196,7 @@ public static class TicketTools
         }
         else
         {
-            string? taskId = WorkerSession.TicketHolder.Ticket.FindTaskIdByName(taskName);
+            string? taskId = WorkerSession.TicketHolder.FindTaskIdByName(taskName);
 
             if (taskId == null)
             {
@@ -213,7 +213,7 @@ public static class TicketTools
                         Status = SubtaskStatus.Incomplete
                     };
 
-                    TicketDto? updated = await WorkerSession.ApiClient.AddSubtaskToTaskAsync(WorkerSession.TicketHolder.Ticket.Id, taskId, subtask, WorkerSession.CancellationToken);
+                    Ticket? updated = await WorkerSession.ApiClient.AddSubtaskToTaskAsync(WorkerSession.TicketHolder.Ticket.Id, taskId, subtask, WorkerSession.CancellationToken);
 
                     if (updated == null)
                     {
@@ -240,7 +240,7 @@ public static class TicketTools
         return result;
     }
 
-    private static string FormatTicketSummary(TicketDto ticket, string header)
+    private static string FormatTicketSummary(Ticket ticket, string header)
     {
         StringBuilder sb = new StringBuilder();
         sb.AppendLine(header);
@@ -248,10 +248,10 @@ public static class TicketTools
         sb.AppendLine($"Ticket: {ticket.Title} (Status: {ticket.Status})");
         sb.AppendLine("Tasks:");
 
-        foreach (KanbanTaskDto task in ticket.Tasks)
+        foreach (KanbanTask task in ticket.Tasks)
         {
             sb.AppendLine($"  - {task.Name}");
-            foreach (KanbanSubtaskDto subtask in task.Subtasks)
+            foreach (KanbanSubtask subtask in task.Subtasks)
             {
                 sb.AppendLine($"      [{subtask.Status}] {subtask.Name}");
             }

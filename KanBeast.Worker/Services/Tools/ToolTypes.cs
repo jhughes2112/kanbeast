@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using KanBeast.Shared;
 using KanBeast.Worker.Services;
 
 namespace KanBeast.Worker.Services.Tools;
@@ -7,7 +8,6 @@ namespace KanBeast.Worker.Services.Tools;
 public enum LlmRole
 {
 	Planning,
-	QA,
 	Developer,
 	Compaction,
 	SubAgent
@@ -21,13 +21,13 @@ public class ToolContext
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
 	public ShellState? Shell { get; internal set; }
-	public LlmMemories Memories { get; }
+	public ConversationMemories Memories { get; }
 
 	public ToolContext(
 		LlmConversation? compactionTarget,
 		string? currentTaskId,
 		string? currentSubtaskId,
-		LlmMemories memories)
+		ConversationMemories memories)
 	{
 		ReadFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		CompactionTarget = compactionTarget;

@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using KanBeast.Server.Models;
 using KanBeast.Server.Services;
+using KanBeast.Shared;
 
 namespace KanBeast.Server.Controllers;
 

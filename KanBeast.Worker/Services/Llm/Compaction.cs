@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using KanBeast.Shared;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
@@ -177,13 +178,13 @@ public class CompactionSummarizer : ICompaction
 		}
 	}
 
-    private static string BuildHistoryBlock(List<ChatMessage> messages, int startIndex, int endIndex)
+    private static string BuildHistoryBlock(List<ConversationMessage> messages, int startIndex, int endIndex)
     {
         StringBuilder builder = new StringBuilder();
 
         for (int i = startIndex; i < endIndex; i++)
         {
-            ChatMessage message = messages[i];
+            ConversationMessage message = messages[i];
 
             if (message.Role == "user")
             {
@@ -195,7 +196,7 @@ public class CompactionSummarizer : ICompaction
             {
                 if (message.ToolCalls != null && message.ToolCalls.Count > 0)
                 {
-                    foreach (ToolCallMessage toolCall in message.ToolCalls)
+                    foreach (ConversationToolCall toolCall in message.ToolCalls)
                     {
                         builder.Append("assistant: ");
                         builder.Append(toolCall.Function.Name);
@@ -301,11 +302,11 @@ public class CompactionSummarizer : ICompaction
 		return Task.FromResult(result);
 	}
 
-    private static int GetMessageSize(List<ChatMessage> messages)
+    private static int GetMessageSize(List<ConversationMessage> messages)
     {
         int size = 0;
 
-        foreach (ChatMessage message in messages)
+        foreach (ConversationMessage message in messages)
         {
             if (string.Equals(message.Role, "system", StringComparison.Ordinal))
             {

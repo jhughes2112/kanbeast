@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.SignalR;
 using KanBeast.Server.Models;
 using KanBeast.Server.Services;
+using KanBeast.Shared;
 
 namespace KanBeast.Server.Hubs;
 
@@ -30,36 +31,19 @@ public class KanbanHub : Hub<IKanbanHubClient>
         await Groups.AddToGroupAsync(Context.ConnectionId, $"worker-{ticketId}");
     }
 
-    // Called by a worker to register a new conversation.
-    public async Task RegisterConversation(string ticketId, string conversationId, string displayName)
+    // Called by a worker to push the full conversation snapshot.
+    public async Task SyncConversation(string ticketId, ConversationData data)
     {
-        _conversationStore.Register(ticketId, conversationId, displayName);
+        await _conversationStore.UpsertAsync(ticketId, data);
         List<ConversationInfo> infos = _conversationStore.GetInfoList(ticketId);
         await Clients.Group($"ticket-{ticketId}").ConversationsUpdated(ticketId, infos);
-    }
-
-    // Called by a worker to append new messages to a conversation.
-    public async Task AppendConversationMessages(string ticketId, string conversationId, List<ConversationMessage> messages)
-    {
-        _conversationStore.AppendMessages(ticketId, conversationId, messages);
-        List<ConversationInfo> infos = _conversationStore.GetInfoList(ticketId);
-        await Clients.Group($"ticket-{ticketId}").ConversationsUpdated(ticketId, infos);
-        await Clients.Group($"ticket-{ticketId}").ConversationMessagesAppended(ticketId, conversationId, messages);
-    }
-
-    // Called by a worker after compaction to replace the full conversation.
-    public async Task ResetConversation(string ticketId, string conversationId, List<ConversationMessage> messages)
-    {
-        _conversationStore.ReplaceMessages(ticketId, conversationId, messages);
-        List<ConversationInfo> infos = _conversationStore.GetInfoList(ticketId);
-        await Clients.Group($"ticket-{ticketId}").ConversationsUpdated(ticketId, infos);
-        await Clients.Group($"ticket-{ticketId}").ConversationReset(ticketId, conversationId);
+        await Clients.Group($"ticket-{ticketId}").ConversationSynced(ticketId, data.Id);
     }
 
     // Called by a worker when a conversation is done.
     public async Task FinishConversation(string ticketId, string conversationId)
     {
-        _conversationStore.Finish(ticketId, conversationId);
+        await _conversationStore.FinishAsync(ticketId, conversationId);
         List<ConversationInfo> infos = _conversationStore.GetInfoList(ticketId);
         await Clients.Group($"ticket-{ticketId}").ConversationsUpdated(ticketId, infos);
         await Clients.Group($"ticket-{ticketId}").ConversationFinished(ticketId, conversationId);
@@ -78,8 +62,7 @@ public interface IKanbanHubClient
     Task TicketCreated(Ticket ticket);
     Task TicketDeleted(string ticketId);
     Task ConversationsUpdated(string ticketId, List<ConversationInfo> conversations);
-    Task ConversationMessagesAppended(string ticketId, string conversationId, List<ConversationMessage> messages);
-    Task ConversationReset(string ticketId, string conversationId);
+    Task ConversationSynced(string ticketId, string conversationId);
     Task ConversationFinished(string ticketId, string conversationId);
     Task WorkerChatMessage(string ticketId, string conversationId, string message);
 }

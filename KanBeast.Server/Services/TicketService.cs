@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KanBeast.Server.Models;
+using KanBeast.Shared;
 
 namespace KanBeast.Server.Services;
 

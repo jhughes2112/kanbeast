@@ -1,7 +1,9 @@
 # KanBeast
 env/tickets/
-env/settings.json
 env/logs/
+env/conversations/
+env/settings.json
+env/repo/
 
 # Build results
 [Dd]ebug/

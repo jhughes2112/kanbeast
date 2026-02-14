@@ -1,3 +1,4 @@
+using KanBeast.Shared;
 using KanBeast.Worker.Services;
 
 namespace KanBeast.Worker.Tests;
@@ -15,7 +16,7 @@ public static class LlmMemoriesTests
 
 	private static void TestAddAndFormat(TestContext ctx)
 	{
-		LlmMemories memories = new LlmMemories();
+		ConversationMemories memories = new ConversationMemories();
 
 		// Empty format.
 		string emptyFormat = memories.Format();
@@ -31,25 +32,25 @@ public static class LlmMemoriesTests
 
 		// Duplicate is ignored by HashSet.
 		memories.Add("INVARIANT", "The sky is blue");
-		ctx.AssertEqual(1, memories.MemoriesByLabel["INVARIANT"].Count, "Memories: duplicate ignored");
+		ctx.AssertEqual(1, memories.Backing["INVARIANT"].Count, "Memories: duplicate ignored");
 
 		// Blank inputs ignored.
 		memories.Add("", "something");
 		memories.Add("LABEL", "");
 		memories.Add("  ", "  ");
-		ctx.Assert(!memories.MemoriesByLabel.ContainsKey(""), "Memories: blank label ignored");
-		ctx.Assert(!memories.MemoriesByLabel.ContainsKey("LABEL"), "Memories: blank memory ignored");
+		ctx.Assert(!memories.Backing.ContainsKey(""), "Memories: blank label ignored");
+		ctx.Assert(!memories.Backing.ContainsKey("LABEL"), "Memories: blank memory ignored");
 	}
 
 	private static void TestRemove(TestContext ctx)
 	{
-		LlmMemories memories = new LlmMemories();
+		ConversationMemories memories = new ConversationMemories();
 		memories.Add("CONSTRAINT", "Always validate inputs before processing");
 
 		// Prefix match removal.
 		bool removed = memories.Remove("CONSTRAINT", "Always validate inputs");
 		ctx.Assert(removed, "Memories: prefix match removes entry");
-		ctx.Assert(!memories.MemoriesByLabel.ContainsKey("CONSTRAINT"), "Memories: empty label removed from dictionary");
+		ctx.Assert(!memories.Backing.ContainsKey("CONSTRAINT"), "Memories: empty label removed from dictionary");
 
 		// Remove from non-existent label.
 		bool removedMissing = memories.Remove("MISSING", "something long enough");
@@ -65,16 +66,16 @@ public static class LlmMemoriesTests
 	{
 		Type[] types = [typeof(string), typeof(string)];
 
-		int partial = (int)Reflect.Static(typeof(LlmMemories), "GetCommonPrefixLength", types, ["hello world", "hello there"])!;
+		int partial = (int)Reflect.Static(typeof(ConversationMemories), "GetCommonPrefixLength", types, ["hello world", "hello there"])!;
 		ctx.AssertEqual(6, partial, "GetCommonPrefixLength: partial match");
 
-		int none = (int)Reflect.Static(typeof(LlmMemories), "GetCommonPrefixLength", types, ["abc", "xyz"])!;
+		int none = (int)Reflect.Static(typeof(ConversationMemories), "GetCommonPrefixLength", types, ["abc", "xyz"])!;
 		ctx.AssertEqual(0, none, "GetCommonPrefixLength: no match");
 
-		int emptyStr = (int)Reflect.Static(typeof(LlmMemories), "GetCommonPrefixLength", types, ["", "hello"])!;
+		int emptyStr = (int)Reflect.Static(typeof(ConversationMemories), "GetCommonPrefixLength", types, ["", "hello"])!;
 		ctx.AssertEqual(0, emptyStr, "GetCommonPrefixLength: empty string");
 
-		int identical = (int)Reflect.Static(typeof(LlmMemories), "GetCommonPrefixLength", types, ["same", "same"])!;
+		int identical = (int)Reflect.Static(typeof(ConversationMemories), "GetCommonPrefixLength", types, ["same", "same"])!;
 		ctx.AssertEqual(4, identical, "GetCommonPrefixLength: identical strings");
 	}
 }

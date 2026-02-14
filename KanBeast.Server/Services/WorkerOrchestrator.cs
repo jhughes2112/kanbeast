@@ -1,6 +1,7 @@
 using Docker.DotNet;
 using Docker.DotNet.Models;
 using KanBeast.Server.Models;
+using KanBeast.Shared;
 
 namespace KanBeast.Server.Services;
 
@@ -140,9 +141,9 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
         return Task.FromResult(activeWorkers);
     }
 
-    public Task StartAsync(CancellationToken cancellationToken)
+    public async Task StartAsync(CancellationToken cancellationToken)
     {
-        return Task.CompletedTask;
+        await RestartWorkersForExistingTicketsAsync(cancellationToken);
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
@@ -150,9 +151,9 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
         await ShutdownAllWorkersAsync(cancellationToken);
     }
 
-    // Stops all active worker containers and ensures their tickets are moved back to Backlog.
-    // Called during server shutdown. Workers receive SIGTERM and handle their own cleanup,
-    // but we force-move any tickets still Active as a safety net.
+    // Stops all active worker containers during server shutdown.
+    // Does NOT change ticket status — tickets remain in whatever state they were in
+    // so they can be resumed when the server restarts.
     private async Task ShutdownAllWorkersAsync(CancellationToken cancellationToken)
     {
         List<(string TicketId, string ContainerId)> workers = new List<(string, string)>();
@@ -169,8 +170,6 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
 
         _logger.LogInformation("Graceful shutdown: stopping {Count} active workers", workers.Count);
 
-        // Stop all containers in parallel. Each worker receives SIGTERM, cancels its work,
-        // commits/pushes, and moves its ticket to Backlog before exiting.
         List<Task> stopTasks = new List<Task>();
         foreach ((string ticketId, string containerId) in workers)
         {
@@ -178,9 +177,40 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
         }
         await Task.WhenAll(stopTasks);
 
-        // Safety net: force any tickets still Active to Backlog in case a worker crashed
-        // without cleaning up.
-        foreach ((string ticketId, string _) in workers)
+        _activeWorkers.Clear();
+        _logger.LogInformation("Graceful shutdown complete: all workers stopped");
+    }
+
+    // On startup, find all tickets that had a worker container and restart them.
+    // Cleans up any stale containers left from a previous run first.
+    private async Task RestartWorkersForExistingTicketsAsync(CancellationToken cancellationToken)
+    {
+        if (!_containerContext.IsRunningInDocker || _containerContext.Image == null)
+        {
+            _logger.LogInformation("Startup: not running in Docker, skipping worker restart");
+            return;
+        }
+
+        IEnumerable<Ticket> allTickets = await _ticketService.GetAllTicketsAsync();
+
+        List<Ticket> ticketsWithWorkers = new List<Ticket>();
+        foreach (Ticket ticket in allTickets)
+        {
+            if (!string.IsNullOrEmpty(ticket.ContainerName) && ticket.Status != TicketStatus.Done)
+            {
+                ticketsWithWorkers.Add(ticket);
+            }
+        }
+
+        if (ticketsWithWorkers.Count == 0)
+        {
+            _logger.LogInformation("Startup: no tickets need workers");
+            return;
+        }
+
+        _logger.LogInformation("Startup: restarting workers for {Count} tickets", ticketsWithWorkers.Count);
+
+        foreach (Ticket ticket in ticketsWithWorkers)
         {
             if (cancellationToken.IsCancellationRequested)
             {
@@ -189,22 +219,61 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
 
             try
             {
-                Ticket? ticket = await _ticketService.GetTicketAsync(ticketId);
-                if (ticket != null && ticket.Status == TicketStatus.Active)
-                {
-                    _logger.LogWarning("Ticket #{TicketId} still Active after worker stop, forcing to Backlog", ticketId);
-                    await _ticketService.UpdateTicketStatusAsync(ticketId, TicketStatus.Backlog);
-                    await _ticketService.AddActivityLogAsync(ticketId, "Server: Moved to Backlog during server shutdown");
-                }
+                // Remove any stale container from a previous run.
+                await RemoveStaleContainerAsync(ticket.ContainerName!);
+
+                string containerName = await StartWorkerAsync(ticket.Id);
+                _logger.LogInformation("Startup: restarted worker {Container} for ticket #{TicketId}", containerName, ticket.Id);
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Failed to update ticket #{TicketId} during shutdown: {Message}", ticketId, ex.Message);
+                _logger.LogWarning(ex, "Startup: failed to restart worker for ticket #{TicketId}: {Message}", ticket.Id, ex.Message);
             }
         }
+    }
 
-        _activeWorkers.Clear();
-        _logger.LogInformation("Graceful shutdown complete: all workers stopped");
+    // Tries to stop and remove a container by name if it still exists from a previous server run.
+    private async Task RemoveStaleContainerAsync(string containerName)
+    {
+        try
+        {
+            IList<ContainerListResponse> containers = await _dockerClient.Containers.ListContainersAsync(
+                new ContainersListParameters { All = true });
+
+            foreach (ContainerListResponse container in containers)
+            {
+                bool nameMatch = false;
+                foreach (string name in container.Names)
+                {
+                    if (name == $"/{containerName}" || name == containerName)
+                    {
+                        nameMatch = true;
+                        break;
+                    }
+                }
+
+                if (nameMatch)
+                {
+                    _logger.LogInformation("Removing stale container {Name} ({Id})", containerName, container.ID);
+
+                    try
+                    {
+                        await _dockerClient.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 5 });
+                    }
+                    catch
+                    {
+                        // May already be stopped.
+                    }
+
+                    await _dockerClient.Containers.RemoveContainerAsync(container.ID, new ContainerRemoveParameters { Force = true });
+                    break;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Failed to remove stale container {Name}: {Message}", containerName, ex.Message);
+        }
     }
 
     private async Task StopContainerForShutdownAsync(string ticketId, string containerId)

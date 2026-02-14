@@ -1,5 +1,5 @@
 using System.Diagnostics;
-using KanBeast.Worker.Models;
+using KanBeast.Shared;
 
 namespace KanBeast.Worker.Services;
 

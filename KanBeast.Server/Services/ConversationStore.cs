@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KanBeast.Server.Models;
+using KanBeast.Shared;
 
 namespace KanBeast.Server.Services;
 
@@ -38,6 +39,25 @@ public class ConversationStore
         return null;
     }
 
+    // Finds the active (unfinished) planning conversation for a ticket, if any.
+    public ConversationData? GetActivePlanning(string ticketId)
+    {
+        if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
+        {
+            return null;
+        }
+
+        foreach ((string id, ConversationData data) in convos)
+        {
+            if (!data.IsFinished && data.DisplayName == "Planning")
+            {
+                return data;
+            }
+        }
+
+        return null;
+    }
+
     public List<ConversationInfo> GetInfoList(string ticketId)
     {
         List<ConversationInfo> result = new List<ConversationInfo>();
@@ -59,63 +79,14 @@ public class ConversationStore
         return result;
     }
 
-    public void Register(string ticketId, string conversationId, string displayName)
+    public async Task UpsertAsync(string ticketId, ConversationData data)
     {
         ConcurrentDictionary<string, ConversationData> convos = _store.GetOrAdd(ticketId, _ => new ConcurrentDictionary<string, ConversationData>());
-
-        convos[conversationId] = new ConversationData
-        {
-            Id = conversationId,
-            DisplayName = displayName,
-            Messages = new List<ConversationMessage>(),
-            IsFinished = false
-        };
-
-        SaveToDiskAsync(ticketId).GetAwaiter().GetResult();
+        convos[data.Id] = data;
+        await SaveToDiskAsync(ticketId);
     }
 
-    public void AppendMessages(string ticketId, string conversationId, List<ConversationMessage> messages)
-    {
-        if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
-        {
-            return;
-        }
-
-        if (!convos.TryGetValue(conversationId, out ConversationData? data))
-        {
-            return;
-        }
-
-        foreach (ConversationMessage msg in messages)
-        {
-            data.Messages.Add(msg);
-        }
-
-        SaveToDiskAsync(ticketId).GetAwaiter().GetResult();
-    }
-
-    public void ReplaceMessages(string ticketId, string conversationId, List<ConversationMessage> messages)
-    {
-        if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
-        {
-            return;
-        }
-
-        if (!convos.TryGetValue(conversationId, out ConversationData? data))
-        {
-            return;
-        }
-
-        data.Messages.Clear();
-        foreach (ConversationMessage msg in messages)
-        {
-            data.Messages.Add(msg);
-        }
-
-        SaveToDiskAsync(ticketId).GetAwaiter().GetResult();
-    }
-
-    public void Finish(string ticketId, string conversationId)
+    public async Task FinishAsync(string ticketId, string conversationId)
     {
         if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
         {
@@ -128,7 +99,7 @@ public class ConversationStore
         }
 
         data.IsFinished = true;
-        SaveToDiskAsync(ticketId).GetAwaiter().GetResult();
+        await SaveToDiskAsync(ticketId);
     }
 
     public void DeleteForTicket(string ticketId)

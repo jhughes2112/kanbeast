@@ -3,50 +3,10 @@ using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
-using KanBeast.Worker.Models;
+using KanBeast.Shared;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
-
-// A message in the chat conversation.
-public class ChatMessage
-{
-	[JsonPropertyName("role")]
-	public string Role { get; set; } = string.Empty;
-
-	[JsonPropertyName("content")]
-	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-	public string? Content { get; set; }
-
-	[JsonPropertyName("tool_calls")]
-	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-	public List<ToolCallMessage>? ToolCalls { get; set; }
-
-	[JsonPropertyName("tool_call_id")]
-	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
-	public string? ToolCallId { get; set; }
-}
-
-public class ToolCallMessage
-{
-	[JsonPropertyName("id")]
-	public string Id { get; set; } = string.Empty;
-
-	[JsonPropertyName("type")]
-	public string Type { get; set; } = "function";
-
-	[JsonPropertyName("function")]
-	public FunctionCallMessage Function { get; set; } = new();
-}
-
-public class FunctionCallMessage
-{
-	[JsonPropertyName("name")]
-	public string Name { get; set; } = string.Empty;
-
-	[JsonPropertyName("arguments")]
-	public string Arguments { get; set; } = string.Empty;
-}
 
 // OpenAI API request/response structures.
 public class ChatCompletionRequest
@@ -55,7 +15,7 @@ public class ChatCompletionRequest
 	public string Model { get; set; } = string.Empty;
 
 	[JsonPropertyName("messages")]
-	public List<ChatMessage> Messages { get; set; } = new();
+	public List<ConversationMessage> Messages { get; set; } = new();
 
 	[JsonPropertyName("tools")]
 	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
@@ -129,7 +89,7 @@ public class ChatCompletionResponse
 public class ChatChoice
 {
 	[JsonPropertyName("message")]
-	public ChatMessage Message { get; set; } = new();
+	public ConversationMessage Message { get; set; } = new();
 
 	[JsonPropertyName("finish_reason")]
 	public string? FinishReason { get; set; }
@@ -313,12 +273,12 @@ public class LlmService
 							}
 						}
 
-						ChatMessage assistantMessage = response.Choices[0].Message;
+						ConversationMessage assistantMessage = response.Choices[0].Message;
 
 						// If no native tool calls, try parsing XML-style tool calls from content.
 						if ((assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0) && !string.IsNullOrEmpty(assistantMessage.Content))
 						{
-							List<ToolCallMessage>? xmlToolCalls = TryParseXmlToolCalls(assistantMessage.Content, tools);
+							List<ConversationToolCall>? xmlToolCalls = TryParseXmlToolCalls(assistantMessage.Content, tools);
 							if (xmlToolCalls != null)
 							{
 								assistantMessage.ToolCalls = xmlToolCalls;
@@ -338,22 +298,22 @@ public class LlmService
 						}
 
 						// Start all tool calls concurrently.
-						List<(ToolCallMessage Call, Task<ToolResult> Task)> pendingTools = new List<(ToolCallMessage, Task<ToolResult>)>();
-						foreach (ToolCallMessage toolCall in assistantMessage.ToolCalls)
+						List<(ConversationToolCall Call, Task<ToolResult> Task)> pendingTools = new List<(ConversationToolCall, Task<ToolResult>)>();
+						foreach (ConversationToolCall toolCall in assistantMessage.ToolCalls)
 						{
 							Task<ToolResult> task = ExecuteTool(toolCall, tools, conversation.ToolContext);
 							pendingTools.Add((toolCall, task));
 						}
 
 						// Await each task and add messages in order.
-						foreach ((ToolCallMessage call, Task<ToolResult> task) in pendingTools)
+						foreach ((ConversationToolCall call, Task<ToolResult> task) in pendingTools)
 						{
 							ToolResult toolResult = await task;
 							await conversation.AddToolMessageAsync(call.Id, toolResult.Response, cancellationToken);
 						}
 
 						// Check for exit after all messages are added.
-						foreach ((ToolCallMessage call, Task<ToolResult> task) in pendingTools)
+						foreach ((ConversationToolCall call, Task<ToolResult> task) in pendingTools)
 						{
 							ToolResult toolResult = task.Result;
 							if (toolResult.ExitLoop)
@@ -452,7 +412,7 @@ public class LlmService
 		}
 	}
 
-	private async Task<ToolResult> ExecuteTool(ToolCallMessage toolCall, List<Tool> tools, ToolContext context)
+	private async Task<ToolResult> ExecuteTool(ConversationToolCall toolCall, List<Tool> tools, ToolContext context)
 	{
 		foreach (Tool tool in tools)
 		{
@@ -617,9 +577,9 @@ public class LlmService
 	}
 
 	// Scans content for <tool_call> or <function_call> XML blocks containing JSON payloads.
-	private List<ToolCallMessage>? TryParseXmlToolCalls(string content, List<Tool> tools)
+	private List<ConversationToolCall>? TryParseXmlToolCalls(string content, List<Tool> tools)
 	{
-		List<ToolCallMessage> result = new List<ToolCallMessage>();
+		List<ConversationToolCall> result = new List<ConversationToolCall>();
 		string[] tagNames = ["tool_call", "function_call"];
 
 		foreach (string tagName in tagNames)
@@ -646,7 +606,7 @@ public class LlmService
 				string inner = content.Substring(contentStart, closeIndex - contentStart).Trim();
 				searchStart = closeIndex + closeTag.Length;
 
-				ToolCallMessage? toolCall = TryParseXmlToolCallJson(inner, tools);
+				ConversationToolCall? toolCall = TryParseXmlToolCallJson(inner, tools);
 				if (toolCall != null)
 				{
 					result.Add(toolCall);
@@ -663,7 +623,7 @@ public class LlmService
 	}
 
 	// Parses a single JSON payload from an XML tool call block, validates tool name and argument keys.
-	private ToolCallMessage? TryParseXmlToolCallJson(string json, List<Tool> tools)
+	private ConversationToolCall? TryParseXmlToolCallJson(string json, List<Tool> tools)
 	{
 		try
 		{
@@ -719,11 +679,11 @@ public class LlmService
 				}
 			}
 
-			return new ToolCallMessage
+			return new ConversationToolCall
 			{
 				Id = $"xmltc_{Guid.NewGuid():N}",
 				Type = "function",
-				Function = new FunctionCallMessage
+				Function = new ConversationFunctionCall
 				{
 					Name = name,
 					Arguments = args.ToJsonString()

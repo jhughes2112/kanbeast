@@ -1,16 +1,10 @@
 using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using KanBeast.Shared;
 using Microsoft.AspNetCore.SignalR.Client;
 
 namespace KanBeast.Worker.Services;
-
-// Simplified conversation message — worker formats tool calls as strings.
-public class ConversationMessage
-{
-	public string Role { get; set; } = string.Empty;
-	public string? Content { get; set; }
-	public string? ToolCall { get; set; }
-	public string? ToolResult { get; set; }
-}
 
 // SignalR client that connects the worker to the server hub.
 public class WorkerHubClient : IAsyncDisposable
@@ -18,6 +12,10 @@ public class WorkerHubClient : IAsyncDisposable
 	private readonly HubConnection _connection;
 	private readonly string _ticketId;
 	private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _pendingChatMessages = new();
+	private readonly SemaphoreSlim _ticketChangedSignal = new SemaphoreSlim(0);
+	private readonly object _activeWorkLock = new object();
+
+	private CancellationTokenSource? _activeWorkCts;
 
 	public WorkerHubClient(string serverUrl, string ticketId)
 	{
@@ -30,6 +28,34 @@ public class WorkerHubClient : IAsyncDisposable
 			.WithAutomaticReconnect(new[] { TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10) })
 			.Build();
 
+		// Listen for ticket updates pushed from the server.
+		_connection.On<JsonElement>("TicketUpdated", ticket =>
+		{
+			if (ticket.TryGetProperty("id", out JsonElement idProp) && idProp.GetString() == _ticketId)
+			{
+				if (ticket.TryGetProperty("status", out JsonElement statusProp))
+				{
+					string? status = statusProp.ValueKind == JsonValueKind.Number
+						? ((int)statusProp.GetInt32()).ToString()
+						: statusProp.GetString();
+
+					bool isActive = string.Equals(status, "Active", StringComparison.OrdinalIgnoreCase) || status == "1";
+					if (!isActive)
+					{
+						lock (_activeWorkLock)
+						{
+							if (_activeWorkCts != null && !_activeWorkCts.IsCancellationRequested)
+							{
+								_activeWorkCts.Cancel();
+							}
+						}
+					}
+				}
+
+				_ticketChangedSignal.Release();
+			}
+		});
+
 		// Listen for chat messages from the browser, routed through the server hub.
 		_connection.On<string, string, string>("WorkerChatMessage", (fromTicketId, conversationId, message) =>
 		{
@@ -39,6 +65,40 @@ public class WorkerHubClient : IAsyncDisposable
 				queue.Enqueue(message);
 			}
 		});
+	}
+
+	// Creates a linked CancellationToken that is also cancelled when the ticket leaves Active.
+	public CancellationToken BeginActiveWork(CancellationToken parentToken)
+	{
+		lock (_activeWorkLock)
+		{
+			_activeWorkCts?.Dispose();
+			_activeWorkCts = CancellationTokenSource.CreateLinkedTokenSource(parentToken);
+			return _activeWorkCts.Token;
+		}
+	}
+
+	// Disposes the active-work CTS. Call after the work loop catches cancellation.
+	public void EndActiveWork()
+	{
+		lock (_activeWorkLock)
+		{
+			_activeWorkCts?.Dispose();
+			_activeWorkCts = null;
+		}
+	}
+
+	public async Task WaitForTicketChangeAsync(CancellationToken cancellationToken)
+	{
+		await _ticketChangedSignal.WaitAsync(cancellationToken);
+	}
+
+	public void DrainPendingSignals()
+	{
+		while (_ticketChangedSignal.CurrentCount > 0)
+		{
+			_ticketChangedSignal.Wait(0);
+		}
 	}
 
 	public ConcurrentQueue<string> GetChatQueue(string conversationId)
@@ -54,75 +114,43 @@ public class WorkerHubClient : IAsyncDisposable
 		await _connection.InvokeAsync("RegisterWorker", _ticketId, cancellationToken);
 	}
 
-	// Registers a new conversation on the server.
-	public async Task RegisterConversationAsync(string conversationId, string displayName)
+	// Pushes the full conversation snapshot to the server.
+	public async Task SyncConversationAsync(ConversationData data)
 	{
-		if (_connection.State != HubConnectionState.Connected)
-		{
-			return;
-		}
-
-		try
-		{
-			await _connection.InvokeAsync("RegisterConversation", _ticketId, conversationId, displayName);
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"Hub register conversation failed: {ex.Message}");
-		}
-	}
-
-	// Appends new messages to a conversation on the server.
-	public async Task AppendMessagesAsync(string conversationId, List<ConversationMessage> messages)
-	{
-		if (_connection.State != HubConnectionState.Connected || messages.Count == 0)
-		{
-			return;
-		}
-
-		try
-		{
-			await _connection.InvokeAsync("AppendConversationMessages", _ticketId, conversationId, messages);
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"Hub append messages failed: {ex.Message}");
-		}
-	}
-
-	// Replaces all messages in a conversation on the server (after compaction).
-	public async Task ResetConversationAsync(string conversationId, List<ConversationMessage> messages)
-	{
-		if (_connection.State != HubConnectionState.Connected)
-		{
-			return;
-		}
-
-		try
-		{
-			await _connection.InvokeAsync("ResetConversation", _ticketId, conversationId, messages);
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"Hub reset conversation failed: {ex.Message}");
-		}
+		await HubSendAsync("SyncConversation", [_ticketId, data]);
 	}
 
 	// Marks a conversation as finished on the server.
 	public async Task FinishConversationAsync(string conversationId)
 	{
-		if (_connection.State != HubConnectionState.Connected)
-		{
-			return;
-		}
+		await HubSendAsync("FinishConversation", [_ticketId, conversationId]);
+	}
 
-		try
+	// Fire-and-forget send with one retry. Uses SendCoreAsync instead of InvokeAsync
+	// to avoid server response timeouts when the connection is stale but still reports Connected.
+	private async Task HubSendAsync(string method, object?[] args)
+	{
+		bool sent = false;
+
+		for (int attempt = 0; attempt < 2 && !sent; attempt++)
 		{
-			await _connection.InvokeAsync("FinishConversation", _ticketId, conversationId);
-		}
-		catch (Exception ex)
-		{
-			Console.WriteLine($"Hub finish conversation failed: {ex.Message}");
+			if (_connection.State != HubConnectionState.Connected)
+			{
+				await Task.Delay(TimeSpan.FromSeconds(5));
+			}
+
+			if (_connection.State == HubConnectionState.Connected)
+			{
+				try
+				{
+					await _connection.SendCoreAsync(method, args);
+					sent = true;
+				}
+				catch (Exception ex) when (ex is not OperationCanceledException)
+				{
+					Console.WriteLine($"Hub {method} attempt {attempt + 1} failed: {ex.Message}");
+				}
+			}
 		}
 	}
 

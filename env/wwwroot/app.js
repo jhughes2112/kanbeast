@@ -36,7 +36,6 @@ async function init() {
             await loadTickets();
             await loadSettings();
             renderAllTickets();
-            connectAllTicketChats();
             setupSignalR();
             setupEventListeners();
             setupDragAndDrop();
@@ -94,6 +93,96 @@ function setupSignalR() {
         handleTicketEvent();
     });
 
+    // Conversation events from workers.
+    connection.on('ConversationsUpdated', (ticketId, conversations) => {
+        ticketConversations[ticketId] = conversations;
+        // If viewing this ticket's detail, update both dropdowns.
+        if (currentDetailTicketId === ticketId) {
+            updateConversationDropdown(ticketId);
+            updateDetailConversationDropdown(ticketId);
+        }
+    });
+
+    connection.on('ConversationMessagesAppended', (ticketId, conversationId, messages) => {
+        const key = `${ticketId}:${conversationId}`;
+        if (!conversationMessages[key]) {
+            conversationMessages[key] = [];
+        }
+        for (let i = 0; i < messages.length; i++) {
+            conversationMessages[key].push(messages[i]);
+        }
+        // If this conversation is currently displayed in the full chat modal, render new messages live.
+        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
+            for (let i = 0; i < messages.length; i++) {
+                renderSingleChatMessage(messages[i]);
+            }
+        }
+        // Also render in the inline detail chat if visible.
+        if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
+            for (let i = 0; i < messages.length; i++) {
+                renderDetailChatMessage(messages[i]);
+            }
+        }
+    });
+
+    // Server pushes ConversationSynced when a worker syncs conversation data.
+    // Invalidate cache and reload if currently viewing this conversation.
+    connection.on('ConversationSynced', (ticketId, conversationId) => {
+        const key = `${ticketId}:${conversationId}`;
+        delete conversationMessages[key];
+        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
+            loadAndDisplayConversation(ticketId, conversationId);
+        }
+        if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
+            loadAndDisplayDetailConversation(ticketId, conversationId);
+        }
+    });
+
+    connection.on('ConversationReset', (ticketId, conversationId) => {
+        // Full conversation was replaced (compaction). Refetch if viewing.
+        const key = `${ticketId}:${conversationId}`;
+        delete conversationMessages[key];
+        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
+            loadAndDisplayConversation(ticketId, conversationId);
+        }
+        if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
+            loadAndDisplayDetailConversation(ticketId, conversationId);
+        }
+    });
+
+    connection.on('ConversationReset', (ticketId, conversationId) => {
+        // Full conversation was replaced (compaction). Refetch if viewing.
+        const key = `${ticketId}:${conversationId}`;
+        delete conversationMessages[key];
+        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
+            loadAndDisplayConversation(ticketId, conversationId);
+        }
+        if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
+            loadAndDisplayDetailConversation(ticketId, conversationId);
+        }
+    });
+
+    connection.on('ConversationFinished', (ticketId, conversationId) => {
+        // Mark conversation finished in local state.
+        const convos = ticketConversations[ticketId];
+        if (convos) {
+            const c = convos.find(c => c.id === conversationId);
+            if (c) {
+                c.isFinished = true;
+            }
+        }
+        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
+            setChatInputEnabled(false);
+        }
+        if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
+            setDetailChatEnabled(false);
+        }
+        if (currentDetailTicketId === ticketId) {
+            updateConversationDropdown(ticketId);
+            updateDetailConversationDropdown(ticketId);
+        }
+    });
+
     connection.onreconnecting(() => {
         updateConnectionStatus('connecting', 'Reconnecting...');
     });
@@ -147,7 +236,6 @@ async function handleTicketEvent() {
 async function refreshAllTickets() {
     await loadTickets();
     renderAllTickets();
-    connectAllTicketChats();
 }
 
 // Toggle activity log visibility
@@ -626,10 +714,6 @@ async function showTicketDetails(ticketId) {
         actionsHtml += `<button class="btn-secondary" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Reopen</button>`;
     }
 
-    if (ticket.containerName) {
-        actionsHtml += `<button class="btn-primary" onclick="openChat('${ticketId}')">💬 Chat</button>`;
-    }
-
     if (ticket.tasks && ticket.tasks.length > 0) {
         actionsHtml += `<button class="btn-secondary" onclick="clearTasks('${ticketId}')">🧹 Clear Tasks</button>`;
     }
@@ -645,9 +729,8 @@ async function showTicketDetails(ticketId) {
     if (canEdit) {
         titleDescHtml = `
             <div class="detail-section editable-section">
-                <input type="text" id="editTitle" class="edit-title-input" value="${escapeHtml(ticket.title)}" placeholder="Ticket title...">
-                <textarea id="editDescription" class="edit-description-input" rows="4" placeholder="Description...">${escapeHtml(ticket.description || '')}</textarea>
-                <button class="btn-secondary btn-sm" onclick="saveTicketDetails('${ticketId}')">💾 Save Changes</button>
+                <input type="text" id="editTitle" class="edit-title-input" value="${escapeHtml(ticket.title)}" placeholder="Ticket title..." onblur="saveTicketDetails('${ticketId}')">
+                <textarea id="editDescription" class="edit-description-input" rows="4" placeholder="Description..." onblur="saveTicketDetails('${ticketId}')">${escapeHtml(ticket.description || '')}</textarea>
             </div>
         `;
     } else {
@@ -677,16 +760,36 @@ async function showTicketDetails(ticketId) {
 
         ${titleDescHtml}
 
-        <div class="detail-section">
-            ${tasksHtml}
+        <div class="detail-pane detail-pane-tasks-activity" id="detailPaneTasksActivity">
+            <div class="detail-section">
+                ${tasksHtml}
+            </div>
+            <div class="detail-section">
+                ${activityHtml}
+            </div>
         </div>
 
-        <div class="detail-section">
-            ${activityHtml}
-        </div>
+        <div class="detail-splitter" id="detailSplitter2"></div>
 
-        ${actionsHtml}
+        <div class="detail-pane detail-pane-chat" id="detailPaneChat">
+            <div class="detail-chat-header">
+                <select id="detailConversationDropdown" class="detail-chat-select">
+                    <option value="">💬 Select conversation…</option>
+                </select>
+                <button class="detail-chat-maximize" onclick="openChat('${ticketId}')" title="Maximize chat">⤢</button>
+            </div>
+            <div class="detail-chat-messages" id="detailChatMessages">
+                <div class="chat-msg chat-msg-system">Select a conversation above.</div>
+            </div>
+            <div class="detail-chat-input-area">
+                <textarea id="detailChatInput" class="detail-chat-input" placeholder="Type a message…" rows="1" disabled></textarea>
+                <button id="detailChatSendBtn" class="btn-primary detail-chat-send" disabled>→</button>
+            </div>
+        </div>
     `;
+
+    const actionsDiv = document.getElementById('ticketDetailActions');
+    actionsDiv.innerHTML = actionsHtml;
 
     modal.classList.add('active');
 
@@ -781,6 +884,260 @@ async function showTicketDetails(ticketId) {
             console.warn('Could not subscribe to ticket updates:', error);
         }
     }
+
+    // Fetch existing conversations via REST so the dropdown is populated
+    // even if the SignalR event was sent before we subscribed.
+    try {
+        const convosResponse = await fetch(`${API_BASE}/tickets/${ticketId}/conversations`);
+        if (convosResponse.ok) {
+            const convos = await convosResponse.json();
+            if (convos.length > 0) {
+                ticketConversations[ticketId] = convos;
+            }
+        }
+    } catch (error) {
+        console.warn('Could not fetch conversations:', error);
+    }
+
+    // Setup splitter drag behavior
+    setupSplitter('detailSplitter2', 'detailPaneTasksActivity', 'detailPaneChat');
+
+    // Setup inline chat
+    setupDetailChat(ticketId);
+
+    // Setup resize handle
+    setupDetailResize();
+}
+
+// Horizontal splitter drag between two panes.
+function setupSplitter(splitterId, topPaneId, bottomPaneId) {
+    const splitter = document.getElementById(splitterId);
+    const topPane = document.getElementById(topPaneId);
+    const bottomPane = document.getElementById(bottomPaneId);
+    if (!splitter || !topPane || !bottomPane) return;
+
+    let startY = 0;
+    let startTopH = 0;
+    let startBottomH = 0;
+
+    function onMouseDown(e) {
+        e.preventDefault();
+        startY = e.clientY;
+        startTopH = topPane.offsetHeight;
+        startBottomH = bottomPane.offsetHeight;
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = 'row-resize';
+        document.body.style.userSelect = 'none';
+    }
+
+    function onMouseMove(e) {
+        const delta = e.clientY - startY;
+        const newTop = Math.max(40, startTopH + delta);
+        const newBottom = Math.max(40, startBottomH - delta);
+        topPane.style.height = newTop + 'px';
+        topPane.style.flex = 'none';
+        bottomPane.style.height = newBottom + 'px';
+        bottomPane.style.flex = 'none';
+    }
+
+    function onMouseUp() {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+    }
+
+    splitter.addEventListener('mousedown', onMouseDown);
+}
+
+// Inline chat inside the ticket detail modal.
+let detailChatTicketId = null;
+let detailChatConversationId = null;
+
+function setupDetailChat(ticketId) {
+    detailChatTicketId = ticketId;
+    detailChatConversationId = null;
+
+    const dropdown = document.getElementById('detailConversationDropdown');
+    const messagesDiv = document.getElementById('detailChatMessages');
+    const input = document.getElementById('detailChatInput');
+    const sendBtn = document.getElementById('detailChatSendBtn');
+    if (!dropdown || !messagesDiv || !input || !sendBtn) return;
+
+    // Populate dropdown.
+    const convos = ticketConversations[ticketId] || [];
+    dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
+    for (let i = 0; i < convos.length; i++) {
+        const c = convos[i];
+        const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
+        const option = document.createElement('option');
+        option.value = c.id;
+        option.textContent = c.displayName + suffix;
+        dropdown.appendChild(option);
+    }
+
+    dropdown.addEventListener('change', () => {
+        const convId = dropdown.value;
+        if (convId) {
+            detailChatConversationId = convId;
+            loadAndDisplayDetailConversation(ticketId, convId);
+            const info = convos.find(c => c.id === convId);
+            setDetailChatEnabled(!(info && info.isFinished));
+        } else {
+            detailChatConversationId = null;
+            messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation above.</div>';
+            setDetailChatEnabled(false);
+        }
+    });
+
+    function sendMessage() {
+        const text = input.value.trim();
+        if (!text || !detailChatTicketId || !detailChatConversationId) return;
+        if (!connection || connection.state !== signalR.HubConnectionState.Connected) return;
+
+        appendDetailChatBubble('user', text);
+        input.value = '';
+        input.style.height = '';
+        connection.invoke('SendChatToWorker', detailChatTicketId, detailChatConversationId, text).catch(() => {});
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            sendMessage();
+        }
+    });
+    input.addEventListener('input', () => {
+        input.style.height = '';
+        input.style.height = Math.min(input.scrollHeight, 80) + 'px';
+    });
+}
+
+function setDetailChatEnabled(enabled) {
+    const input = document.getElementById('detailChatInput');
+    const btn = document.getElementById('detailChatSendBtn');
+    if (input) {
+        input.disabled = !enabled;
+        input.placeholder = enabled ? 'Type a message…' : 'Conversation finished.';
+    }
+    if (btn) btn.disabled = !enabled;
+}
+
+async function loadAndDisplayDetailConversation(ticketId, conversationId) {
+    const messagesDiv = document.getElementById('detailChatMessages');
+    if (!messagesDiv) return;
+    messagesDiv.innerHTML = '';
+
+    const key = `${ticketId}:${conversationId}`;
+    let msgs = conversationMessages[key];
+
+    if (!msgs) {
+        try {
+            const response = await fetch(`${API_BASE}/tickets/${ticketId}/conversations/${conversationId}`);
+            if (response.ok) {
+                const data = await response.json();
+                msgs = data.messages || [];
+                conversationMessages[key] = msgs;
+            } else {
+                msgs = [];
+            }
+        } catch {
+            msgs = [];
+        }
+    }
+
+    for (let i = 0; i < msgs.length; i++) {
+        renderDetailChatMessage(msgs[i]);
+    }
+}
+
+function renderDetailChatMessage(msg) {
+    if (msg.role === 'user') {
+        const content = (msg.content || '').replace(/^\[Chat from user\]:\s*/, '');
+        appendDetailChatBubble('user', content);
+    } else if (msg.role === 'assistant' && msg.content) {
+        appendDetailChatBubble('assistant', msg.content);
+    } else if (msg.role === 'system') {
+        appendDetailChatBubble('system', msg.content || '');
+    }
+}
+
+function appendDetailChatBubble(role, content) {
+    const messagesDiv = document.getElementById('detailChatMessages');
+    if (!messagesDiv) return;
+    const el = document.createElement('div');
+    el.className = `chat-msg chat-msg-${role}`;
+    el.textContent = content;
+    messagesDiv.appendChild(el);
+    messagesDiv.scrollTop = messagesDiv.scrollHeight;
+}
+
+// Resize the detail modal from the bottom-right corner.
+function setupDetailResize() {
+    const handle = document.getElementById('detailResizeHandle');
+    const modalContent = handle ? handle.closest('.detail-modal-content') : null;
+    const modal = handle ? handle.closest('.modal') : null;
+    if (!handle || !modalContent || !modal) return;
+
+    let startX = 0;
+    let startY = 0;
+    let startW = 0;
+    let startH = 0;
+    let startLeft = 0;
+    let startTop = 0;
+
+    function onMouseDown(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        // Capture initial state.
+        const rect = modalContent.getBoundingClientRect();
+        startX = e.clientX;
+        startY = e.clientY;
+        startW = rect.width;
+        startH = rect.height;
+        startLeft = rect.left;
+        startTop = rect.top;
+
+        // Switch to absolute positioning so we can control position during resize.
+        modal.style.alignItems = 'flex-start';
+        modalContent.style.position = 'absolute';
+        modalContent.style.left = startLeft + 'px';
+        modalContent.style.top = startTop + 'px';
+        modalContent.style.margin = '0';
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = 'nwse-resize';
+        document.body.style.userSelect = 'none';
+    }
+
+    function onMouseMove(e) {
+        const deltaX = e.clientX - startX;
+        const deltaY = e.clientY - startY;
+
+        const newW = Math.max(400, startW + deltaX);
+        const newH = Math.max(300, startH + deltaY);
+
+        // Keep top-left corner fixed, bottom-right follows mouse.
+        modalContent.style.width = newW + 'px';
+        modalContent.style.maxWidth = newW + 'px';
+        modalContent.style.height = newH + 'px';
+        modalContent.style.maxHeight = newH + 'px';
+    }
+
+    function onMouseUp() {
+        document.removeEventListener('mousemove', onMouseMove);
+        document.removeEventListener('mouseup', onMouseUp);
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+
+        // Leave the modal in absolute positioning so it stays where the user placed it.
+    }
+
+    handle.addEventListener('mousedown', onMouseDown);
 }
 
 // Move ticket to new status
@@ -789,6 +1146,8 @@ async function moveTicket(ticketId, newStatus) {
     if (currentDetailTicketId === ticketId) {
         document.getElementById('ticketDetailModal').classList.remove('active');
         currentDetailTicketId = null;
+        detailChatTicketId = null;
+        detailChatConversationId = null;
     }
 
     try {
@@ -849,10 +1208,14 @@ async function deleteTicket(ticketId) {
         });
 
         if (response.ok) {
-            // Clean up chat connection and buffer for deleted ticket.
-            disconnectTicketChat(ticketId);
-            delete ticketChatMessages[ticketId];
-            delete ticketPendingToolCalls[ticketId];
+            // Clean up conversation data for deleted ticket.
+            delete ticketConversations[ticketId];
+            // Clean cached conversation messages.
+            Object.keys(conversationMessages).forEach(key => {
+                if (key.startsWith(`${ticketId}:`)) {
+                    delete conversationMessages[key];
+                }
+            });
 
             if (chatModalTicketId === ticketId) {
                 closeChatModal();
@@ -863,6 +1226,8 @@ async function deleteTicket(ticketId) {
             // Close detail modal
             document.getElementById('ticketDetailModal').classList.remove('active');
             currentDetailTicketId = null;
+            detailChatTicketId = null;
+            detailChatConversationId = null;
         } else {
             console.error('Failed to delete ticket');
         }
@@ -876,11 +1241,17 @@ window.deleteTicket = deleteTicket;
 
 // Save ticket title and description
 async function saveTicketDetails(ticketId) {
-    const title = document.getElementById('editTitle').value.trim();
-    const description = document.getElementById('editDescription').value.trim();
+    const titleEl = document.getElementById('editTitle');
+    const descriptionEl = document.getElementById('editDescription');
+
+    if (!titleEl || !descriptionEl) {
+        return;
+    }
+
+    const title = titleEl.value.trim();
+    const description = descriptionEl.value.trim();
 
     if (!title) {
-        alert('Title cannot be empty');
         return;
     }
 
@@ -1071,6 +1442,8 @@ function setupEventListeners() {
 
             if (modal.id === 'ticketDetailModal') {
                 currentDetailTicketId = null;
+                detailChatTicketId = null;
+                detailChatConversationId = null;
             }
         });
     });
@@ -1083,6 +1456,8 @@ function setupEventListeners() {
 
                 if (modal.id === 'ticketDetailModal') {
                     currentDetailTicketId = null;
+                    detailChatTicketId = null;
+                    detailChatConversationId = null;
                 }
             }
         });
@@ -1096,6 +1471,8 @@ function setupEventListeners() {
 
                 if (modal.id === 'ticketDetailModal') {
                     currentDetailTicketId = null;
+                    detailChatTicketId = null;
+                    detailChatConversationId = null;
                 }
 
                 if (modal.id === 'chatModal') {
@@ -1353,223 +1730,212 @@ window.saveSettings = saveSettings;
 
 // ---- Chat functionality ----
 
-// Per-ticket WebSocket connections and message buffers.
-let ticketChatConnections = {};  // ticketId -> WebSocket
-let ticketChatMessages = {};     // ticketId -> [{...msg}]
-let ticketPendingToolCalls = {}; // ticketId -> {toolCallId -> domElement} (only used when modal is open)
+// Conversation state.
+let ticketConversations = {};    // ticketId -> [{id, displayName, messageCount, isFinished}]
+let conversationMessages = {};   // "ticketId:conversationId" -> [ConversationMessage]
+let ticketPendingToolCalls = {}; // ticketId -> {toolCallId -> domElement}
 let chatModalTicketId = null;
+let chatModalConversationId = null;
 
-// Auto-connect WebSocket for every ticket that has a container.
-function connectAllTicketChats() {
-    tickets.forEach(ticket => {
-        if (ticket.containerName && !ticketChatConnections[ticket.id]) {
-            connectTicketChat(ticket.id, ticket.containerName, ticket.workerChatPort || 0);
-        }
-    });
-
-    // Disconnect tickets that no longer exist.
-    Object.keys(ticketChatConnections).forEach(id => {
-        const stillExists = tickets.some(t => t.id === id);
-        if (!stillExists) {
-            disconnectTicketChat(id);
-        }
-    });
-}
-
-function connectTicketChat(ticketId, containerName, chatPort) {
-    if (ticketChatConnections[ticketId]) {
+// Updates the conversation dropdown in the ticket detail view.
+function updateConversationDropdown(ticketId) {
+    const dropdown = document.getElementById('conversationDropdown');
+    if (!dropdown) {
         return;
     }
 
-    if (!ticketChatMessages[ticketId]) {
-        ticketChatMessages[ticketId] = [];
+    const convos = ticketConversations[ticketId] || [];
+    const previousValue = dropdown.value;
+
+    dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
+    for (let i = 0; i < convos.length; i++) {
+        const c = convos[i];
+        const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
+        const option = document.createElement('option');
+        option.value = c.id;
+        option.textContent = c.displayName + suffix;
+        dropdown.appendChild(option);
     }
 
-    let wsUrl;
-    if (chatPort && chatPort > 0) {
-        wsUrl = `ws://${window.location.hostname}:${chatPort}/ws/`;
-    } else {
-        wsUrl = `ws://${containerName}:8081/ws/`;
+    // Preserve selection if still valid.
+    if (previousValue && convos.some(c => c.id === previousValue)) {
+        dropdown.value = previousValue;
     }
+}
 
-    let ws;
-    try {
-        ws = new WebSocket(wsUrl);
-    } catch {
+function updateDetailConversationDropdown(ticketId) {
+    const dropdown = document.getElementById('detailConversationDropdown');
+    if (!dropdown) {
         return;
     }
 
-    ticketChatConnections[ticketId] = ws;
+    const convos = ticketConversations[ticketId] || [];
+    const previousValue = dropdown.value;
 
-    ws.onopen = () => {
-        bufferChatMsg(ticketId, { type: 'status', text: 'Connected to worker.' });
-        if (chatModalTicketId === ticketId) {
-            updateChatConnectionStatus('connected', 'Connected');
-        }
-    };
-
-    ws.onclose = () => {
-        delete ticketChatConnections[ticketId];
-        bufferChatMsg(ticketId, { type: 'status', text: 'Disconnected from worker.' });
-        if (chatModalTicketId === ticketId) {
-            updateChatConnectionStatus('disconnected', 'Disconnected');
-        }
-
-        // Auto-reconnect after 5 seconds if ticket still exists.
-        setTimeout(() => {
-            const t = tickets.find(t => t.id === ticketId);
-            if (t && t.containerName) {
-                connectTicketChat(ticketId, t.containerName, t.workerChatPort || 0);
-            }
-        }, 5000);
-    };
-
-    ws.onerror = () => {
-        if (chatModalTicketId === ticketId) {
-            updateChatConnectionStatus('disconnected', 'Error');
-        }
-    };
-
-    ws.onmessage = (event) => {
-        let msg;
-        try {
-            msg = JSON.parse(event.data);
-        } catch {
-            return;
-        }
-
-        bufferChatMsg(ticketId, msg);
-
-        // If this ticket's chat modal is open, render the message live.
-        if (chatModalTicketId === ticketId) {
-            renderSingleChatMessage(msg);
-        }
-    };
-}
-
-function disconnectTicketChat(ticketId) {
-    const ws = ticketChatConnections[ticketId];
-    if (ws) {
-        ws.close();
-        delete ticketChatConnections[ticketId];
-    }
-}
-
-function bufferChatMsg(ticketId, msg) {
-    if (!ticketChatMessages[ticketId]) {
-        ticketChatMessages[ticketId] = [];
+    dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
+    for (let i = 0; i < convos.length; i++) {
+        const c = convos[i];
+        const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
+        const option = document.createElement('option');
+        option.value = c.id;
+        option.textContent = c.displayName + suffix;
+        dropdown.appendChild(option);
     }
 
-    ticketChatMessages[ticketId].push(msg);
-
-    // Cap buffer at 2000 messages.
-    if (ticketChatMessages[ticketId].length > 2000) {
-        ticketChatMessages[ticketId].shift();
+    if (previousValue && convos.some(c => c.id === previousValue)) {
+        dropdown.value = previousValue;
     }
 }
 
 function openChat(ticketId) {
-    chatModalTicketId = ticketId;
-    ticketPendingToolCalls[ticketId] = {};
-
     const modal = document.getElementById('chatModal');
     const messagesDiv = document.getElementById('chatMessages');
     const titleEl = document.getElementById('chatTitle');
-    titleEl.textContent = `💬 Live Chat — #${ticketId}`;
-    messagesDiv.innerHTML = '';
+    titleEl.textContent = `💬 Conversations — #${ticketId}`;
 
-    // Render buffered messages.
-    const buffered = ticketChatMessages[ticketId] || [];
-    buffered.forEach(msg => renderSingleChatMessage(msg));
+    // If opening from detail modal, preserve the selected conversation.
+    const selectedConvId = (detailChatTicketId === ticketId) ? detailChatConversationId : null;
 
-    // Update connection status.
-    const ws = ticketChatConnections[ticketId];
-    if (ws && ws.readyState === WebSocket.OPEN) {
-        updateChatConnectionStatus('connected', 'Connected');
-    } else if (ws && ws.readyState === WebSocket.CONNECTING) {
-        updateChatConnectionStatus('connecting', 'Connecting...');
+    chatModalTicketId = ticketId;
+    chatModalConversationId = selectedConvId;
+    ticketPendingToolCalls[ticketId] = {};
+
+    // Build dropdown.
+    const dropdownContainer = document.getElementById('chatConversationPicker');
+    dropdownContainer.innerHTML = '';
+    const dropdown = document.createElement('select');
+    dropdown.id = 'conversationDropdown';
+    dropdown.className = 'chat-conversation-select';
+    dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
+
+    const convos = ticketConversations[ticketId] || [];
+    for (let i = 0; i < convos.length; i++) {
+        const c = convos[i];
+        const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
+        const option = document.createElement('option');
+        option.value = c.id;
+        option.textContent = c.displayName + suffix;
+        dropdown.appendChild(option);
+    }
+
+    // Set initial selection.
+    if (selectedConvId && convos.some(c => c.id === selectedConvId)) {
+        dropdown.value = selectedConvId;
+        loadAndDisplayConversation(ticketId, selectedConvId);
+        const info = convos.find(c => c.id === selectedConvId);
+        setChatInputEnabled(!(info && info.isFinished));
     } else {
-        updateChatConnectionStatus('disconnected', 'Disconnected');
+        messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation from the dropdown above.</div>';
+        setChatInputEnabled(false);
+    }
+
+    dropdown.addEventListener('change', () => {
+        const convId = dropdown.value;
+        if (convId) {
+            chatModalConversationId = convId;
+            loadAndDisplayConversation(ticketId, convId);
+            const info = convos.find(c => c.id === convId);
+            setChatInputEnabled(!(info && info.isFinished));
+        } else {
+            chatModalConversationId = null;
+            messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation from the dropdown above.</div>';
+            setChatInputEnabled(false);
+        }
+    });
+
+    dropdownContainer.appendChild(dropdown);
+
+    // Subscribe to this ticket's group for real-time updates.
+    if (connection && connection.state === signalR.HubConnectionState.Connected) {
+        connection.invoke('SubscribeToTicket', ticketId).catch(() => {});
     }
 
     modal.classList.add('active');
 
     const input = document.getElementById('chatInput');
     input.value = '';
-    input.focus();
 }
 
 window.openChat = openChat;
 
 function closeChatModal() {
+    const ticketId = chatModalTicketId;
     const modal = document.getElementById('chatModal');
     modal.classList.remove('active');
     chatModalTicketId = null;
+    chatModalConversationId = null;
+
+    if (ticketId && connection && connection.state === signalR.HubConnectionState.Connected) {
+        connection.invoke('UnsubscribeFromTicket', ticketId).catch(() => {});
+    }
 }
 
-function updateChatConnectionStatus(status, text) {
-    const statusEl = document.getElementById('chatConnectionStatus');
-    const textEl = document.getElementById('chatConnectionText');
+function setChatInputEnabled(enabled) {
+    const input = document.getElementById('chatInput');
+    const btn = document.getElementById('chatSendBtn');
+    if (input) {
+        input.disabled = !enabled;
+        input.placeholder = enabled ? 'Type a message…' : 'Conversation finished';
+    }
+    if (btn) {
+        btn.disabled = !enabled;
+    }
+}
 
-    if (statusEl && textEl) {
-        statusEl.className = 'chat-connection-status ' + status;
-        textEl.textContent = text;
+async function loadAndDisplayConversation(ticketId, conversationId) {
+    const messagesDiv = document.getElementById('chatMessages');
+    messagesDiv.innerHTML = '';
+    ticketPendingToolCalls[ticketId] = {};
+
+    const key = `${ticketId}:${conversationId}`;
+    let msgs = conversationMessages[key];
+
+    // Fetch from server if not cached.
+    if (!msgs) {
+        try {
+            const response = await fetch(`${API_BASE}/tickets/${ticketId}/conversations/${conversationId}`);
+            if (response.ok) {
+                const data = await response.json();
+                msgs = data.messages || [];
+                conversationMessages[key] = msgs;
+            } else {
+                msgs = [];
+            }
+        } catch {
+            msgs = [];
+        }
+    }
+
+    for (let i = 0; i < msgs.length; i++) {
+        renderSingleChatMessage(msgs[i]);
     }
 }
 
 function renderSingleChatMessage(msg) {
-    if (msg.type === 'status') {
-        appendChatSystem(msg.text || '');
-        return;
-    }
-
-    if (msg.type !== 'message') {
-        return;
-    }
-
     if (msg.role === 'user') {
-        // All user messages → right side bubble.
         const content = (msg.content || '').replace(/^\[Chat from user\]:\s*/, '');
         appendChatUser(content);
     } else if (msg.role === 'assistant') {
         if (msg.content) {
-            appendChatAssistant(msg.content, msg.model);
+            appendChatAssistant(msg.content);
         }
-
-        if (msg.toolCalls && msg.toolCalls.length > 0) {
-            for (let i = 0; i < msg.toolCalls.length; i++) {
-                const tc = msg.toolCalls[i];
-                const el = appendChatToolCall(tc.id, tc.name, tc.arguments);
-                if (chatModalTicketId) {
-                    if (!ticketPendingToolCalls[chatModalTicketId]) {
-                        ticketPendingToolCalls[chatModalTicketId] = {};
-                    }
-                    ticketPendingToolCalls[chatModalTicketId][tc.id] = el;
-                }
-            }
+        if (msg.toolCall) {
+            appendChatToolCall(msg.toolCall);
         }
     } else if (msg.role === 'tool') {
-        const pending = chatModalTicketId && ticketPendingToolCalls[chatModalTicketId];
-        if (msg.toolCallId && pending && pending[msg.toolCallId]) {
-            appendToolResult(pending[msg.toolCallId], msg.content || '');
-            delete pending[msg.toolCallId];
-        } else {
-            appendChatToolCall('unknown', 'tool_result', msg.content || '');
+        if (msg.toolResult) {
+            appendChatToolResult(msg.toolResult);
         }
+    } else if (msg.role === 'system') {
+        appendChatSystem(msg.content || '');
     }
 }
 
-function appendChatAssistant(content, model) {
+function appendChatAssistant(content) {
     const messagesDiv = document.getElementById('chatMessages');
     const el = document.createElement('div');
     el.className = 'chat-msg chat-msg-assistant';
-
-    let html = '';
-    if (model) {
-        html += `<div class="chat-model-tag">${escapeHtml(model)}</div>`;
-    }
-    html += renderMarkdown(content);
-    el.innerHTML = html;
+    el.innerHTML = renderMarkdown(content);
 
     messagesDiv.appendChild(el);
     scrollChatToBottom();
@@ -1595,11 +1961,19 @@ function appendChatSystem(content) {
     scrollChatToBottom();
 }
 
-function appendChatToolCall(id, name, args) {
+function appendChatToolCall(callText) {
     const messagesDiv = document.getElementById('chatMessages');
     const el = document.createElement('div');
     el.className = 'chat-tool-accordion';
-    el.dataset.toolCallId = id;
+
+    // Parse "name(args)" format.
+    const parenIdx = callText.indexOf('(');
+    let name = callText;
+    let args = '';
+    if (parenIdx > 0 && callText.endsWith(')')) {
+        name = callText.substring(0, parenIdx);
+        args = callText.substring(parenIdx + 1, callText.length - 1);
+    }
 
     const firstLine = truncateToolLine(name, args);
 
@@ -1633,18 +2007,41 @@ function appendChatToolCall(id, name, args) {
 
     messagesDiv.appendChild(el);
     scrollChatToBottom();
-
-    return el;
 }
 
-function appendToolResult(accordionEl, result) {
-    const body = accordionEl.querySelector('.chat-tool-body');
+function appendChatToolResult(result) {
+    const messagesDiv = document.getElementById('chatMessages');
+    const el = document.createElement('div');
+    el.className = 'chat-tool-accordion';
 
-    const section = document.createElement('div');
-    section.className = 'chat-tool-section';
-    section.innerHTML = `<div class="chat-tool-section-label">Response</div>${escapeHtml(truncateToolResult(result))}`;
-    body.appendChild(section);
+    el.innerHTML = `
+        <div class="chat-tool-header">
+            <span class="chat-tool-icon">▶</span>
+            <span class="chat-tool-name">result</span>
+            <span style="color: var(--gray-400); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">${escapeHtml(result.substring(0, 80))}</span>
+        </div>
+        <div class="chat-tool-body">
+            <div class="chat-tool-section">
+                ${escapeHtml(truncateToolResult(result))}
+            </div>
+        </div>
+    `;
 
+    el.querySelector('.chat-tool-header').addEventListener('click', () => {
+        const icon = el.querySelector('.chat-tool-icon');
+        const body = el.querySelector('.chat-tool-body');
+        const isOpen = body.classList.contains('open');
+
+        if (isOpen) {
+            body.classList.remove('open');
+            icon.classList.remove('open');
+        } else {
+            body.classList.add('open');
+            icon.classList.add('open');
+        }
+    });
+
+    messagesDiv.appendChild(el);
     scrollChatToBottom();
 }
 
@@ -1709,18 +2106,19 @@ function sendChatMessage() {
     const input = document.getElementById('chatInput');
     const text = input.value.trim();
 
-    if (!text || !chatModalTicketId) {
+    if (!text || !chatModalTicketId || !chatModalConversationId) {
         return;
     }
 
-    const ws = ticketChatConnections[chatModalTicketId];
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-        appendChatSystem('Not connected to worker.');
+    if (!connection || connection.state !== signalR.HubConnectionState.Connected) {
+        appendChatSystem('Not connected to server.');
         return;
     }
 
     appendChatUser(text);
-    ws.send(text);
+    connection.invoke('SendChatToWorker', chatModalTicketId, chatModalConversationId, text).catch(err => {
+        appendChatSystem(`Failed to send: ${err.message}`);
+    });
     input.value = '';
     autoResizeChatInput();
     input.focus();

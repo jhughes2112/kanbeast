@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using KanBeast.Shared;
 using KanBeast.Worker.Services;
 using KanBeast.Worker.Services.Tools;
 
@@ -17,8 +18,8 @@ public static class SearchToolsTests
 			{
 				CreateTestFiles(tempDir);
 
-				WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null);
-				LlmMemories testMemories = new LlmMemories();
+				WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!);
+				ConversationMemories testMemories = new ConversationMemories();
 				ToolContext tc = new ToolContext(null, null, null, testMemories);
 
 				TestGlobToRegex(ctx);

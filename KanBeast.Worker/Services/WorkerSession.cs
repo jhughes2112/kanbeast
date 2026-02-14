@@ -13,16 +13,11 @@ public static class WorkerSession
 	public static TicketHolder TicketHolder { get; private set; } = null!;
 	public static string WorkDir { get; private set; } = string.Empty;
 	public static CancellationToken CancellationToken { get; private set; }
-	public static WorkerHubClient? HubClient { get; private set; }
+	public static WorkerHubClient HubClient { get; private set; } = null!;
 
 	public static ConcurrentQueue<string> GetChatQueue(string conversationId)
 	{
-		if (HubClient != null)
-		{
-			return HubClient.GetChatQueue(conversationId);
-		}
-
-		return new ConcurrentQueue<string>();
+		return HubClient.GetChatQueue(conversationId);
 	}
 
 	public static void Start(
@@ -32,7 +27,7 @@ public static class WorkerSession
 		TicketHolder ticketHolder,
 		string workDir,
 		CancellationToken cancellationToken,
-		WorkerHubClient? hubClient)
+		WorkerHubClient hubClient)
 	{
 		ApiClient = apiClient;
 		LlmProxy = llmProxy;
@@ -43,6 +38,11 @@ public static class WorkerSession
 		HubClient = hubClient;
 	}
 
+	public static void UpdateCancellationToken(CancellationToken cancellationToken)
+	{
+		CancellationToken = cancellationToken;
+	}
+
 	public static void Stop()
 	{
 		ApiClient = null!;
@@ -51,5 +51,6 @@ public static class WorkerSession
 		TicketHolder = null!;
 		WorkDir = string.Empty;
 		CancellationToken = default;
+		HubClient = null!;
 	}
 }

@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json.Nodes;
+using KanBeast.Shared;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
 using KanBeast.Worker.Services.Tools;
@@ -123,59 +124,59 @@ public static class LlmServiceTests
 
 		// Valid single tool_call tag.
 		string validContent = "Some text\n<tool_call>\n{\"name\": \"read_file\", \"arguments\": {\"path\": \"/test.txt\"}}\n</tool_call>";
-		List<ToolCallMessage>? valid = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [validContent, tools]);
+		List<ConversationToolCall>? valid = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [validContent, tools]);
 		ctx.AssertNotNull(valid, "XmlToolCalls: valid tool_call parsed");
 		ctx.AssertEqual(1, valid?.Count ?? -1, "XmlToolCalls: single call found");
 		ctx.AssertEqual("read_file", valid?[0].Function.Name ?? "", "XmlToolCalls: correct tool name");
 
 		// function_call variant.
 		string fcContent = "<function_call>{\"name\": \"write_file\", \"arguments\": {\"path\": \"a.txt\", \"content\": \"hello\"}}</function_call>";
-		List<ToolCallMessage>? fc = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [fcContent, tools]);
+		List<ConversationToolCall>? fc = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [fcContent, tools]);
 		ctx.AssertNotNull(fc, "XmlToolCalls: function_call variant parsed");
 		ctx.AssertEqual("write_file", fc?[0].Function.Name ?? "", "XmlToolCalls: function_call correct name");
 
 		// Multiple tool calls in one response.
 		string multiContent = "<tool_call>{\"name\": \"read_file\", \"arguments\": {\"path\": \"a\"}}</tool_call>\n<tool_call>{\"name\": \"write_file\", \"arguments\": {\"path\": \"b\", \"content\": \"c\"}}</tool_call>";
-		List<ToolCallMessage>? multi = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [multiContent, tools]);
+		List<ConversationToolCall>? multi = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [multiContent, tools]);
 		ctx.AssertEqual(2, multi?.Count ?? -1, "XmlToolCalls: multiple calls found");
 
 		// No tags returns null.
-		List<ToolCallMessage>? noTags = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, ["Just a regular response", tools]);
+		List<ConversationToolCall>? noTags = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, ["Just a regular response", tools]);
 		ctx.AssertNull(noTags, "XmlToolCalls: no tags returns null");
 
 		// Unknown tool name returns null.
 		string unknownTool = "<tool_call>{\"name\": \"unknown_tool\", \"arguments\": {}}</tool_call>";
-		List<ToolCallMessage>? unknown = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [unknownTool, tools]);
+		List<ConversationToolCall>? unknown = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [unknownTool, tools]);
 		ctx.AssertNull(unknown, "XmlToolCalls: unknown tool returns null");
 
 		// Extra argument not in definition is rejected.
 		string extraArg = "<tool_call>{\"name\": \"read_file\", \"arguments\": {\"path\": \"a\", \"bogus\": \"b\"}}</tool_call>";
-		List<ToolCallMessage>? extra = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [extraArg, tools]);
+		List<ConversationToolCall>? extra = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [extraArg, tools]);
 		ctx.AssertNull(extra, "XmlToolCalls: extra arg rejected");
 
 		// Invalid JSON inside tags returns null.
 		string invalidJson = "<tool_call>not valid json at all</tool_call>";
-		List<ToolCallMessage>? invalid = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [invalidJson, tools]);
+		List<ConversationToolCall>? invalid = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [invalidJson, tools]);
 		ctx.AssertNull(invalid, "XmlToolCalls: invalid JSON returns null");
 
 		// Empty arguments is valid.
 		string emptyArgs = "<tool_call>{\"name\": \"read_file\", \"arguments\": {}}</tool_call>";
-		List<ToolCallMessage>? empty = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [emptyArgs, tools]);
+		List<ConversationToolCall>? empty = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [emptyArgs, tools]);
 		ctx.AssertNotNull(empty, "XmlToolCalls: empty args is valid");
 
 		// parameters key accepted as alias for arguments.
 		string paramsKey = "<tool_call>{\"name\": \"read_file\", \"parameters\": {\"path\": \"test\"}}</tool_call>";
-		List<ToolCallMessage>? paramsResult = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [paramsKey, tools]);
+		List<ConversationToolCall>? paramsResult = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [paramsKey, tools]);
 		ctx.AssertNotNull(paramsResult, "XmlToolCalls: parameters key accepted");
 
 		// Case-insensitive tags.
 		string upperCase = "<TOOL_CALL>{\"name\": \"read_file\", \"arguments\": {\"path\": \"a\"}}</TOOL_CALL>";
-		List<ToolCallMessage>? upper = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [upperCase, tools]);
+		List<ConversationToolCall>? upper = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [upperCase, tools]);
 		ctx.AssertNotNull(upper, "XmlToolCalls: case insensitive tags");
 
 		// Missing name field returns null.
 		string noName = "<tool_call>{\"arguments\": {\"path\": \"a\"}}</tool_call>";
-		List<ToolCallMessage>? noNameResult = (List<ToolCallMessage>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [noName, tools]);
+		List<ConversationToolCall>? noNameResult = (List<ConversationToolCall>?)Reflect.Instance(service, "TryParseXmlToolCalls", types, [noName, tools]);
 		ctx.AssertNull(noNameResult, "XmlToolCalls: missing name returns null");
 
 		// Generated IDs start with xmltc_ prefix.

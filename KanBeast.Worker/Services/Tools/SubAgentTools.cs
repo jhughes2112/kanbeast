@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using KanBeast.Shared;
 
 namespace KanBeast.Worker.Services.Tools;
 
@@ -44,7 +45,7 @@ public static class SubAgentTools
 			{
 				string systemPrompt = WorkerSession.Prompts.TryGetValue("subagent", out string? prompt) ? prompt : string.Empty;
 
-				LlmMemories memories = new LlmMemories(context.Memories);  // copy the original memories to avoid subagents modifying the original one
+				ConversationMemories memories = new ConversationMemories(context.Memories);  // copy the original memories to avoid subagents modifying the original one
 				ICompaction compaction = new CompactionNone();
 				ToolContext subContext = new ToolContext(null, context.CurrentTaskId, context.CurrentSubtaskId, memories);
 

@@ -1,4 +1,4 @@
-using KanBeast.Worker.Models;
+using KanBeast.Shared;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;

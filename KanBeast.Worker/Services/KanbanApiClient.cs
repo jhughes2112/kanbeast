@@ -1,22 +1,23 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using KanBeast.Worker.Models;
+using KanBeast.Shared;
 
 namespace KanBeast.Worker.Services;
 
 public interface IKanbanApiClient
 {
-    Task<TicketDto?> GetTicketAsync(string ticketId, CancellationToken cancellationToken);
-    Task<TicketDto?> UpdateTicketStatusAsync(string ticketId, string status, CancellationToken cancellationToken);
-    Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task, CancellationToken cancellationToken);
-    Task<TicketDto?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask, CancellationToken cancellationToken);
-    Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status, CancellationToken cancellationToken);
-    Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId, CancellationToken cancellationToken);
-    Task<TicketDto?> DeleteAllTasksAsync(string ticketId, CancellationToken cancellationToken);
+    Task<Ticket?> GetTicketAsync(string ticketId, CancellationToken cancellationToken);
+    Task<Ticket?> UpdateTicketStatusAsync(string ticketId, string status, CancellationToken cancellationToken);
+    Task<Ticket?> AddTaskToTicketAsync(string ticketId, KanbanTask task, CancellationToken cancellationToken);
+    Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask, CancellationToken cancellationToken);
+    Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status, CancellationToken cancellationToken);
+    Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskId, CancellationToken cancellationToken);
+    Task<Ticket?> DeleteAllTasksAsync(string ticketId, CancellationToken cancellationToken);
     Task AddActivityLogAsync(string ticketId, string message, CancellationToken cancellationToken);
-    Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName, CancellationToken cancellationToken);
-    Task<TicketDto?> AddLlmCostAsync(string ticketId, decimal cost, CancellationToken cancellationToken);
+    Task<Ticket?> SetBranchNameAsync(string ticketId, string branchName, CancellationToken cancellationToken);
+    Task<Ticket?> AddLlmCostAsync(string ticketId, decimal cost, CancellationToken cancellationToken);
+    Task<ConversationData?> GetPlanningConversationAsync(string ticketId, CancellationToken cancellationToken);
 }
 
 public class KanbanApiClient : IKanbanApiClient
@@ -34,77 +35,77 @@ public class KanbanApiClient : IKanbanApiClient
         _jsonOptions.Converters.Add(new JsonStringEnumConverter());
     }
 
-    public async Task<TicketDto?> GetTicketAsync(string ticketId, CancellationToken cancellationToken)
+    public async Task<Ticket?> GetTicketAsync(string ticketId, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = await _httpClient.GetFromJsonAsync<TicketDto>($"/api/tickets/{ticketId}", _jsonOptions, cancellationToken);
+        Ticket? ticket = await _httpClient.GetFromJsonAsync<Ticket>($"/api/tickets/{ticketId}", _jsonOptions, cancellationToken);
 
         return ticket;
     }
 
-    public async Task<TicketDto?> MarkTaskCompleteAsync(string ticketId, string taskId, CancellationToken cancellationToken)
+    public async Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskId, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = null;
+        Ticket? ticket = null;
         string encodedTaskId = Uri.EscapeDataString(taskId);
         HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/complete", new { }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
     }
 
-    public async Task<TicketDto?> UpdateTicketStatusAsync(string ticketId, string status, CancellationToken cancellationToken)
+    public async Task<Ticket?> UpdateTicketStatusAsync(string ticketId, string status, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = null;
+        Ticket? ticket = null;
         HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/status", new { status }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
     }
 
-    public async Task<TicketDto?> AddTaskToTicketAsync(string ticketId, KanbanTask task, CancellationToken cancellationToken)
+    public async Task<Ticket?> AddTaskToTicketAsync(string ticketId, KanbanTask task, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = null;
+        Ticket? ticket = null;
         HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks", task, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
     }
 
-    public async Task<TicketDto?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask, CancellationToken cancellationToken)
+    public async Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = null;
+        Ticket? ticket = null;
         string encodedTaskId = Uri.EscapeDataString(taskId);
         HttpResponseMessage response = await _httpClient.PostAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks", subtask, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
     }
 
-    public async Task<TicketDto?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status, CancellationToken cancellationToken)
+    public async Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = null;
+        Ticket? ticket = null;
         string encodedTaskId = Uri.EscapeDataString(taskId);
         string encodedSubtaskId = Uri.EscapeDataString(subtaskId);
         HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks/{encodedSubtaskId}", new { status }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
@@ -121,27 +122,27 @@ public class KanbanApiClient : IKanbanApiClient
         }
     }
 
-    public async Task<TicketDto?> SetBranchNameAsync(string ticketId, string branchName, CancellationToken cancellationToken)
+    public async Task<Ticket?> SetBranchNameAsync(string ticketId, string branchName, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = null;
+        Ticket? ticket = null;
         HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/branch", new { branchName }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
     }
 
-    public async Task<TicketDto?> AddLlmCostAsync(string ticketId, decimal cost, CancellationToken cancellationToken)
+    public async Task<Ticket?> AddLlmCostAsync(string ticketId, decimal cost, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = null;
+        Ticket? ticket = null;
         HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/cost", new { cost }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
         }
         else
         {
@@ -152,16 +153,28 @@ public class KanbanApiClient : IKanbanApiClient
         return ticket;
     }
 
-    public async Task<TicketDto?> DeleteAllTasksAsync(string ticketId, CancellationToken cancellationToken)
+    public async Task<Ticket?> DeleteAllTasksAsync(string ticketId, CancellationToken cancellationToken)
     {
-        TicketDto? ticket = null;
+        Ticket? ticket = null;
         HttpResponseMessage response = await _httpClient.DeleteAsync($"/api/tickets/{ticketId}/tasks", cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {
-            ticket = await response.Content.ReadFromJsonAsync<TicketDto>(_jsonOptions, cancellationToken);
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
         }
 
         return ticket;
+    }
+
+    public async Task<ConversationData?> GetPlanningConversationAsync(string ticketId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _httpClient.GetFromJsonAsync<ConversationData>($"/api/tickets/{ticketId}/conversations/planning", _jsonOptions, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
     }
 }

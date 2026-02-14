@@ -1,7 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
-using KanBeast.Worker.Models;
+using KanBeast.Shared;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
@@ -25,43 +25,42 @@ namespace KanBeast.Worker.Services;
 //
 public class LlmConversation
 {
-    private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
-    {
-        WriteIndented = true,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-    };
-
     private static int s_conversationIndex;
 
-    private readonly string _id;
-    private readonly string _displayName;
-    private readonly LlmMemories _memories;
-    private readonly List<string> _chapterSummaries;
+    private readonly ConversationMemories _memories;
     private readonly ICompaction _compaction;
     private readonly string _logDirectory;
     private readonly string _logPrefix;
     private string _logPath;
     private int _rewriteCount;
-    private int _lastSyncedCount;
-    private bool _registrationPending = true;
-    private bool _resetPending;
+    private bool _dirty;
 
-    public LlmConversation(string systemPrompt, string userPrompt, LlmMemories memories, LlmRole role, ToolContext toolContext, ICompaction compaction, string logDirectory, string logPrefix, string displayName)
+    // The serializable core — this is what gets synced to the server.
+    public ConversationData Data { get; }
+
+    // Convenience accessors that delegate to Data.
+    public string Id => Data.Id;
+    public string DisplayName => Data.DisplayName;
+    public List<ConversationMessage> Messages => Data.Messages;
+
+    public LlmConversation(string systemPrompt, string userPrompt, ConversationMemories memories, LlmRole role, ToolContext toolContext, ICompaction compaction, string logDirectory, string logPrefix, string displayName)
     {
-        _id = Guid.NewGuid().ToString();
-        _displayName = displayName;
-        StartedAt = DateTime.UtcNow.ToString("O");
-        CompletedAt = string.Empty;
-        Messages = new List<ChatMessage>();
+        Data = new ConversationData
+        {
+            Id = Guid.NewGuid().ToString(),
+            DisplayName = displayName,
+            StartedAt = DateTime.UtcNow.ToString("O"),
+            Memories = memories.Backing
+        };
+
         Role = role;
         ToolContext = toolContext;
         _memories = memories;
-        _chapterSummaries = new List<string>();
         _compaction = compaction;
         _logDirectory = logDirectory;
         _logPrefix = logPrefix;
         _rewriteCount = 0;
-        _lastSyncedCount = 0;
+        _dirty = true;
 
         if (!string.IsNullOrWhiteSpace(logDirectory) && !string.IsNullOrWhiteSpace(logPrefix))
         {
@@ -75,19 +74,19 @@ public class LlmConversation
         }
 
         // Message 0: System prompt
-        ChatMessage systemMessage = new ChatMessage { Role = "system", Content = systemPrompt };
+        ConversationMessage systemMessage = new ConversationMessage { Role = "system", Content = systemPrompt };
         Messages.Add(systemMessage);
 
         // Message 1: Initial instructions
-        ChatMessage instructionsMessage = new ChatMessage { Role = "user", Content = userPrompt };
+        ConversationMessage instructionsMessage = new ConversationMessage { Role = "user", Content = userPrompt };
         Messages.Add(instructionsMessage);
 
         // Message 2: Memories (reflects current state of shared memories)
-        ChatMessage memoriesMessage = new ChatMessage { Role = "user", Content = _memories.Format() };
+        ConversationMessage memoriesMessage = new ConversationMessage { Role = "user", Content = _memories.Format() };
         Messages.Add(memoriesMessage);
 
         // Message 3: Chapter summaries (empty initially)
-        ChatMessage summariesMessage = new ChatMessage { Role = "user", Content = "[Chapter summaries: None yet]" };
+        ConversationMessage summariesMessage = new ConversationMessage { Role = "user", Content = "[Chapter summaries: None yet]" };
         Messages.Add(summariesMessage);
 
         if (!string.IsNullOrWhiteSpace(_logPath))
@@ -98,13 +97,13 @@ public class LlmConversation
                 Directory.CreateDirectory(directory);
             }
 
-            string header = $"# LLM Conversation Log\n**Started:** {StartedAt}\n---\n\n";
+            string header = $"# LLM Conversation Log\n**Started:** {Data.StartedAt}\n---\n\n";
             Console.Write(header);
             File.WriteAllText(_logPath, header);
         }
         else
         {
-            string header = $"# LLM Conversation Log\n**Started:** {StartedAt}\n---\n\n";
+            string header = $"# LLM Conversation Log\n**Started:** {Data.StartedAt}\n---\n\n";
             Console.Write(header);
         }
         AppendMessageToLog(systemMessage, null);
@@ -113,29 +112,29 @@ public class LlmConversation
         AppendMessageToLog(summariesMessage, null);
     }
 
-    // Index of the first compressible message (after system, instructions, memories, and summaries)
-    public const int FirstCompressibleIndex = 4;
+    // Restores a conversation from server data. Memories are reconstituted from Data.Memories.
+    public LlmConversation(ConversationData data, LlmRole role, ToolContext toolContext, ICompaction compaction, string logDirectory, string logPrefix)
+    {
+        Data = data;
+        _memories = new ConversationMemories(data.Memories);
+        Role = role;
+        ToolContext = toolContext;
+        _compaction = compaction;
+        _logDirectory = logDirectory;
+        _logPrefix = logPrefix;
+        _rewriteCount = 0;
+        _dirty = false;
+        _logPath = string.Empty;
+    }
 
-    [JsonIgnore]
-    public string Id => _id;
-
-    [JsonIgnore]
-    public string DisplayName => _displayName;
-
-    [JsonPropertyName("started_at")]
-    public string StartedAt { get; }
-
-    [JsonPropertyName("completed_at")]
-    public string CompletedAt { get; private set; }
-
-    [JsonPropertyName("messages")]
-    public List<ChatMessage> Messages { get; }
-
-	[JsonIgnore]
-	public LlmMemories Memories => _memories;
+	// Index of the first compressible message (after system, instructions, memories, and summaries)
+	public const int FirstCompressibleIndex = 4;
 
 	[JsonIgnore]
-	public IReadOnlyList<string> ChapterSummaries => _chapterSummaries;
+	public ConversationMemories Memories => _memories;
+
+	[JsonIgnore]
+	public IReadOnlyList<string> ChapterSummaries => Data.ChapterSummaries;
 
 	[JsonIgnore]
 	public ICompaction Compaction => _compaction;
@@ -195,13 +194,12 @@ public class LlmConversation
             return;
         }
 
-        // Remove oldest summary if at max capacity
-        if (_chapterSummaries.Count >= MaxChapterSummaries)
+        if (Data.ChapterSummaries.Count >= MaxChapterSummaries)
         {
-            _chapterSummaries.RemoveAt(0);
+            Data.ChapterSummaries.RemoveAt(0);
         }
 
-        _chapterSummaries.Add(summary);
+        Data.ChapterSummaries.Add(summary);
         UpdateSummariesMessage();
     }
 
@@ -212,9 +210,7 @@ public class LlmConversation
             return;
         }
 
-        string memoriesContent = _memories.Format();
-
-        Messages[2] = new ChatMessage { Role = "user", Content = memoriesContent };
+        Messages[2] = new ConversationMessage { Role = "user", Content = _memories.Format() };
         MarkDirty();
     }
 
@@ -226,45 +222,54 @@ public class LlmConversation
         }
 
         string summariesContent;
-        if (_chapterSummaries.Count == 0)
+        if (Data.ChapterSummaries.Count == 0)
         {
             summariesContent = "[Chapter summaries: None yet]";
         }
         else
         {
-            summariesContent = "[Chapter summaries]\n" + string.Join("\n\n", _chapterSummaries.Select((s, i) => $"### Chapter {i + 1}\n{s}"));
+            StringBuilder sb = new StringBuilder("[Chapter summaries]\n");
+            for (int i = 0; i < Data.ChapterSummaries.Count; i++)
+            {
+                sb.Append($"### Chapter {i + 1}\n{Data.ChapterSummaries[i]}");
+                if (i < Data.ChapterSummaries.Count - 1)
+                {
+                    sb.Append("\n\n");
+                }
+            }
+            summariesContent = sb.ToString();
         }
 
-        Messages[3] = new ChatMessage { Role = "user", Content = summariesContent };
+        Messages[3] = new ConversationMessage { Role = "user", Content = summariesContent };
         MarkDirty();
     }
 
 	public async Task AddUserMessageAsync(string content, CancellationToken cancellationToken)
 	{
-		ChatMessage message = new ChatMessage
+		ConversationMessage message = new ConversationMessage
 		{
 			Role = "user",
 			Content = content
 		};
 		Messages.Add(message);
 		AppendMessageToLog(message, null);
-		await FlushSyncAsync();
+		MarkDirty();
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
 
-	public async Task AddAssistantMessageAsync(ChatMessage message, string modelName, CancellationToken cancellationToken)
+	public async Task AddAssistantMessageAsync(ConversationMessage message, string modelName, CancellationToken cancellationToken)
 	{
 		Messages.Add(message);
 		AppendMessageToLog(message, modelName);
-		await FlushSyncAsync();
+		MarkDirty();
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
 
 	public async Task AddToolMessageAsync(string toolCallId, string toolResult, CancellationToken cancellationToken)
 	{
-		ChatMessage message = new ChatMessage
+		ConversationMessage message = new ConversationMessage
 		{
 			Role = "tool",
 			Content = toolResult,
@@ -272,7 +277,7 @@ public class LlmConversation
 		};
 		Messages.Add(message);
 		AppendMessageToLog(message, null);
-		await FlushSyncAsync();
+		MarkDirty();
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
 	}
@@ -288,7 +293,6 @@ public class LlmConversation
     // Closes current log and starts a new one with incremented rewrite count.
     public async Task DeleteRangeAsync(int startIndex, int endIndex, CancellationToken cancellationToken)
     {
-        // Clamp to protect first 4 messages
         startIndex = Math.Max(startIndex, FirstCompressibleIndex);
         endIndex = Math.Max(endIndex, FirstCompressibleIndex);
 
@@ -299,33 +303,28 @@ public class LlmConversation
 
         endIndex = Math.Min(endIndex, Messages.Count);
 
-        // Close current log
         if (!string.IsNullOrWhiteSpace(_logPath))
         {
             string closeMessage = $"\n---\n**Compacted at:** {DateTime.UtcNow:O}\n";
             await File.AppendAllTextAsync(_logPath, closeMessage, cancellationToken);
         }
 
-        // Collect messages to keep after the deleted range
-        List<ChatMessage> tailMessages = new List<ChatMessage>();
+        List<ConversationMessage> tailMessages = new List<ConversationMessage>();
         for (int i = endIndex; i < Messages.Count; i++)
         {
             tailMessages.Add(Messages[i]);
         }
 
-        // Remove messages from startIndex onwards
         while (Messages.Count > startIndex)
         {
             Messages.RemoveAt(Messages.Count - 1);
         }
 
-        // Add back the tail messages
-        foreach (ChatMessage msg in tailMessages)
+        foreach (ConversationMessage msg in tailMessages)
         {
             Messages.Add(msg);
-            }
+        }
 
-        // Start new log file
         _rewriteCount++;
         if (!string.IsNullOrWhiteSpace(_logPath))
         {
@@ -338,31 +337,28 @@ public class LlmConversation
                 Directory.CreateDirectory(directory);
             }
 
-            string header = $"# LLM Conversation Log (Compacted {_rewriteCount})\n**Started:** {StartedAt}\n---\n\n";
+            string header = $"# LLM Conversation Log (Compacted {_rewriteCount})\n**Started:** {Data.StartedAt}\n---\n\n";
             Console.Write(header);
             await File.WriteAllTextAsync(_logPath, header, cancellationToken);
 
-            foreach (ChatMessage msg in Messages)
+            foreach (ConversationMessage msg in Messages)
             {
                 await AppendMessageToLogAsync(msg, null, cancellationToken);
             }
         }
 
         MarkDirty();
-        await FlushSyncAsync();
     }
 
-    // Records the cost of an LLM call and syncs it with the server, updating the ticket holder.
     public async Task RecordCostAsync(decimal cost, CancellationToken cancellationToken)
     {
         if (cost > 0)
         {
-            TicketDto? updated = await WorkerSession.ApiClient.AddLlmCostAsync(WorkerSession.TicketHolder.Ticket.Id, cost, cancellationToken);
+            Ticket? updated = await WorkerSession.ApiClient.AddLlmCostAsync(WorkerSession.TicketHolder.Ticket.Id, cost, cancellationToken);
             WorkerSession.TicketHolder.Update(updated);
         }
     }
 
-    // Returns the remaining budget for this conversation based on the ticket's max cost.
     public decimal GetRemainingBudget()
     {
         decimal maxCost = WorkerSession.TicketHolder.Ticket.MaxCost;
@@ -378,9 +374,9 @@ public class LlmConversation
 
     public void MarkCompleted()
     {
-        CompletedAt = DateTime.UtcNow.ToString("O");
+        Data.CompletedAt = DateTime.UtcNow.ToString("O");
 
-        string completionMessage = $"\n---\n**Completed:** {CompletedAt}\n";
+        string completionMessage = $"\n---\n**Completed:** {Data.CompletedAt}\n";
         Console.Write(completionMessage);
 
         if (!string.IsNullOrWhiteSpace(_logPath))
@@ -389,19 +385,33 @@ public class LlmConversation
         }
     }
 
+    // Marks the conversation finished, syncs to the server, and notifies the hub.
     public async Task FinalizeAsync(CancellationToken cancellationToken)
     {
         MarkCompleted();
-        await FlushSyncAsync();
-
-        WorkerHubClient? hub = WorkerSession.HubClient;
-        if (hub != null)
-        {
-            await hub.FinishConversationAsync(_id);
-        }
+        Data.IsFinished = true;
+        await SyncToServerAsync();
+        await WorkerSession.HubClient.FinishConversationAsync(Id);
     }
 
-    private void AppendMessageToLog(ChatMessage message, string? modelName)
+    // Pushes the current ConversationData snapshot to the server if dirty.
+    public async Task SyncToServerAsync()
+    {
+        if (!_dirty)
+        {
+            return;
+        }
+
+        await WorkerSession.HubClient.SyncConversationAsync(Data);
+        _dirty = false;
+    }
+
+    private void MarkDirty()
+    {
+        _dirty = true;
+    }
+
+    private void AppendMessageToLog(ConversationMessage message, string? modelName)
     {
         string formattedMessage = FormatMessage(message, modelName);
         Console.Write(formattedMessage);
@@ -412,7 +422,7 @@ public class LlmConversation
         }
     }
 
-    private async Task AppendMessageToLogAsync(ChatMessage message, string? modelName, CancellationToken cancellationToken)
+    private async Task AppendMessageToLogAsync(ConversationMessage message, string? modelName, CancellationToken cancellationToken)
     {
         string formattedMessage = FormatMessage(message, modelName);
         Console.Write(formattedMessage);
@@ -423,7 +433,7 @@ public class LlmConversation
         }
     }
 
-    private static string FormatMessage(ChatMessage message, string? modelName)
+    private static string FormatMessage(ConversationMessage message, string? modelName)
     {
         if (message.Role == "system")
         {
@@ -447,7 +457,7 @@ public class LlmConversation
 
             if (message.ToolCalls != null && message.ToolCalls.Count > 0)
             {
-                foreach (ToolCallMessage toolCall in message.ToolCalls)
+                foreach (ConversationToolCall toolCall in message.ToolCalls)
                 {
                     result += $"  tool call: {toolCall.Function.Name} {toolCall.Function.Arguments}\n";
                 }
@@ -462,85 +472,6 @@ public class LlmConversation
         }
 
         return string.Empty;
-    }
-
-    // Marks that existing messages were modified in-place and a full reset is needed on next flush.
-    private void MarkDirty()
-    {
-        _resetPending = true;
-    }
-
-    // Flushes all pending sync operations to the server hub.
-    // Handles registration, full resets, and append-only deltas in order.
-    private async Task FlushSyncAsync()
-    {
-        WorkerHubClient? hub = WorkerSession.HubClient;
-        if (hub == null)
-        {
-            return;
-        }
-
-        if (_registrationPending)
-        {
-            await hub.RegisterConversationAsync(_id, _displayName);
-            _registrationPending = false;
-            _resetPending = true;
-        }
-
-        if (_resetPending)
-        {
-            List<ConversationMessage> allMessages = new List<ConversationMessage>();
-            foreach (ChatMessage msg in Messages)
-            {
-                allMessages.Add(ConvertToConversationMessage(msg));
-            }
-
-            await hub.ResetConversationAsync(_id, allMessages);
-            _lastSyncedCount = Messages.Count;
-            _resetPending = false;
-        }
-        else if (Messages.Count > _lastSyncedCount)
-        {
-            List<ConversationMessage> newMessages = new List<ConversationMessage>();
-            for (int i = _lastSyncedCount; i < Messages.Count; i++)
-            {
-                newMessages.Add(ConvertToConversationMessage(Messages[i]));
-            }
-
-            await hub.AppendMessagesAsync(_id, newMessages);
-            _lastSyncedCount = Messages.Count;
-        }
-    }
-
-    // Converts an LLM ChatMessage to a simplified ConversationMessage for storage/display.
-    private ConversationMessage ConvertToConversationMessage(ChatMessage message)
-    {
-        ConversationMessage convMsg = new ConversationMessage
-        {
-            Role = message.Role,
-            Content = message.Content
-        };
-
-        if (message.ToolCalls != null && message.ToolCalls.Count > 0)
-        {
-            StringBuilder sb = new StringBuilder();
-            foreach (ToolCallMessage tc in message.ToolCalls)
-            {
-                if (sb.Length > 0)
-                {
-                    sb.AppendLine();
-                }
-                sb.Append($"{tc.Function.Name}({tc.Function.Arguments})");
-            }
-            convMsg.ToolCall = sb.ToString();
-        }
-
-        if (message.Role == "tool" && !string.IsNullOrEmpty(message.Content))
-        {
-            convMsg.ToolResult = message.Content;
-        }
-
-        return convMsg;
     }
 }
 

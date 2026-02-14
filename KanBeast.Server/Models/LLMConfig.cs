@@ -1,28 +1,6 @@
+using KanBeast.Shared;
+
 namespace KanBeast.Server.Models;
-
-// Describes a single LLM endpoint available to the system.
-public class LLMConfig
-{
-    public string Id { get; set; } = Guid.NewGuid().ToString();
-    public string ApiKey { get; set; } = string.Empty;
-    public string Model { get; set; } = string.Empty;
-    public string? Endpoint { get; set; }
-    public int ContextLength { get; set; } = 128000;
-    public decimal InputTokenPrice { get; set; } = 0m;
-    public decimal OutputTokenPrice { get; set; } = 0m;
-    public double Temperature { get; set; } = 0.2;
-}
-
-// Stores Git integration settings for workers.
-public class GitConfig
-{
-    public string RepositoryUrl { get; set; } = string.Empty;
-    public string? SshKey { get; set; }
-    public string? Password { get; set; }
-    public string? ApiToken { get; set; }
-    public string Username { get; set; } = string.Empty;
-    public string Email { get; set; } = string.Empty;
-}
 
 // Represents a prompt template used by the server UI.
 public class PromptTemplate
@@ -40,14 +18,6 @@ public class SettingsFile
     public GitConfig GitConfig { get; set; } = new();
     public CompactionSettings Compaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();
-    public bool JsonLogging { get; set; }
-}
-
-// Configures compaction behavior for agent context handling.
-public class CompactionSettings
-{
-    public string Type { get; set; } = "summarize";
-    public double ContextSizePercent { get; set; } = 0.9;
 }
 
 // Configures web search provider for agents.
@@ -66,5 +36,4 @@ public class Settings
     public CompactionSettings Compaction { get; set; } = new();
     public WebSearchConfig WebSearch { get; set; } = new();
     public List<PromptTemplate> SystemPrompts { get; set; } = new();
-    public bool JsonLogging { get; set; }
 }

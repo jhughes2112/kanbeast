@@ -5,5 +5,6 @@
     </Project>
   </Folder>
   <Project Path="KanBeast.Server/KanBeast.Server.csproj" />
+  <Project Path="KanBeast.Shared/KanBeast.Shared.csproj" />
   <Project Path="KanBeast.Worker/KanBeast.Worker.csproj" />
 </Solution>

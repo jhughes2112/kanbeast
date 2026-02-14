@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.SignalR;
 using KanBeast.Server.Models;
 using KanBeast.Server.Services;
 using KanBeast.Server.Hubs;
+using KanBeast.Shared;
 
 namespace KanBeast.Server.Controllers;
 
@@ -49,6 +50,37 @@ public class TicketsController : ControllerBase
         }
 
         return Ok(ticket);
+    }
+
+    [HttpGet("{id}/conversations")]
+    public ActionResult<List<ConversationInfo>> GetConversations(string id)
+    {
+        List<ConversationInfo> infos = _conversationStore.GetInfoList(id);
+        return Ok(infos);
+    }
+
+    [HttpGet("{id}/conversations/{conversationId}")]
+    public ActionResult<ConversationData> GetConversation(string id, string conversationId)
+    {
+        ConversationData? data = _conversationStore.Get(id, conversationId);
+        if (data == null)
+        {
+            return NotFound();
+        }
+
+        return Ok(data);
+    }
+
+    [HttpGet("{id}/conversations/planning")]
+    public ActionResult<ConversationData> GetPlanningConversation(string id)
+    {
+        ConversationData? data = _conversationStore.GetActivePlanning(id);
+        if (data == null)
+        {
+            return NotFound();
+        }
+
+        return Ok(data);
     }
 
     [HttpPost]
