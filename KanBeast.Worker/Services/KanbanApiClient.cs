@@ -18,6 +18,7 @@ public interface IKanbanApiClient
     Task<Ticket?> SetBranchNameAsync(string ticketId, string branchName, CancellationToken cancellationToken);
     Task<Ticket?> AddLlmCostAsync(string ticketId, decimal cost, CancellationToken cancellationToken);
     Task<ConversationData?> GetPlanningConversationAsync(string ticketId, CancellationToken cancellationToken);
+    Task UpdateLlmNotesAsync(string llmConfigId, string strengths, string weaknesses, CancellationToken cancellationToken);
 }
 
 public class KanbanApiClient : IKanbanApiClient
@@ -175,6 +176,18 @@ public class KanbanApiClient : IKanbanApiClient
         catch (HttpRequestException)
         {
             return null;
+        }
+    }
+
+    public async Task UpdateLlmNotesAsync(string llmConfigId, string strengths, string weaknesses, CancellationToken cancellationToken)
+    {
+        string encodedId = Uri.EscapeDataString(llmConfigId);
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/settings/llm/{encodedId}/notes", new { strengths, weaknesses }, _jsonOptions, cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            string error = await response.Content.ReadAsStringAsync(cancellationToken);
+            Console.WriteLine($"Failed to update LLM notes: {response.StatusCode} - {error}");
         }
     }
 }

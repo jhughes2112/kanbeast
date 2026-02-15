@@ -16,9 +16,9 @@ public static class FileToolsTests
 
 		try
 		{
-			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!);
+			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!, new KanBeast.Shared.WebSearchConfig());
 			ConversationMemories testMemories = new ConversationMemories();
-			ToolContext tc = new ToolContext(null, null, null, testMemories);
+			ToolContext tc = new ToolContext(null, null, testMemories);
 
 			TestWriteAndRead(ctx, tc, tempDir);
 			TestCatNFormat(ctx, tc, tempDir);

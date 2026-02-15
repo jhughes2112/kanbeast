@@ -27,6 +27,11 @@ public class ConversationMemories
 		_memoriesByLabel = source._memoriesByLabel;
 	}
 
+	public void Clear()
+	{
+		_memoriesByLabel.Clear();
+	}
+
 	public void Add(string label, string memory)
 	{
 		if (string.IsNullOrWhiteSpace(label) || string.IsNullOrWhiteSpace(memory))

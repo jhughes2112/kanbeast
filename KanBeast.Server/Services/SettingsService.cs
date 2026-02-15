@@ -11,6 +11,7 @@ public interface ISettingsService
     Task<Settings> UpdateSettingsAsync(Settings settings);
     Task<LLMConfig?> AddLLMConfigAsync(LLMConfig config);
     Task<bool> RemoveLLMConfigAsync(string id);
+    Task<LLMConfig?> UpdateLlmNotesAsync(string id, string strengths, string weaknesses);
 }
 
 // Manages settings stored on disk and prompt files for the server.
@@ -43,45 +44,42 @@ public class SettingsService : ISettingsService
     public Task<Settings> UpdateSettingsAsync(Settings incomingSettings)
     {
         SettingsFile settingsFile = LoadSettingsFile();
-        Settings currentSettings = BuildSettings(settingsFile);
 
         // Merge incoming settings with current - only overwrite fields that were actually provided
-        if (incomingSettings.LLMConfigs.Count > 0)
+        if (incomingSettings.File.LLMConfigs.Count > 0)
         {
-            currentSettings.LLMConfigs = incomingSettings.LLMConfigs;
+            settingsFile.LLMConfigs = incomingSettings.File.LLMConfigs;
         }
 
-        if (!string.IsNullOrEmpty(incomingSettings.GitConfig.RepositoryUrl) ||
-            !string.IsNullOrEmpty(incomingSettings.GitConfig.Username) ||
-            !string.IsNullOrEmpty(incomingSettings.GitConfig.Email))
+        if (!string.IsNullOrEmpty(incomingSettings.File.GitConfig.RepositoryUrl) ||
+            !string.IsNullOrEmpty(incomingSettings.File.GitConfig.Username) ||
+            !string.IsNullOrEmpty(incomingSettings.File.GitConfig.Email))
         {
-            currentSettings.GitConfig = incomingSettings.GitConfig;
+            settingsFile.GitConfig = incomingSettings.File.GitConfig;
         }
 
-        if (!string.IsNullOrEmpty(incomingSettings.Compaction.Type))
+        if (!string.IsNullOrEmpty(incomingSettings.File.Compaction.Type))
         {
-            currentSettings.Compaction = incomingSettings.Compaction;
+            settingsFile.Compaction = incomingSettings.File.Compaction;
         }
 
         if (incomingSettings.SystemPrompts.Count > 0)
         {
-            currentSettings.SystemPrompts = UpdatePromptFiles(incomingSettings.SystemPrompts);
+            incomingSettings.SystemPrompts = UpdatePromptFiles(incomingSettings.SystemPrompts);
         }
 
-        SettingsFile updatedFile = BuildSettingsFile(currentSettings);
-        SaveSettingsFile(updatedFile);
+        SaveSettingsFile(settingsFile);
 
-        return Task.FromResult(currentSettings);
+        Settings result = BuildSettings(settingsFile);
+        result.SystemPrompts = incomingSettings.SystemPrompts;
+        return Task.FromResult(result);
     }
 
     public Task<LLMConfig?> AddLLMConfigAsync(LLMConfig config)
     {
         SettingsFile settingsFile = LoadSettingsFile();
-        Settings settings = BuildSettings(settingsFile);
-        settings.LLMConfigs.Add(config);
-
-        SettingsFile updatedFile = BuildSettingsFile(settings);
-        SaveSettingsFile(updatedFile);
+        settingsFile.LLMConfigs.Add(config);
+        SaveSettingsFile(settingsFile);
 
         return Task.FromResult<LLMConfig?>(config);
     }
@@ -89,10 +87,9 @@ public class SettingsService : ISettingsService
     public Task<bool> RemoveLLMConfigAsync(string id)
     {
         SettingsFile settingsFile = LoadSettingsFile();
-        Settings settings = BuildSettings(settingsFile);
 
         LLMConfig? config = null;
-        foreach (LLMConfig candidate in settings.LLMConfigs)
+        foreach (LLMConfig candidate in settingsFile.LLMConfigs)
         {
             if (string.Equals(candidate.Id, id, StringComparison.Ordinal))
             {
@@ -106,11 +103,36 @@ public class SettingsService : ISettingsService
             return Task.FromResult(false);
         }
 
-        settings.LLMConfigs.Remove(config);
-        SettingsFile updatedFile = BuildSettingsFile(settings);
-        SaveSettingsFile(updatedFile);
+        settingsFile.LLMConfigs.Remove(config);
+        SaveSettingsFile(settingsFile);
 
         return Task.FromResult(true);
+    }
+
+    public Task<LLMConfig?> UpdateLlmNotesAsync(string id, string strengths, string weaknesses)
+    {
+        SettingsFile settingsFile = LoadSettingsFile();
+
+        LLMConfig? config = null;
+        foreach (LLMConfig candidate in settingsFile.LLMConfigs)
+        {
+            if (string.Equals(candidate.Id, id, StringComparison.Ordinal))
+            {
+                config = candidate;
+                break;
+            }
+        }
+
+        if (config == null)
+        {
+            return Task.FromResult<LLMConfig?>(null);
+        }
+
+        config.Strengths = strengths;
+        config.Weaknesses = weaknesses;
+        SaveSettingsFile(settingsFile);
+
+        return Task.FromResult<LLMConfig?>(config);
     }
 
     private List<PromptTemplate> LoadPromptTemplates()
@@ -247,27 +269,11 @@ public class SettingsService : ISettingsService
     {
         Settings settings = new Settings
         {
-            LLMConfigs = fileSettings.LLMConfigs,
-            GitConfig = fileSettings.GitConfig,
-            Compaction = fileSettings.Compaction,
-            WebSearch = fileSettings.WebSearch,
+            File = fileSettings,
             SystemPrompts = LoadPromptTemplates()
         };
 
         return settings;
-    }
-
-    private static SettingsFile BuildSettingsFile(Settings settings)
-    {
-        SettingsFile fileSettings = new SettingsFile
-        {
-            LLMConfigs = settings.LLMConfigs,
-            GitConfig = settings.GitConfig,
-            Compaction = settings.Compaction,
-            WebSearch = settings.WebSearch
-        };
-
-        return fileSettings;
     }
 
     private static string ResolvePromptDirectory()

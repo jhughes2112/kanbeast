@@ -15,9 +15,9 @@ public static class ShellToolsTests
 
 		try
 		{
-			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!);
+			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!, new KanBeast.Shared.WebSearchConfig());
 			ConversationMemories testMemories = new ConversationMemories();
-			ToolContext tc = new ToolContext(null, null, null, testMemories);
+			ToolContext tc = new ToolContext(null, null, testMemories);
 
 			TestEdgeCases(ctx, tc);
 			TestRunCommand(ctx, tc);

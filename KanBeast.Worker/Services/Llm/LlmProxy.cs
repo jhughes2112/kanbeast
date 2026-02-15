@@ -86,6 +86,22 @@ public class LlmProxy
 		return summaries;
 	}
 
+	// Updates the strengths and weaknesses notes on a specific LLM config in memory.
+	public bool UpdateLlmNotes(string configId, string strengths, string weaknesses)
+	{
+		foreach (LlmService service in _services)
+		{
+			if (service.Config.Id == configId)
+			{
+				service.Config.Strengths = strengths;
+				service.Config.Weaknesses = weaknesses;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	// Runs the conversation, selecting available LLMs and retrying on rate limits or failures.
 	public async Task<LlmResult> ContinueAsync(LlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{

@@ -32,7 +32,10 @@ public class Program
             {
                 options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
             });
-        builder.Services.AddSignalR();
+        builder.Services.AddSignalR(options =>
+        {
+            options.MaximumReceiveMessageSize = 10 * 1024 * 1024;
+        });
         builder.Services.AddOpenApi();
 
         // Initialize container context (detects Docker environment)

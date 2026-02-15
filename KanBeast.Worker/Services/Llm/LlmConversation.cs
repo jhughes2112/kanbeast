@@ -152,6 +152,12 @@ public class LlmConversation
         UpdateSummariesMessage();
     }
 
+    // Refreshes message[2] to reflect the current state of memories. Called by tools via OnMemoriesChanged.
+    public void RefreshMemoriesMessage()
+    {
+        UpdateMemoriesMessage();
+    }
+
     private void UpdateMemoriesMessage()
     {
         if (Messages.Count < 4)
@@ -216,7 +222,7 @@ public class LlmConversation
 		{
 			preview = $"[{message.ToolCalls.Count} tool call(s)] {preview}";
 		}
-		Console.WriteLine($"[{DisplayName}] Assistant: {preview}");
+		Console.WriteLine($"[{DisplayName}] ({modelName}) Assistant: {preview}");
 		MarkDirty();
 
 		await _compaction.CompactIfNeededAsync(this, cancellationToken);
@@ -311,16 +317,31 @@ public class LlmConversation
         MarkDirty();
     }
 
-    // Resets the conversation to the initial 4 messages, clears chapter summaries, and force-syncs.
+    // Destroys all messages, memories, and chapter summaries, then rebuilds the conversation from scratch.
     public async Task ResetAsync()
     {
-        while (Messages.Count > FirstCompressibleIndex)
-        {
-            Messages.RemoveAt(Messages.Count - 1);
-        }
-
+        Messages.Clear();
+        _memories.Clear();
         Data.ChapterSummaries.Clear();
-        UpdateSummariesMessage();
+        Data.Memories.Clear();
+
+        // Rebuild message 0: latest system prompt.
+        string promptKey = Role == LlmRole.Planning ? "planning" : "developer";
+        string systemPrompt = WorkerSession.Prompts.TryGetValue(promptKey, out string? latestPrompt)
+            ? latestPrompt
+            : string.Empty;
+        Messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
+
+        // Rebuild message 1: ticket instructions.
+        Ticket ticket = WorkerSession.TicketHolder.Ticket;
+        string userPrompt = $"Ticket: {ticket.Title}\nDescription: {ticket.Description}";
+        Messages.Add(new ConversationMessage { Role = "user", Content = userPrompt });
+
+        // Rebuild message 2: empty memories.
+        Messages.Add(new ConversationMessage { Role = "assistant", Content = _memories.Format() });
+
+        // Rebuild message 3: empty chapter summaries.
+        Messages.Add(new ConversationMessage { Role = "assistant", Content = "[Chapter summaries: None yet]" });
 
         Data.CompletedAt = null;
         Data.IsFinished = false;

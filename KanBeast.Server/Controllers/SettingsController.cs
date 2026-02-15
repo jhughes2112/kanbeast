@@ -31,7 +31,7 @@ public class SettingsController : ControllerBase
     public async Task<ActionResult<Settings>> UpdateSettings([FromBody] Settings settings)
     {
         Settings updatedSettings = await _settingsService.UpdateSettingsAsync(settings);
-        await _hubContext.Clients.All.SettingsUpdated(updatedSettings.LLMConfigs);
+        await _hubContext.Clients.All.SettingsUpdated(updatedSettings.File.LLMConfigs);
         return Ok(updatedSettings);
     }
 
@@ -40,8 +40,22 @@ public class SettingsController : ControllerBase
     {
         LLMConfig? addedConfig = await _settingsService.AddLLMConfigAsync(config);
         Settings current = await _settingsService.GetSettingsAsync();
-        await _hubContext.Clients.All.SettingsUpdated(current.LLMConfigs);
+        await _hubContext.Clients.All.SettingsUpdated(current.File.LLMConfigs);
         return Ok(addedConfig);
+    }
+
+    [HttpPatch("llm/{id}/notes")]
+    public async Task<ActionResult> UpdateLlmNotes(string id, [FromBody] LlmNotesUpdate update)
+    {
+        LLMConfig? config = await _settingsService.UpdateLlmNotesAsync(id, update.Strengths, update.Weaknesses);
+        if (config == null)
+        {
+            return NotFound();
+        }
+
+        Settings current = await _settingsService.GetSettingsAsync();
+        await _hubContext.Clients.All.SettingsUpdated(current.File.LLMConfigs);
+        return Ok(config);
     }
 
     [HttpDelete("llm/{id}")]
@@ -54,7 +68,9 @@ public class SettingsController : ControllerBase
         }
 
         Settings current = await _settingsService.GetSettingsAsync();
-        await _hubContext.Clients.All.SettingsUpdated(current.LLMConfigs);
+        await _hubContext.Clients.All.SettingsUpdated(current.File.LLMConfigs);
         return NoContent();
     }
 }
+
+public record LlmNotesUpdate(string Strengths, string Weaknesses);

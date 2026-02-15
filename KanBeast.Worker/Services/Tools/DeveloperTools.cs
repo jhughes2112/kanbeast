@@ -61,7 +61,7 @@ public static class DeveloperTools
 					WorkerSession.LlmProxy,
 					0.9);
 
-				ToolContext devContext = new ToolContext(null, taskId, subtaskId, memories);
+				ToolContext devContext = new ToolContext(taskId, subtaskId, memories);
 
 				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
 				LlmConversation conversation = new LlmConversation(
@@ -72,6 +72,7 @@ public static class DeveloperTools
 					devContext,
 					compaction,
 					$"Developer - {subtaskName}");
+				devContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
 
 				string content = string.Empty;
 				int iterationCount = 0;
@@ -125,8 +126,9 @@ public static class DeveloperTools
 								WorkerSession.LlmProxy,
 								0.9);
 
-							ToolContext continueContext = new ToolContext(null, taskId, subtaskId, memories);
+							ToolContext continueContext = new ToolContext(taskId, subtaskId, memories);
 							conversation = new LlmConversation(systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, $"Developer - {subtaskName} (retry)");
+							continueContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
 							iterationCount = 0;
 						}
 						else if (iterationCount == 3)

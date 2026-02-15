@@ -34,3 +34,20 @@ public class CompactionSettings
 	public string Type { get; set; } = "summarize";
 	public double ContextSizePercent { get; set; } = 0.9;
 }
+
+// Configures web search provider for agents.
+public class WebSearchConfig
+{
+	public string Provider { get; set; } = "duckduckgo";
+	public string? GoogleApiKey { get; set; }
+	public string? GoogleSearchEngineId { get; set; }
+}
+
+// Defines settings persisted in settings.json. Shared by server and worker.
+public class SettingsFile
+{
+	public List<LLMConfig> LLMConfigs { get; set; } = new();
+	public GitConfig GitConfig { get; set; } = new();
+	public CompactionSettings Compaction { get; set; } = new();
+	public WebSearchConfig WebSearch { get; set; } = new();
+}

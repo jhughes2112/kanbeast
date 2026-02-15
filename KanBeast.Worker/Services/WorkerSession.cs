@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using KanBeast.Shared;
 using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
@@ -14,6 +15,7 @@ public static class WorkerSession
 	public static string WorkDir { get; private set; } = string.Empty;
 	public static CancellationToken CancellationToken { get; private set; }
 	public static WorkerHubClient HubClient { get; private set; } = null!;
+	public static WebSearchConfig WebSearch { get; private set; } = new();
 
 	public static ConcurrentQueue<string> GetChatQueue(string conversationId)
 	{
@@ -27,7 +29,8 @@ public static class WorkerSession
 		TicketHolder ticketHolder,
 		string workDir,
 		CancellationToken cancellationToken,
-		WorkerHubClient hubClient)
+		WorkerHubClient hubClient,
+		WebSearchConfig webSearch)
 	{
 		ApiClient = apiClient;
 		LlmProxy = llmProxy;
@@ -36,6 +39,7 @@ public static class WorkerSession
 		WorkDir = workDir;
 		CancellationToken = cancellationToken;
 		HubClient = hubClient;
+		WebSearch = webSearch;
 	}
 
 	public static void UpdateCancellationToken(CancellationToken cancellationToken)
@@ -52,5 +56,6 @@ public static class WorkerSession
 		WorkDir = string.Empty;
 		CancellationToken = default;
 		HubClient = null!;
+		WebSearch = new();
 	}
 }

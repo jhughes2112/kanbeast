@@ -211,7 +211,7 @@ public class LlmService
 			ConcurrentQueue<string> chatQueue = WorkerSession.GetChatQueue(conversation.Id);
 			while (chatQueue.TryDequeue(out string? chatMsg))
 			{
-				await conversation.AddUserMessageAsync($"[Chat from user]: {chatMsg}", cancellationToken);
+				await conversation.AddUserMessageAsync(chatMsg, cancellationToken);
 			}
 
 			string? toolChoice = null;

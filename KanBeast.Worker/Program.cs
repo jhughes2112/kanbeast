@@ -116,8 +116,8 @@ public class Program
 		await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Container started, standing by", cancellationToken);
 
 		// One-time git setup.
-		GitService gitService = new GitService(config.GitConfig);
-		if (string.IsNullOrEmpty(config.GitConfig.RepositoryUrl))
+		GitService gitService = new GitService(config.Settings.GitConfig);
+		if (string.IsNullOrEmpty(config.Settings.GitConfig.RepositoryUrl))
 		{
 			throw new InvalidOperationException("No repository URL configured");
 		}
@@ -130,8 +130,8 @@ public class Program
 
 		logger.LogInformation("Cloning repository...");
 		await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Cloning repository", cancellationToken);
-		await gitService.CloneRepositoryAsync(config.GitConfig.RepositoryUrl, repoDir);
-		await gitService.ConfigureGitAsync(config.GitConfig.Username, config.GitConfig.Email, repoDir);
+		await gitService.CloneRepositoryAsync(config.Settings.GitConfig.RepositoryUrl, repoDir);
+		await gitService.ConfigureGitAsync(config.Settings.GitConfig.Username, config.Settings.GitConfig.Email, repoDir);
 
 		string branchName = ticket.BranchName ?? $"feature/ticket-{ticket.Id}";
 		logger.LogInformation("Branch: {BranchName}", branchName);
@@ -152,14 +152,14 @@ public class Program
 		};
 
 		TicketHolder ticketHolder = new TicketHolder(ticket);
-		LlmProxy llmProxy = new LlmProxy(config.LLMConfigs);
+		LlmProxy llmProxy = new LlmProxy(config.Settings.LLMConfigs);
 
 		AgentOrchestrator orchestrator = new AgentOrchestrator(
 			LoggerFactory.Create(b => { b.AddConsole(); b.SetMinimumLevel(LogLevel.Information); }).CreateLogger<AgentOrchestrator>(),
-			config.Compaction,
-			config.LLMConfigs);
+			config.Settings.Compaction,
+			config.Settings.LLMConfigs);
 
-		WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cancellationToken, hubClient);
+		WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cancellationToken, hubClient, config.Settings.WebSearch);
 
 		// Create or reconstitute the planning conversation immediately so the user
 		// can see it in the chat dropdown even before the ticket goes Active.
@@ -181,7 +181,7 @@ public class Program
 		string ticketId = options.TicketId;
 		string serverUrl = options.ServerUrl;
 
-		WorkerSettings settings = LoadWorkerSettings();
+		SettingsFile settings = LoadWorkerSettings();
 
 		string resolvedPromptDirectory = ResolvePromptDirectory();
 
@@ -217,9 +217,7 @@ public class Program
 		{
 			TicketId = ticketId,
 			ServerUrl = serverUrl,
-			GitConfig = settings.GitConfig,
-			LLMConfigs = settings.LLMConfigs,
-			Compaction = settings.Compaction,
+			Settings = settings,
 			Prompts = prompts,
 			PromptDirectory = resolvedPromptDirectory
 		};
@@ -227,14 +225,14 @@ public class Program
 		return config;
 	}
 
-	private static WorkerSettings LoadWorkerSettings()
+	private static SettingsFile LoadWorkerSettings()
 	{
 		string resolvedPath = ResolveSettingsPath();
 
 		if (!File.Exists(resolvedPath))
 		{
 			Console.WriteLine($"Settings file not found at {resolvedPath}, creating default settings...");
-			WorkerSettings defaultSettings = new WorkerSettings();
+			SettingsFile defaultSettings = new SettingsFile();
 			SaveWorkerSettings(defaultSettings, resolvedPath);
 			Console.WriteLine("Default settings file created. Please configure LLM and Git settings.");
 			throw new InvalidOperationException($"Default settings file created at {resolvedPath}. Please configure LLM and Git settings before running.");
@@ -246,7 +244,7 @@ public class Program
 			PropertyNameCaseInsensitive = true
 		};
 
-		WorkerSettings? settings = JsonSerializer.Deserialize<WorkerSettings>(json, options);
+		SettingsFile? settings = JsonSerializer.Deserialize<SettingsFile>(json, options);
 
 		if (settings == null)
 		{
@@ -263,7 +261,7 @@ public class Program
 		return settings;
 	}
 
-	private static void SaveWorkerSettings(WorkerSettings settings, string path)
+	private static void SaveWorkerSettings(SettingsFile settings, string path)
 	{
 		JsonSerializerOptions options = new JsonSerializerOptions
 		{

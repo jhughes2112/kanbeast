@@ -47,7 +47,7 @@ public static class SubAgentTools
 
 				ConversationMemories memories = new ConversationMemories(context.Memories);  // copy the original memories to avoid subagents modifying the original one
 				ICompaction compaction = new CompactionNone();
-				ToolContext subContext = new ToolContext(null, context.CurrentTaskId, context.CurrentSubtaskId, memories);
+				ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, memories);
 
 				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
 				LlmConversation conversation = new LlmConversation(
@@ -58,6 +58,7 @@ public static class SubAgentTools
 					subContext,
 					compaction,
 					"Sub-agent");
+				subContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
 
 				string content = string.Empty;
 

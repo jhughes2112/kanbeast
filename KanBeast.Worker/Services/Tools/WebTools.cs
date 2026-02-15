@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Net;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace KanBeast.Worker.Services.Tools;
@@ -76,7 +77,7 @@ public static class WebTools
         return result;
     }
 
-    [Description("Search the web for information using DuckDuckGo. Returns a list of search results with titles, URLs, and snippets.")]
+    [Description("Search the web for information. Uses the configured search provider (DuckDuckGo or Google). Returns a list of search results with titles, URLs, and snippets.")]
     public static async Task<ToolResult> SearchWebAsync(
         [Description("The search query to use.")] string query,
         [Description("Maximum number of results to return (1-20). Pass empty string for default of 10.")] string maxResults,
@@ -109,7 +110,18 @@ public static class WebTools
 
             try
             {
-                result = new ToolResult(await SearchDuckDuckGoAsync(query, limit, cancellationToken), false);
+                string provider = WorkerSession.WebSearch.Provider;
+
+                if (string.Equals(provider, "google", StringComparison.OrdinalIgnoreCase)
+                    && !string.IsNullOrWhiteSpace(WorkerSession.WebSearch.GoogleApiKey)
+                    && !string.IsNullOrWhiteSpace(WorkerSession.WebSearch.GoogleSearchEngineId))
+                {
+                    result = new ToolResult(await SearchGoogleAsync(query, limit, cancellationToken), false);
+                }
+                else
+                {
+                    result = new ToolResult(await SearchDuckDuckGoAsync(query, limit, cancellationToken), false);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -154,6 +166,75 @@ public static class WebTools
         }
 
         return FormatSearchResults(results);
+    }
+
+    private static async Task<string> SearchGoogleAsync(string query, int maxResults, CancellationToken cancellationToken)
+    {
+        string apiKey = WorkerSession.WebSearch.GoogleApiKey!;
+        string cx = WorkerSession.WebSearch.GoogleSearchEngineId!;
+        string encodedQuery = WebUtility.UrlEncode(query);
+        string url = $"https://www.googleapis.com/customsearch/v1?key={apiKey}&cx={cx}&q={encodedQuery}&num={Math.Min(maxResults, 10)}";
+
+        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        cts.CancelAfter(DefaultTimeout);
+        HttpResponseMessage response = await SharedHttpClient.GetAsync(url, cts.Token);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            return $"Error: Google Custom Search returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
+        }
+
+        string json = await response.Content.ReadAsStringAsync(cts.Token);
+        List<SearchResult> results = ParseGoogleResults(json, maxResults);
+
+        if (results.Count == 0)
+        {
+            return $"No search results found for: {query}";
+        }
+
+        return FormatSearchResults(results);
+    }
+
+    private static List<SearchResult> ParseGoogleResults(string json, int maxResults)
+    {
+        List<SearchResult> results = new List<SearchResult>();
+
+        try
+        {
+            JsonDocument doc = JsonDocument.Parse(json);
+
+            if (!doc.RootElement.TryGetProperty("items", out JsonElement items))
+            {
+                return results;
+            }
+
+            foreach (JsonElement item in items.EnumerateArray())
+            {
+                if (results.Count >= maxResults)
+                {
+                    break;
+                }
+
+                string title = item.TryGetProperty("title", out JsonElement titleEl) ? titleEl.GetString() ?? "" : "";
+                string link = item.TryGetProperty("link", out JsonElement linkEl) ? linkEl.GetString() ?? "" : "";
+                string snippet = item.TryGetProperty("snippet", out JsonElement snippetEl) ? snippetEl.GetString() ?? "" : "";
+
+                if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(link))
+                {
+                    results.Add(new SearchResult
+                    {
+                        Title = title,
+                        Url = link,
+                        Snippet = snippet
+                    });
+                }
+            }
+        }
+        catch (JsonException)
+        {
+        }
+
+        return results;
     }
 
     private static List<SearchResult> ParseDuckDuckGoResults(string html, int maxResults)

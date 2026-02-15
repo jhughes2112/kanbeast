@@ -27,8 +27,10 @@ public class KanbanHub : Hub<IKanbanHubClient>
     // Called by a worker to register itself and receive chat messages for its ticket.
     public async Task RegisterWorker(string ticketId)
     {
+        Console.WriteLine($"Hub: RegisterWorker called for ticket '{ticketId}', connectionId: {Context.ConnectionId}");
         await Groups.AddToGroupAsync(Context.ConnectionId, $"ticket-{ticketId}");
         await Groups.AddToGroupAsync(Context.ConnectionId, $"worker-{ticketId}");
+        Console.WriteLine($"Hub: Worker registered in groups ticket-{ticketId} and worker-{ticketId}");
     }
 
     // Called by a worker to push the full conversation snapshot.
@@ -60,13 +62,27 @@ public class KanbanHub : Hub<IKanbanHubClient>
     // Called by a browser to send a chat message to the worker.
     public async Task SendChatToWorker(string ticketId, string conversationId, string message)
     {
+        Console.WriteLine($"Hub: SendChatToWorker for ticket '{ticketId}' to group worker-{ticketId}");
         await Clients.Group($"worker-{ticketId}").WorkerChatMessage(ticketId, conversationId, message);
     }
 
     // Called by a browser to request the worker clear a conversation back to its initial state.
     public async Task RequestClearConversation(string ticketId, string conversationId)
     {
+        Console.WriteLine($"Hub: RequestClearConversation received for ticket {ticketId}, conversation {conversationId}");
         await Clients.Group($"worker-{ticketId}").ClearConversation(ticketId, conversationId);
+    }
+
+    // Called by a worker to signal that a conversation is busy (LLM running) or idle.
+    public async Task SetConversationBusy(string ticketId, string conversationId, bool isBusy)
+    {
+        await Clients.Group($"ticket-{ticketId}").ConversationBusy(ticketId, conversationId, isBusy);
+    }
+
+    // Called by a browser to request the worker interrupt the current LLM operation.
+    public async Task RequestInterruptConversation(string ticketId, string conversationId)
+    {
+        await Clients.Group($"worker-{ticketId}").InterruptConversation(ticketId, conversationId);
     }
 }
 
@@ -79,7 +95,9 @@ public interface IKanbanHubClient
     Task ConversationSynced(string ticketId, string conversationId);
     Task ConversationFinished(string ticketId, string conversationId);
     Task ConversationReset(string ticketId, string conversationId);
+    Task ConversationBusy(string ticketId, string conversationId, bool isBusy);
     Task ClearConversation(string ticketId, string conversationId);
+    Task InterruptConversation(string ticketId, string conversationId);
     Task SettingsUpdated(List<LLMConfig> llmConfigs);
     Task WorkerChatMessage(string ticketId, string conversationId, string message);
 }

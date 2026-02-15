@@ -18,9 +18,9 @@ public static class SearchToolsTests
 			{
 				CreateTestFiles(tempDir);
 
-				WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!);
+				WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!, new KanBeast.Shared.WebSearchConfig());
 				ConversationMemories testMemories = new ConversationMemories();
-				ToolContext tc = new ToolContext(null, null, null, testMemories);
+				ToolContext tc = new ToolContext(null, null, testMemories);
 
 				TestGlobToRegex(ctx);
 				TestGlob(ctx, tc, tempDir);

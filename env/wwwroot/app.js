@@ -184,6 +184,16 @@ function setupSignalR() {
         }
     });
 
+    connection.on('ConversationBusy', (ticketId, conversationId, isBusy) => {
+        const key = `${ticketId}:${conversationId}`;
+        if (isBusy) {
+            busyConversations[key] = true;
+        } else {
+            delete busyConversations[key];
+        }
+        updateBusyIndicators(ticketId, conversationId, isBusy);
+    });
+
     connection.onreconnecting(() => {
         updateConnectionStatus('connecting', 'Reconnecting...');
     });
@@ -283,12 +293,29 @@ async function loadSettings() {
         const response = await fetch(`${API_BASE}/settings`);
 
         if (response.ok) {
-            settings = await response.json();
+            settings = normalizeSettings(await response.json());
         }
     } catch (error) {
         console.warn('Could not load settings:', error);
         settings = null;
     }
+}
+
+// Flattens the server's { file: { llmConfigs, ... }, systemPrompts } into a flat object
+// so the rest of the UI can access settings.llmConfigs directly.
+function normalizeSettings(raw) {
+    if (!raw) {
+        return raw;
+    }
+
+    if (raw.file) {
+        raw.llmConfigs = raw.file.llmConfigs || [];
+        raw.gitConfig = raw.file.gitConfig || {};
+        raw.compaction = raw.file.compaction || {};
+        raw.webSearch = raw.file.webSearch || {};
+    }
+
+    return raw;
 }
 
 // Rendering - full declarative render
@@ -564,6 +591,12 @@ async function showTicketDetails(ticketId) {
         expandedDescriptions = { tasks: {}, subtasks: {} };
     }
 
+    // Preserve chat input text and cursor across re-renders.
+    const previousInput = document.getElementById('detailChatInput');
+    const savedInputText = previousInput ? previousInput.value : '';
+    const savedSelStart = previousInput ? previousInput.selectionStart : 0;
+    const savedSelEnd = previousInput ? previousInput.selectionEnd : 0;
+
     const response = await fetch(`${API_BASE}/tickets/${ticketId}`);
 
     if (!response.ok) {
@@ -708,11 +741,8 @@ async function showTicketDetails(ticketId) {
     // Clear Tasks button - always enabled
     actionsHtml += `<button class="btn-secondary" onclick="clearTasks('${ticketId}')">🧹 Clear Tasks</button>`;
 
-    // Clear Conversation button - always enabled, will prompt if no active conversation
-    const convos = ticketConversations[ticketId] || [];
-    const activeConvo = convos.find(c => !c.isFinished);
-    const conversationId = activeConvo ? activeConvo.id : '';
-    actionsHtml += `<button class="btn-secondary" onclick="clearConversation('${ticketId}', '${conversationId}')">💬 Clear Conversation</button>`;
+    // Clear Conversation button
+    actionsHtml += `<button class="btn-secondary" onclick="clearConversation('${ticketId}')">💬 Clear Conversation</button>`;
 
     if (canDelete) {
         actionsHtml += `<button class="btn-danger btn-delete" onclick="deleteTicket('${ticketId}')">🗑️ Delete Ticket</button>`;
@@ -759,7 +789,6 @@ async function showTicketDetails(ticketId) {
                         : `$<input type="number" id="maxCostInput" class="cost-inline-input" value="${ticket.maxCost.toFixed(2)}" min="0" step="0.01" onchange="updateMaxCost('${ticket.id}')">`
                     }
                 </span>
-                ${buildPlannerLlmDropdown(ticket)}
             </div>
         </div>
 
@@ -786,6 +815,7 @@ async function showTicketDetails(ticketId) {
             </div>
             <div class="accordion-content">
                 <div class="detail-chat-header">
+                    ${buildPlannerLlmDropdown(ticket, 'detailPlannerLlm')}
                     <select id="detailConversationDropdown" class="detail-chat-select">
                         <option value="">💬 Select conversation…</option>
                     </select>
@@ -796,6 +826,7 @@ async function showTicketDetails(ticketId) {
                 </div>
                 <div class="detail-chat-input-area">
                     <textarea id="detailChatInput" class="detail-chat-input" placeholder="Type a message…" rows="1" disabled></textarea>
+                    <button id="detailChatStopBtn" class="btn-danger detail-chat-stop" title="Stop" onclick="interruptConversation()">■</button>
                     <button id="detailChatSendBtn" class="btn-primary detail-chat-send" disabled>→</button>
                 </div>
             </div>
@@ -968,6 +999,16 @@ async function showTicketDetails(ticketId) {
     // Setup inline chat
     setupDetailChat(ticketId);
 
+    // Restore chat input text and cursor.
+    if (savedInputText) {
+        const restoredInput = document.getElementById('detailChatInput');
+        if (restoredInput) {
+            restoredInput.value = savedInputText;
+            restoredInput.selectionStart = savedSelStart;
+            restoredInput.selectionEnd = savedSelEnd;
+        }
+    }
+
     // Setup resize handle
     setupDetailResize();
 }
@@ -1063,6 +1104,7 @@ function setupDetailChat(ticketId) {
         const info = convos.find(c => c.id === selectedConvId);
         setDetailChatEnabled(!(info && info.isFinished));
         loadAndRestoreDetailConversation(ticketId, selectedConvId, scrollState);
+        updateBusyIndicators(ticketId, selectedConvId, !!busyConversations[`${ticketId}:${selectedConvId}`]);
     }
 
     dropdown.addEventListener('change', () => {
@@ -1073,10 +1115,12 @@ function setupDetailChat(ticketId) {
             const info = convos.find(c => c.id === convId);
             setDetailChatEnabled(!(info && info.isFinished));
             saveTicketConversationState(ticketId, convId, { atBottom: true });
+            updateBusyIndicators(ticketId, convId, !!busyConversations[`${ticketId}:${convId}`]);
         } else {
             detailChatConversationId = null;
             messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation above.</div>';
             setDetailChatEnabled(false);
+            updateBusyIndicators(ticketId, '', false);
         }
     });
 
@@ -1128,7 +1172,6 @@ function setDetailChatEnabled(enabled) {
 async function loadAndDisplayDetailConversation(ticketId, conversationId) {
     const messagesDiv = document.getElementById('detailChatMessages');
     if (!messagesDiv) return;
-    messagesDiv.innerHTML = '';
 
     const key = `${ticketId}:${conversationId}`;
     let msgs = conversationMessages[key];
@@ -1148,6 +1191,7 @@ async function loadAndDisplayDetailConversation(ticketId, conversationId) {
         }
     }
 
+    messagesDiv.innerHTML = '';
     for (let i = 0; i < msgs.length; i++) {
         renderDetailChatMessage(msgs, i, messagesDiv);
     }
@@ -1161,7 +1205,6 @@ async function loadAndDisplayDetailConversation(ticketId, conversationId) {
 async function loadAndRestoreDetailConversation(ticketId, conversationId, scrollState) {
     const messagesDiv = document.getElementById('detailChatMessages');
     if (!messagesDiv) return;
-    messagesDiv.innerHTML = '';
 
     const key = `${ticketId}:${conversationId}`;
     let msgs = conversationMessages[key];
@@ -1181,6 +1224,7 @@ async function loadAndRestoreDetailConversation(ticketId, conversationId, scroll
         }
     }
 
+    messagesDiv.innerHTML = '';
     for (let i = 0; i < msgs.length; i++) {
         renderDetailChatMessage(msgs, i, messagesDiv);
     }
@@ -1203,7 +1247,7 @@ function renderDetailChatMessage(messages, index, container) {
     const msg = messages[index];
 
     if (msg.role === 'user') {
-        const content = (msg.content || '').replace(/^\[Chat from user\]:\s*/, '');
+        const content = (msg.content || '');
         appendDetailChatBubble('user', content);
     } else if (msg.role === 'assistant') {
         if (msg.content) {
@@ -1413,8 +1457,8 @@ async function updateMaxCost(ticketId) {
 
 window.updateMaxCost = updateMaxCost;
 
-// Build the planner LLM dropdown HTML for the ticket detail header
-function buildPlannerLlmDropdown(ticket) {
+// Build the planner LLM dropdown HTML
+function buildPlannerLlmDropdown(ticket, elementId) {
     const llmConfigs = (settings && settings.llmConfigs) || [];
     if (llmConfigs.length === 0) {
         return '';
@@ -1430,11 +1474,21 @@ function buildPlannerLlmDropdown(ticket) {
         options += `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(model)}</option>`;
     });
 
-    return `<select class="detail-chat-select" style="max-width: 160px;" onchange="updatePlannerLlm('${ticket.id}', this.value)" title="Planner LLM">${options}</select>`;
+    return `<select id="${elementId}" class="detail-chat-select" style="max-width: 160px;" onchange="updatePlannerLlm('${ticket.id}', this.value)" title="Planner LLM">${options}</select>`;
 }
 
-// Update the planner LLM for a ticket
+// Update the planner LLM for a ticket and sync both dropdowns
 async function updatePlannerLlm(ticketId, llmId) {
+    // Sync both dropdowns so they stay in sync.
+    const detailSelect = document.getElementById('detailPlannerLlm');
+    const chatSelect = document.getElementById('chatPlannerLlm');
+    if (detailSelect) {
+        detailSelect.value = llmId;
+    }
+    if (chatSelect) {
+        chatSelect.value = llmId;
+    }
+
     try {
         const response = await fetch(`${API_BASE}/tickets/${ticketId}/plannerllm`, {
             method: 'PATCH',
@@ -1561,18 +1615,29 @@ async function clearTasks(ticketId) {
 window.clearTasks = clearTasks;
 
 // Clear a conversation back to its initial state
-async function clearConversation(ticketId, conversationId) {
-    if (!ticketId || !conversationId) {
-        console.warn('clearConversation called with invalid parameters:', ticketId, conversationId);
+async function clearConversation(ticketId) {
+    console.log('clearConversation called with ticketId:', ticketId);
+    if (!ticketId) {
+        console.warn('clearConversation: no ticketId');
         return;
     }
 
-    if (!confirm('Reset this conversation? All messages will be cleared.')) {
+    const convos = ticketConversations[ticketId] || [];
+    console.log('clearConversation: found', convos.length, 'conversations, finished states:', convos.map(c => c.isFinished));
+    const activeConvo = convos.find(c => !c.isFinished);
+    if (!activeConvo) {
+        alert('No active conversation to clear.');
         return;
     }
 
+    if (!confirm('Reset this conversation? All messages and memories will be cleared.')) {
+        return;
+    }
+
+    console.log('clearConversation: invoking RequestClearConversation', ticketId, activeConvo.id);
     try {
-        await connection.invoke('RequestClearConversation', ticketId, conversationId);
+        await connection.invoke('RequestClearConversation', ticketId, activeConvo.id);
+        console.log('clearConversation: invoke completed successfully');
     } catch (error) {
         console.error('Error clearing conversation:', error);
     }
@@ -1968,18 +2033,20 @@ async function handleSaveSettings(e) {
 
 async function saveSettings() {
     const updatedSettings = {
-        llmConfigs: collectLLMConfigs(),
-        gitConfig: {
-            repositoryUrl: document.getElementById('gitUrl').value,
-            username: document.getElementById('gitUsername').value,
-            email: document.getElementById('gitEmail').value,
-            sshKey: document.getElementById('gitSshKey').value || null,
-            apiToken: document.getElementById('gitApiToken').value || null,
-            password: document.getElementById('gitPassword').value || null
-        },
-        compaction: {
-            type: document.getElementById('compactionType').value,
-            contextSizePercent: parseInt(document.getElementById('contextPercent').value, 10) / 100
+        file: {
+            llmConfigs: collectLLMConfigs(),
+            gitConfig: {
+                repositoryUrl: document.getElementById('gitUrl').value,
+                username: document.getElementById('gitUsername').value,
+                email: document.getElementById('gitEmail').value,
+                sshKey: document.getElementById('gitSshKey').value || null,
+                apiToken: document.getElementById('gitApiToken').value || null,
+                password: document.getElementById('gitPassword').value || null
+            },
+            compaction: {
+                type: document.getElementById('compactionType').value,
+                contextSizePercent: parseInt(document.getElementById('contextPercent').value, 10) / 100
+            }
         }
     };
 
@@ -1991,7 +2058,7 @@ async function saveSettings() {
         });
 
         if (response.ok) {
-            settings = await response.json();
+            settings = normalizeSettings(await response.json());
             document.getElementById('settingsModal').classList.remove('active');
         } else {
             console.error('Failed to save settings');
@@ -2023,6 +2090,10 @@ let conversationMessages = {};   // "ticketId:conversationId" -> [ConversationMe
 let ticketPendingToolCalls = {}; // ticketId -> {toolCallId -> domElement}
 let chatModalTicketId = null;
 let chatModalConversationId = null;
+
+// Tracks which conversations are currently busy (LLM running).
+// Key: "ticketId:conversationId", Value: true
+let busyConversations = {};
 
 // LocalStorage helpers for persistent conversation state.
 function getTicketConversationState(ticketId) {
@@ -2137,6 +2208,18 @@ function openChat(ticketId) {
     // Build dropdown.
     const dropdownContainer = document.getElementById('chatConversationPicker');
     dropdownContainer.innerHTML = '';
+
+    // Add planner LLM selector.
+    const ticket = tickets.find(t => t.id === ticketId);
+    if (ticket) {
+        const plannerHtml = buildPlannerLlmDropdown(ticket, 'chatPlannerLlm');
+        if (plannerHtml) {
+            const plannerWrapper = document.createElement('span');
+            plannerWrapper.innerHTML = plannerHtml;
+            dropdownContainer.appendChild(plannerWrapper.firstElementChild);
+        }
+    }
+
     const dropdown = document.createElement('select');
     dropdown.id = 'conversationDropdown';
     dropdown.className = 'chat-conversation-select';
@@ -2158,6 +2241,7 @@ function openChat(ticketId) {
         loadAndDisplayConversation(ticketId, selectedConvId);
         const info = convos.find(c => c.id === selectedConvId);
         setChatInputEnabled(!(info && info.isFinished));
+        updateBusyIndicators(ticketId, selectedConvId, !!busyConversations[`${ticketId}:${selectedConvId}`]);
     } else {
         messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation from the dropdown above.</div>';
         setChatInputEnabled(false);
@@ -2170,10 +2254,12 @@ function openChat(ticketId) {
             loadAndDisplayConversation(ticketId, convId);
             const info = convos.find(c => c.id === convId);
             setChatInputEnabled(!(info && info.isFinished));
+            updateBusyIndicators(ticketId, convId, !!busyConversations[`${ticketId}:${convId}`]);
         } else {
             chatModalConversationId = null;
             messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation from the dropdown above.</div>';
             setChatInputEnabled(false);
+            updateBusyIndicators(ticketId, '', false);
         }
     });
 
@@ -2218,7 +2304,6 @@ function setChatInputEnabled(enabled) {
 
 async function loadAndDisplayConversation(ticketId, conversationId) {
     const messagesDiv = document.getElementById('chatMessages');
-    messagesDiv.innerHTML = '';
     ticketPendingToolCalls[ticketId] = {};
 
     const key = `${ticketId}:${conversationId}`;
@@ -2240,6 +2325,7 @@ async function loadAndDisplayConversation(ticketId, conversationId) {
         }
     }
 
+    messagesDiv.innerHTML = '';
     for (let i = 0; i < msgs.length; i++) {
         renderSingleChatMessage(msgs, i);
     }
@@ -2250,7 +2336,7 @@ function renderSingleChatMessage(messages, index) {
     const messagesDiv = document.getElementById('chatMessages');
 
     if (msg.role === 'user') {
-        const content = (msg.content || '').replace(/^\[Chat from user\]:\s*/, '');
+        const content = (msg.content || '');
         appendChatUser(content);
     } else if (msg.role === 'assistant') {
         if (msg.content) {
@@ -2509,6 +2595,89 @@ function setupChatEventListeners() {
 }
 
 // Utility functions
+
+// Updates busy spinner and stop button state for a conversation.
+function updateBusyIndicators(ticketId, conversationId, isBusy) {
+    // Full-screen chat modal.
+    if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
+        const messagesDiv = document.getElementById('chatMessages');
+        const stopBtn = document.getElementById('chatStopBtn');
+        if (isBusy) {
+            appendBusySpinner(messagesDiv, 'chatBusySpinner');
+            if (stopBtn) {
+                stopBtn.classList.add('active');
+            }
+        } else {
+            removeBusySpinner(messagesDiv, 'chatBusySpinner');
+            if (stopBtn) {
+                stopBtn.classList.remove('active');
+            }
+        }
+    }
+
+    // Inline detail chat.
+    if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
+        const messagesDiv = document.getElementById('detailChatMessages');
+        const stopBtn = document.getElementById('detailChatStopBtn');
+        if (isBusy) {
+            appendBusySpinner(messagesDiv, 'detailBusySpinner');
+            if (stopBtn) {
+                stopBtn.classList.add('active');
+            }
+        } else {
+            removeBusySpinner(messagesDiv, 'detailBusySpinner');
+            if (stopBtn) {
+                stopBtn.classList.remove('active');
+            }
+        }
+    }
+}
+
+function appendBusySpinner(container, spinnerId) {
+    if (!container || document.getElementById(spinnerId)) {
+        return;
+    }
+    const el = document.createElement('div');
+    el.id = spinnerId;
+    el.className = 'chat-busy-spinner';
+    el.innerHTML = '<span class="spinner-dots"><span>.</span><span>.</span><span>.</span></span>';
+    container.appendChild(el);
+    requestAnimationFrame(() => {
+        container.scrollTop = container.scrollHeight;
+    });
+}
+
+function removeBusySpinner(container, spinnerId) {
+    if (!container) {
+        return;
+    }
+    const spinner = document.getElementById(spinnerId);
+    if (spinner) {
+        spinner.remove();
+    }
+}
+
+function interruptConversation() {
+    // Determine which conversation to interrupt based on which chat is active.
+    let ticketId = chatModalTicketId;
+    let conversationId = chatModalConversationId;
+    if (!ticketId || !conversationId) {
+        ticketId = detailChatTicketId;
+        conversationId = detailChatConversationId;
+    }
+    if (!ticketId || !conversationId) {
+        return;
+    }
+
+    if (connection && connection.state === signalR.HubConnectionState.Connected) {
+        connection.invoke('RequestInterruptConversation', ticketId, conversationId).catch(err => {
+            console.error('Failed to interrupt:', err);
+        });
+    }
+}
+
+window.interruptConversation = interruptConversation;
+
 function escapeHtml(text) {
     if (text == null) {
         return '';

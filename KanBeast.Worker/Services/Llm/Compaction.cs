@@ -130,7 +130,8 @@ public class CompactionSummarizer : ICompaction
 			""";
 
 		ToolContext parentContext = conversation.ToolContext;
-		ToolContext compactionContext = new ToolContext(conversation, parentContext.CurrentTaskId, parentContext.CurrentSubtaskId, parentContext.Memories);
+		ToolContext compactionContext = new ToolContext(parentContext.CurrentTaskId, parentContext.CurrentSubtaskId, parentContext.Memories);
+		compactionContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
 		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.DisplayName) ? $"{conversation.DisplayName} (Compaction)" : "Compaction";
 		ICompaction noCompaction = new CompactionNone();
 
@@ -248,7 +249,8 @@ public class CompactionSummarizer : ICompaction
 			}
 			else
 			{
-				context.CompactionTarget!.AddMemory(trimmedLabel, content.Trim());
+				context.Memories.Add(trimmedLabel, content.Trim());
+				context.OnMemoriesChanged?.Invoke();
 				result = new ToolResult($"Added [{trimmedLabel}]: {content.Trim()}", false);
 			}
 		}
@@ -277,9 +279,10 @@ public class CompactionSummarizer : ICompaction
 			}
 			else
 			{
-				bool removed = context.CompactionTarget!.RemoveMemory(trimmedLabel, memoryToRemove);
+				bool removed = context.Memories.Remove(trimmedLabel, memoryToRemove);
 				if (removed)
 				{
+					context.OnMemoriesChanged?.Invoke();
 					result = new ToolResult($"Removed [{trimmedLabel}] memory matching: {memoryToRemove}", false);
 				}
 				else

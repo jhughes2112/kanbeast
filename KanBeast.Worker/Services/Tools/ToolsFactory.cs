@@ -8,6 +8,7 @@ namespace KanBeast.Worker.Services;
 public static class ToolsFactory
 {
 	private static readonly Dictionary<LlmRole, List<Tool>> ToolsByRole = BuildToolsByRole();
+	private static readonly List<Tool> BacklogOnlyPlanningTools = BuildBacklogOnlyPlanningTools();
 	private static readonly List<Tool> ActiveOnlyPlanningTools = BuildActiveOnlyPlanningTools();
 
 	public static List<Tool> GetTools(LlmRole role)
@@ -17,13 +18,30 @@ public static class ToolsFactory
 			return new List<Tool>();
 		}
 
-		if (role == LlmRole.Planning && WorkerSession.TicketHolder.Ticket.Status == TicketStatus.Active)
+		if (role == LlmRole.Planning)
 		{
 			List<Tool> composed = new List<Tool>(tools);
-			composed.AddRange(ActiveOnlyPlanningTools);
+			TicketStatus status = WorkerSession.TicketHolder.Ticket.Status;
+
+			if (status == TicketStatus.Backlog)
+			{
+				composed.AddRange(BacklogOnlyPlanningTools);
+			}
+			else if (status == TicketStatus.Active)
+			{
+				composed.AddRange(ActiveOnlyPlanningTools);
+			}
+
 			return composed;
 		}
 
+		return tools;
+	}
+
+	private static List<Tool> BuildBacklogOnlyPlanningTools()
+	{
+		List<Tool> tools = new List<Tool>();
+		ToolHelper.AddTools(tools, typeof(TicketTools), nameof(TicketTools.CreateTaskAsync), nameof(TicketTools.CreateSubtaskAsync), nameof(TicketTools.DeleteAllTasksAsync));
 		return tools;
 	}
 
@@ -31,7 +49,7 @@ public static class ToolsFactory
 	{
 		List<Tool> tools = new List<Tool>();
 		ToolHelper.AddTools(tools, typeof(DeveloperTools), nameof(DeveloperTools.StartDeveloperAsync));
-		ToolHelper.AddTools(tools, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync));
+		ToolHelper.AddTools(tools, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.UpdateLlmNotesAsync));
 		return tools;
 	}
 
@@ -42,7 +60,8 @@ public static class ToolsFactory
 		ToolHelper.AddTools(planningTools, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
 		ToolHelper.AddTools(planningTools, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
 		ToolHelper.AddTools(planningTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
-		ToolHelper.AddTools(planningTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync), nameof(TicketTools.CreateTaskAsync), nameof(TicketTools.CreateSubtaskAsync), nameof(TicketTools.PlanningCompleteAsync), nameof(TicketTools.DeleteAllTasksAsync));
+		ToolHelper.AddTools(planningTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync));
+		ToolHelper.AddTools(planningTools, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
 
 		List<Tool> developerTools = new List<Tool>();
 		ToolHelper.AddTools(developerTools, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
@@ -52,6 +71,7 @@ public static class ToolsFactory
 		ToolHelper.AddTools(developerTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(developerTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync), nameof(TicketTools.EndSubtaskAsync));
 		ToolHelper.AddTools(developerTools, typeof(SubAgentTools), nameof(SubAgentTools.StartSubAgentAsync));
+		ToolHelper.AddTools(developerTools, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
 
 		// Sub-agent tools: same as developer minus sub-agent spawning.
 		List<Tool> subAgentTools = new List<Tool>();
@@ -62,6 +82,7 @@ public static class ToolsFactory
 		ToolHelper.AddTools(subAgentTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(subAgentTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync));
 		ToolHelper.AddTools(subAgentTools, typeof(SubAgentTools), nameof(SubAgentTools.AgentTaskCompleteAsync));
+		ToolHelper.AddTools(subAgentTools, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
 
 		List<Tool> compactionTools = new List<Tool>();
 		ToolHelper.AddTools(compactionTools, typeof(CompactionSummarizer),

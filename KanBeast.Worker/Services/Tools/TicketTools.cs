@@ -7,11 +7,62 @@ namespace KanBeast.Worker.Services.Tools;
 // Tools for LLM to interact with the ticket system.
 public static class TicketTools
 {
-    [Description("Signal that planning is complete and implementation should begin. Call this when all tasks and subtasks have been created.")]
-    public static Task<ToolResult> PlanningCompleteAsync(ToolContext context)
+    [Description("""
+        Update the strengths and weaknesses notes on an LLM configuration based on observed developer performance.
+        Call this after a developer session completes or fails to record what the model was good or bad at.
+        Each field is limited to 25 words. Use short keywords and phrases (e.g. "strong at refactoring C#", "struggles with CSS layout").
+        The values you provide replace the existing notes entirely, so include any prior notes you want to keep.
+        """)]
+    public static async Task<ToolResult> UpdateLlmNotesAsync(
+        [Description("The LLM config id to update")] string llmConfigId,
+        [Description("Short keywords describing what this model is good at (max 25 words)")] string strengths,
+        [Description("Short keywords describing what this model struggles with (max 25 words)")] string weaknesses,
+        ToolContext context)
     {
-        ToolResult result = new ToolResult("Planning complete. Beginning implementation phase.", true);
-        return Task.FromResult(result);
+        strengths = TruncateToWordLimit(strengths, 25);
+        weaknesses = TruncateToWordLimit(weaknesses, 25);
+
+        bool updated = WorkerSession.LlmProxy.UpdateLlmNotes(llmConfigId, strengths, weaknesses);
+
+        ToolResult result;
+
+        if (!updated)
+        {
+            result = new ToolResult($"Error: LLM config '{llmConfigId}' not found", false);
+        }
+        else
+        {
+            await WorkerSession.ApiClient.UpdateLlmNotesAsync(llmConfigId, strengths, weaknesses, WorkerSession.CancellationToken);
+            result = new ToolResult($"Updated notes for LLM '{llmConfigId}'. Strengths: {strengths}. Weaknesses: {weaknesses}.", false);
+        }
+
+        return result;
+    }
+
+    private static string TruncateToWordLimit(string text, int maxWords)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            return string.Empty;
+        }
+
+        string[] words = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (words.Length <= maxWords)
+        {
+            return text.Trim();
+        }
+
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < maxWords; i++)
+        {
+            if (i > 0)
+            {
+                sb.Append(' ');
+            }
+            sb.Append(words[i]);
+        }
+
+        return sb.ToString();
     }
 
     [Description("Signal that you have finished working on the current subtask. Call this when your work is complete or is blocked in some way.")]
@@ -53,9 +104,9 @@ public static class TicketTools
         return result;
     }
 
-    [Description("Send a message to the human's display about discoveries, decisions, important details, occasional jokes, etc.")]
+    [Description("Send a brief message to the status line display about discoveries, decisions, important details, occasional jokes, etc.")]
     public static async Task<ToolResult> LogMessageAsync(
-        [Description("Message to log")] string message,
+        [Description("Message to show")] string message,
         ToolContext context)
     {
         ToolResult result;

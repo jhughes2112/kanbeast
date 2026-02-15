@@ -44,10 +44,17 @@ public class AgentOrchestrator
 			_logger.LogInformation("Reconstituting planning conversation from server: {Id}", existing.Id);
 			await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Reconstituted conversation from server", cancellationToken);
 
+			// Always patch message 0 with the latest system prompt so prompt changes take effect.
+			if (existing.Messages.Count > 0)
+			{
+				existing.Messages[0] = new ConversationMessage { Role = "system", Content = WorkerSession.Prompts["planning"] };
+			}
+
 			ICompaction compaction = CreateCompaction();
 			ConversationMemories memories = new ConversationMemories(existing.Memories);
-			ToolContext context = new ToolContext(null, null, null, memories);
+			ToolContext context = new ToolContext(null, null, memories);
 			_planningConversation = new LlmConversation(existing, LlmRole.Planning, context, compaction);
+			context.OnMemoriesChanged = _planningConversation.RefreshMemoriesMessage;
 
 			// Force a sync so clients get a ConversationsUpdated notification.
 			await WorkerSession.HubClient.SyncConversationAsync(existing);
@@ -65,7 +72,7 @@ public class AgentOrchestrator
 				""";
 
 			ICompaction compaction = CreateCompaction();
-			ToolContext context = new ToolContext(null, null, null, memories);
+			ToolContext context = new ToolContext(null, null, memories);
 			_planningConversation = new LlmConversation(
 				WorkerSession.Prompts["planning"],
 				userPrompt,
@@ -74,6 +81,7 @@ public class AgentOrchestrator
 				context,
 				compaction,
 				"Planning");
+			context.OnMemoriesChanged = _planningConversation.RefreshMemoriesMessage;
 		}
 
 		// Sync immediately so the client can see the conversation in the dropdown.
@@ -91,8 +99,10 @@ public class AgentOrchestrator
 		await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Ready, waiting for messages", cancellationToken);
 
 		System.Collections.Concurrent.ConcurrentQueue<string> chatQueue = WorkerSession.HubClient.GetChatQueue(_planningConversation!.Id);
+		Console.WriteLine($"Orchestrator: Listening for chat on conversation {_planningConversation!.Id}");
 		System.Collections.Concurrent.ConcurrentQueue<string> clearQueue = WorkerSession.HubClient.GetClearQueue();
 		System.Collections.Concurrent.ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
+		System.Collections.Concurrent.ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
 
 		for (;;)
 		{
@@ -126,29 +136,65 @@ public class AgentOrchestrator
 					_llmConfigs = latestConfigs;
 				}
 
+				// Apply any pending ticket updates (keep only the latest).
+				Ticket? latestTicket = null;
+				while (ticketQueue.TryDequeue(out Ticket? updated))
+				{
+					latestTicket = updated;
+				}
+				if (latestTicket != null)
+				{
+					ticketHolder.Update(latestTicket);
+				}
+
 				await Task.Delay(250, cancellationToken);
 			}
 
 			_logger.LogInformation("Planning: Received chat message from user");
 			await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Received user message", cancellationToken);
 
-			await _planningConversation!.AddUserMessageAsync($"[Chat from user]: {message}", cancellationToken);
+			await _planningConversation!.AddUserMessageAsync(message, cancellationToken);
 
-			await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
+			await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation.Id, true);
+			try
+			{
+				await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
+			}
+			finally
+			{
+				await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation.Id, false);
+			}
 
 			await _planningConversation.ForceFlushAsync();
 		}
 	}
 
-	// Calls the LLM in a loop until it responds with text (idle), signals
-	// planning_complete, or hits a fatal/cost error. Tool calls execute inline.
+	// Calls the LLM in a loop until it responds with text (idle), is interrupted,
+	// or hits a fatal/cost error. Tool calls execute inline.
 	private async Task RunLlmUntilIdleAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
 		int retryCount = 0;
+		System.Collections.Concurrent.ConcurrentQueue<string> interruptQueue = WorkerSession.HubClient.GetInterruptQueue();
 
 		for (;;)
 		{
 			cancellationToken.ThrowIfCancellationRequested();
+
+			// Check for interrupt requests between LLM calls.
+			bool interrupted = false;
+			while (interruptQueue.TryDequeue(out string? interruptConvId))
+			{
+				if (interruptConvId == _planningConversation!.Id)
+				{
+					interrupted = true;
+				}
+			}
+			if (interrupted)
+			{
+				_logger.LogInformation("Planning: Interrupted by user");
+				await _planningConversation!.AddUserMessageAsync("[System: The user interrupted the current operation. Stop what you are doing and respond to the user.]", cancellationToken);
+				return;
+			}
 
 			string? plannerLlmId = ticketHolder.Ticket.PlannerLlmId;
 			LlmResult llmResult = !string.IsNullOrWhiteSpace(plannerLlmId)
@@ -156,20 +202,14 @@ public class AgentOrchestrator
 				: await WorkerSession.LlmProxy.ContinueAsync(_planningConversation!, 16384, cancellationToken);
 			_logger.LogDebug("Planning response: {Response}", llmResult.Content);
 
-			if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "planning_complete")
-				{
-					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning complete.", cancellationToken);
-					_logger.LogInformation("Planning complete");
-					return;
-				}
-			else if (llmResult.ExitReason == LlmExitReason.Completed)
+			if (llmResult.ExitReason == LlmExitReason.Completed)
 			{
 				// LLM responded with text and no tool calls. Idle until next user message.
 				return;
 			}
 			else if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
 			{
-				// A tool other than planning_complete signalled exit. Sync and continue.
+				// A tool signalled exit. Sync and continue.
 				await _planningConversation!.ForceFlushAsync();
 				retryCount = 0;
 			}
@@ -188,7 +228,7 @@ public class AgentOrchestrator
 				_planningConversation!.ResetIteration();
 
 				await _planningConversation.AddUserMessageAsync(
-					"Continue working. Call planning_complete when everything is done.",
+					"Continue working.",
 					cancellationToken);
 			}
 			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)

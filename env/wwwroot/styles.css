@@ -1339,7 +1339,7 @@ nav {
     flex: 1;
     display: flex;
     flex-direction: column;
-    overflow-y: auto;
+    overflow: hidden;
     min-height: 0;
     padding: 0 0.25rem;
 }
@@ -1354,6 +1354,10 @@ nav {
 
 .detail-panes > .accordion:last-child {
     margin-bottom: 0;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
 }
 
 .detail-panes .accordion .accordion-content {
@@ -1398,7 +1402,6 @@ nav {
     padding: 0;
     display: flex;
     flex-direction: column;
-    max-height: 400px;
 }
 
 .detail-pane-chat .accordion.collapsed .accordion-content {
@@ -1436,7 +1439,8 @@ nav {
     padding: 0 !important;
     display: flex !important;
     flex-direction: column;
-    max-height: 400px;
+    flex: 1;
+    min-height: 0;
 }
 
 #chatAccordion.collapsed .accordion-content {
@@ -1870,4 +1874,61 @@ nav {
     min-width: 40px;
     font-size: 1.125rem;
     justify-content: center;
+}
+
+.chat-stop-btn {
+    flex-shrink: 0;
+    padding: 0.625rem;
+    height: 40px;
+    min-width: 40px;
+    font-size: 1.125rem;
+    justify-content: center;
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.chat-stop-btn.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.detail-chat-stop {
+    flex-shrink: 0;
+    padding: 0.25rem 0.5rem;
+    height: 28px;
+    min-width: 28px;
+    font-size: 0.875rem;
+    justify-content: center;
+    opacity: 0.4;
+    pointer-events: none;
+}
+
+.detail-chat-stop.active {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.chat-busy-spinner {
+    padding: 8px 16px;
+    color: var(--gray-400);
+    font-size: 1.5rem;
+    line-height: 1;
+}
+
+.spinner-dots span {
+    animation: dotPulse 1.4s infinite;
+    opacity: 0.2;
+}
+
+.spinner-dots span:nth-child(2) {
+    animation-delay: 0.2s;
+}
+
+.spinner-dots span:nth-child(3) {
+    animation-delay: 0.4s;
+}
+
+@keyframes dotPulse {
+    0%, 80%, 100% { opacity: 0.2; }
+    40% { opacity: 1; }
 }

@@ -14,8 +14,16 @@ public class WorkerHubClient : IAsyncDisposable
 	private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _pendingChatMessages = new();
 	private readonly ConcurrentQueue<string> _pendingClearRequests = new();
 	private readonly ConcurrentQueue<List<LLMConfig>> _pendingSettingsUpdates = new();
+	private readonly ConcurrentQueue<Ticket> _pendingTicketUpdates = new();
+	private readonly ConcurrentQueue<string> _pendingInterruptRequests = new();
 	private readonly SemaphoreSlim _ticketChangedSignal = new SemaphoreSlim(0);
 	private readonly object _activeWorkLock = new object();
+
+	private static readonly JsonSerializerOptions _ticketJsonOptions = new JsonSerializerOptions
+	{
+		PropertyNameCaseInsensitive = true,
+		Converters = { new JsonStringEnumConverter() }
+	};
 
 	private CancellationTokenSource? _activeWorkCts;
 
@@ -30,11 +38,32 @@ public class WorkerHubClient : IAsyncDisposable
 			.WithAutomaticReconnect(new[] { TimeSpan.Zero, TimeSpan.FromSeconds(2), TimeSpan.FromSeconds(5), TimeSpan.FromSeconds(10) })
 			.Build();
 
+		// Re-register with the hub after auto-reconnect so group memberships are restored.
+		_connection.Reconnected += async (connectionId) =>
+		{
+			Console.WriteLine($"Hub auto-reconnected (connectionId: {connectionId}), re-registering worker");
+			try
+			{
+				await _connection.InvokeAsync("RegisterWorker", _ticketId);
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Failed to re-register worker after reconnect: {ex.Message}");
+			}
+		};
+
 		// Listen for ticket updates pushed from the server.
 		_connection.On<JsonElement>("TicketUpdated", ticket =>
 		{
 			if (ticket.TryGetProperty("id", out JsonElement idProp) && idProp.GetString() == _ticketId)
 			{
+				// Deserialize the full ticket so the worker can pick up field changes (e.g. PlannerLlmId).
+				Ticket? parsed = JsonSerializer.Deserialize<Ticket>(ticket.GetRawText(), _ticketJsonOptions);
+				if (parsed != null)
+				{
+					_pendingTicketUpdates.Enqueue(parsed);
+				}
+
 				if (ticket.TryGetProperty("status", out JsonElement statusProp))
 				{
 					string? status = statusProp.ValueKind == JsonValueKind.Number
@@ -61,19 +90,31 @@ public class WorkerHubClient : IAsyncDisposable
 		// Listen for chat messages from the browser, routed through the server hub.
 		_connection.On<string, string, string>("WorkerChatMessage", (fromTicketId, conversationId, message) =>
 		{
+			Console.WriteLine($"Worker: WorkerChatMessage received for ticket {fromTicketId}, conversation {conversationId}");
 			if (fromTicketId == _ticketId && !string.IsNullOrWhiteSpace(message))
 			{
 				ConcurrentQueue<string> queue = _pendingChatMessages.GetOrAdd(conversationId, _ => new ConcurrentQueue<string>());
 				queue.Enqueue(message);
+				Console.WriteLine($"Worker: Message enqueued for conversation {conversationId}");
 			}
 		});
 
 		// Listen for clear-conversation requests from the browser.
 		_connection.On<string, string>("ClearConversation", (fromTicketId, conversationId) =>
 		{
+			Console.WriteLine($"Worker: ClearConversation received for ticket {fromTicketId}, conversation {conversationId}");
 			if (fromTicketId == _ticketId)
 			{
 				_pendingClearRequests.Enqueue(conversationId);
+			}
+		});
+
+		// Listen for interrupt requests from the browser.
+		_connection.On<string, string>("InterruptConversation", (fromTicketId, conversationId) =>
+		{
+			if (fromTicketId == _ticketId)
+			{
+				_pendingInterruptRequests.Enqueue(conversationId);
 			}
 		});
 
@@ -133,6 +174,21 @@ public class WorkerHubClient : IAsyncDisposable
 		return _pendingSettingsUpdates;
 	}
 
+	public ConcurrentQueue<Ticket> GetTicketUpdateQueue()
+	{
+		return _pendingTicketUpdates;
+	}
+
+	public ConcurrentQueue<string> GetInterruptQueue()
+	{
+		return _pendingInterruptRequests;
+	}
+
+	public async Task SetConversationBusyAsync(string conversationId, bool isBusy)
+	{
+		await HubSendAsync("SetConversationBusy", [_ticketId, conversationId, isBusy]);
+	}
+
 	public async Task ConnectAsync(CancellationToken cancellationToken)
 	{
 		await _connection.StartAsync(cancellationToken);
@@ -159,30 +215,41 @@ public class WorkerHubClient : IAsyncDisposable
 		await HubSendAsync("ResetConversation", [_ticketId, conversationId]);
 	}
 
-	// Fire-and-forget send with retry. If the connection dropped, attempts to
-	// re-establish it before sending. Uses SendCoreAsync instead of InvokeAsync
-	// to avoid server response timeouts.
+	// Sends a message to the hub with retry and reconnect logic.
+	// Uses InvokeAsync so the server acknowledges receipt. Falls back
+	// to SendCoreAsync only if InvokeAsync times out.
 	private async Task HubSendAsync(string method, object?[] args)
 	{
-		bool sent = false;
-
-		for (int attempt = 0; attempt < 3 && !sent; attempt++)
+		for (int attempt = 0; attempt < 5; attempt++)
 		{
 			await EnsureConnectedAsync();
 
-			if (_connection.State == HubConnectionState.Connected)
+			if (_connection.State != HubConnectionState.Connected)
 			{
-				try
-				{
-					await _connection.SendCoreAsync(method, args);
-					sent = true;
-				}
-				catch (Exception ex) when (ex is not OperationCanceledException)
-				{
-					Console.WriteLine($"Hub {method} attempt {attempt + 1} failed: {ex.Message}");
-				}
+				Console.WriteLine($"Hub {method}: not connected (state={_connection.State}), attempt {attempt + 1}");
+				await Task.Delay(1000);
+				continue;
 			}
+
+			try
+			{
+				using CancellationTokenSource cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+				await _connection.InvokeCoreAsync(method, args, cts.Token);
+				return;
+			}
+			catch (OperationCanceledException)
+			{
+				Console.WriteLine($"Hub {method}: InvokeAsync timed out, attempt {attempt + 1}");
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Hub {method}: attempt {attempt + 1} failed: {ex.Message}");
+			}
+
+			await Task.Delay(500 * (attempt + 1));
 		}
+
+		Console.WriteLine($"Hub {method}: all 5 attempts failed, message lost");
 	}
 
 	// Waits for the connection to become active. If auto-reconnect is running,

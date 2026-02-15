@@ -17,20 +17,18 @@ public enum LlmRole
 public class ToolContext
 {
 	public HashSet<string> ReadFiles { get; }
-	public LlmConversation? CompactionTarget { get; }
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
 	public ShellState? Shell { get; internal set; }
 	public ConversationMemories Memories { get; }
+	public Action? OnMemoriesChanged { get; set; }
 
 	public ToolContext(
-		LlmConversation? compactionTarget,
 		string? currentTaskId,
 		string? currentSubtaskId,
 		ConversationMemories memories)
 	{
 		ReadFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-		CompactionTarget = compactionTarget;
 		CurrentTaskId = currentTaskId;
 		CurrentSubtaskId = currentSubtaskId;
 		Memories = memories;
