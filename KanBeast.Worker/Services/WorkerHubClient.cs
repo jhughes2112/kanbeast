@@ -12,6 +12,8 @@ public class WorkerHubClient : IAsyncDisposable
 	private readonly HubConnection _connection;
 	private readonly string _ticketId;
 	private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _pendingChatMessages = new();
+	private readonly ConcurrentQueue<string> _pendingClearRequests = new();
+	private readonly ConcurrentQueue<List<LLMConfig>> _pendingSettingsUpdates = new();
 	private readonly SemaphoreSlim _ticketChangedSignal = new SemaphoreSlim(0);
 	private readonly object _activeWorkLock = new object();
 
@@ -65,6 +67,21 @@ public class WorkerHubClient : IAsyncDisposable
 				queue.Enqueue(message);
 			}
 		});
+
+		// Listen for clear-conversation requests from the browser.
+		_connection.On<string, string>("ClearConversation", (fromTicketId, conversationId) =>
+		{
+			if (fromTicketId == _ticketId)
+			{
+				_pendingClearRequests.Enqueue(conversationId);
+			}
+		});
+
+		// Listen for settings updates pushed from the server.
+		_connection.On<List<LLMConfig>>("SettingsUpdated", (llmConfigs) =>
+		{
+			_pendingSettingsUpdates.Enqueue(llmConfigs);
+		});
 	}
 
 	// Creates a linked CancellationToken that is also cancelled when the ticket leaves Active.
@@ -106,6 +123,16 @@ public class WorkerHubClient : IAsyncDisposable
 		return _pendingChatMessages.GetOrAdd(conversationId, _ => new ConcurrentQueue<string>());
 	}
 
+	public ConcurrentQueue<string> GetClearQueue()
+	{
+		return _pendingClearRequests;
+	}
+
+	public ConcurrentQueue<List<LLMConfig>> GetSettingsQueue()
+	{
+		return _pendingSettingsUpdates;
+	}
+
 	public async Task ConnectAsync(CancellationToken cancellationToken)
 	{
 		await _connection.StartAsync(cancellationToken);
@@ -126,18 +153,22 @@ public class WorkerHubClient : IAsyncDisposable
 		await HubSendAsync("FinishConversation", [_ticketId, conversationId]);
 	}
 
-	// Fire-and-forget send with one retry. Uses SendCoreAsync instead of InvokeAsync
-	// to avoid server response timeouts when the connection is stale but still reports Connected.
+	// Notifies the server and clients that a conversation was reset.
+	public async Task ResetConversationAsync(string conversationId)
+	{
+		await HubSendAsync("ResetConversation", [_ticketId, conversationId]);
+	}
+
+	// Fire-and-forget send with retry. If the connection dropped, attempts to
+	// re-establish it before sending. Uses SendCoreAsync instead of InvokeAsync
+	// to avoid server response timeouts.
 	private async Task HubSendAsync(string method, object?[] args)
 	{
 		bool sent = false;
 
-		for (int attempt = 0; attempt < 2 && !sent; attempt++)
+		for (int attempt = 0; attempt < 3 && !sent; attempt++)
 		{
-			if (_connection.State != HubConnectionState.Connected)
-			{
-				await Task.Delay(TimeSpan.FromSeconds(5));
-			}
+			await EnsureConnectedAsync();
 
 			if (_connection.State == HubConnectionState.Connected)
 			{
@@ -150,6 +181,45 @@ public class WorkerHubClient : IAsyncDisposable
 				{
 					Console.WriteLine($"Hub {method} attempt {attempt + 1} failed: {ex.Message}");
 				}
+			}
+		}
+	}
+
+	// Waits for the connection to become active. If auto-reconnect is running,
+	// polls up to 15 seconds. If fully disconnected, restarts it manually.
+	private async Task EnsureConnectedAsync()
+	{
+		if (_connection.State == HubConnectionState.Connected)
+		{
+			return;
+		}
+
+		// If auto-reconnect is in progress, give it time.
+		if (_connection.State == HubConnectionState.Reconnecting || _connection.State == HubConnectionState.Connecting)
+		{
+			for (int i = 0; i < 30; i++)
+			{
+				await Task.Delay(500);
+				if (_connection.State == HubConnectionState.Connected)
+				{
+					return;
+				}
+			}
+		}
+
+		// Fully disconnected — restart manually.
+		if (_connection.State == HubConnectionState.Disconnected)
+		{
+			try
+			{
+				Console.WriteLine("Hub connection lost, restarting...");
+				await _connection.StartAsync();
+				await _connection.InvokeAsync("RegisterWorker", _ticketId);
+				Console.WriteLine("Hub connection re-established");
+			}
+			catch (Exception ex)
+			{
+				Console.WriteLine($"Hub reconnect failed: {ex.Message}");
 			}
 		}
 	}

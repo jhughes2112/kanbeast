@@ -57,8 +57,6 @@ public static class SubAgentTools
 					LlmRole.SubAgent,
 					subContext,
 					compaction,
-					"/workspace/logs",
-					$"TIK-{ticketId}-sub",
 					"Sub-agent");
 
 				string content = string.Empty;

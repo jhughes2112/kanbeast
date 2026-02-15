@@ -24,6 +24,7 @@ public class Ticket
 	public string Description { get; set; } = string.Empty;
 	public TicketStatus Status { get; set; } = TicketStatus.Backlog;
 	public string? BranchName { get; set; }
+	public string? PlannerLlmId { get; set; }
 	public List<KanbanTask> Tasks { get; set; } = new();
 	public List<string> ActivityLog { get; set; } = new();
 	public DateTime CreatedAt { get; set; } = DateTime.UtcNow;

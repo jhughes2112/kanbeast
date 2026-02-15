@@ -4,9 +4,38 @@
 	<meta charset="UTF-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0">
 	<title>KanBeast - AI-Driven Kanban Board</title>
-	<link rel="stylesheet" href="styles.css">
+	<style>
+		/* Inline minimal loading screen so it renders even if styles.css hasn't loaded yet */
+		body.loading {
+			background: #09090b;
+			color: #d4d4d8;
+			font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			min-height: 100vh;
+			margin: 0;
+		}
+		#loadingScreen {
+			text-align: center;
+		}
+		#loadingScreen .spinner-load {
+			width: 32px;
+			height: 32px;
+			border: 3px solid #3f3f46;
+			border-top-color: #0ea5e9;
+			border-radius: 50%;
+			animation: spin-load 0.8s linear infinite;
+			margin: 0 auto 1rem;
+		}
+		@keyframes spin-load { to { transform: rotate(360deg); } }
+		#loadingScreen p { font-size: 0.875rem; color: #71717a; }
+		body.loading header,
+		body.loading main,
+		body.loading .modal { display: none !important; }
+	</style>
 </head>
-<body>
+<body class="loading">
 	<header>
 		<h1>
 			<img src="kanbeast.png" alt="KanBeast Logo" class="logo-icon">
@@ -127,22 +156,6 @@
 				</div>
 
 				<div class="accordion collapsed">
-					<div class="accordion-header" data-accordion="worker-section">
-						<span>⚙️ Worker Settings</span>
-						<span class="accordion-icon">▼</span>
-					</div>
-					<div class="accordion-content" id="worker-section">
-						<div class="form-group">
-							<label class="checkbox-label">
-								<input type="checkbox" id="jsonLogging">
-								<span>Enable JSON Logging</span>
-							</label>
-							<small style="color: var(--gray-500);">Save conversation logs as JSON files for debugging.</small>
-						</div>
-					</div>
-				</div>
-
-				<div class="accordion collapsed">
 					<div class="accordion-header" data-accordion="compaction-section">
 						<span>📦 Compaction Settings</span>
 						<span class="accordion-icon">▼</span>
@@ -213,42 +226,70 @@
 	</div>
 
 	<script src="https://cdn.jsdelivr.net/npm/@microsoft/signalr@latest/dist/browser/signalr.min.js"></script>
+	<div id="loadingScreen">
+		<div class="spinner-load"></div>
+		<p id="loadingStatus">Waiting for server...</p>
+	</div>
 	<script>
-		// Dynamic script loader with retry logic to handle server startup delays
-		async function loadScript(src, maxRetries = 20) {
+		// Dynamic resource loader with retry for server startup delays.
+		async function waitForServer(maxRetries = 30) {
 			for (let attempt = 1; attempt <= maxRetries; attempt++) {
 				try {
-					const response = await fetch(src);
+					const response = await fetch('/styles.css', { cache: 'no-store' });
 					if (response.ok) {
-						const code = await response.text();
-						const script = document.createElement('script');
-						script.textContent = code;
-						document.body.appendChild(script);
-						console.log(`✓ Loaded ${src}`);
 						return true;
 					}
-				} catch (error) {
-					console.warn(`Attempt ${attempt}/${maxRetries} to load ${src} failed:`, error.message);
+				} catch (e) {
+					// Server not up yet.
 				}
 
-				if (attempt < maxRetries) {
-					const delay = Math.min(1000 * Math.pow(1.5, attempt - 1), 10000);
-					await new Promise(resolve => setTimeout(resolve, delay));
-				}
+				document.getElementById('loadingStatus').textContent = `Waiting for server... (${attempt}/${maxRetries})`;
+				const delay = Math.min(500 * Math.pow(1.3, attempt - 1), 5000);
+				await new Promise(resolve => setTimeout(resolve, delay));
 			}
 
-			console.error(`✗ Failed to load ${src} after ${maxRetries} attempts`);
-			document.body.innerHTML = '<div style="padding: 2rem; text-align: center; color: #e53e3e;"><h1>Failed to load application</h1><p>Server may be unavailable. Please refresh the page.</p></div>';
 			return false;
 		}
 
-		// Load app.js and initialize the app
+		function loadStylesheet(href) {
+			const link = document.createElement('link');
+			link.rel = 'stylesheet';
+			link.href = href + '?v=' + Date.now();
+			document.head.appendChild(link);
+		}
+
+		async function loadScript(src) {
+			const response = await fetch(src + '?v=' + Date.now(), { cache: 'no-store' });
+			if (!response.ok) {
+				throw new Error(`Failed to fetch ${src}: ${response.status}`);
+			}
+
+			const code = await response.text();
+			const script = document.createElement('script');
+			script.textContent = code;
+			document.body.appendChild(script);
+			console.log(`✓ Loaded ${src}`);
+		}
+
 		(async () => {
-			if (await loadScript('/app.js')) {
-				// DOMContentLoaded already fired, manually call init
+			const serverReady = await waitForServer();
+			if (!serverReady) {
+				document.getElementById('loadingStatus').textContent = 'Server unavailable. Please refresh.';
+				return;
+			}
+
+			try {
+				loadStylesheet('/styles.css');
+				await loadScript('/app.js');
+				document.body.classList.remove('loading');
+				document.getElementById('loadingScreen').remove();
+
 				if (typeof init === 'function') {
 					init();
 				}
+			} catch (error) {
+				console.error('Failed to load application:', error);
+				document.getElementById('loadingStatus').textContent = 'Failed to load. Please refresh.';
 			}
 		})();
 	</script>

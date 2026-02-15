@@ -11,8 +11,8 @@ public static class ShellTools
 	private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
 
 	[Description("""
-		Executes a single bash command and immediately returns the exit code, stdout, and stderr.
-		Output format is 'Exit Code: N' followed by 'Output:\\n...' and 'Stderr:\\n...' sections when present.
+		Executes a single bash command and immediately returns stdout, stderr, and exit code.
+		Output format is stdout (if any), then 'Stderr:\n...' (if any), then 'Exit Code: N' at the bottom.
 		Commands time out after 60 seconds. Output is truncated if very long.
 
 		Do NOT use for file operations — use read_file, write_file, edit_file, multi_edit_file, list_directory instead of cat, head, tail, awk, sed, ls.
@@ -134,7 +134,7 @@ public static class ShellTools
 						}
 					}
 
-					string response = $"Exit Code: {process.ExitCode}";
+					StringBuilder responseBuilder = new StringBuilder();
 
 					if (!string.IsNullOrWhiteSpace(output))
 					{
@@ -143,7 +143,11 @@ public static class ShellTools
 							output = output.Substring(0, 50000) + "\n[Output truncated]";
 						}
 
-						response += $"\nOutput:\n{output}";
+						responseBuilder.Append(output);
+						if (!output.EndsWith('\n'))
+						{
+							responseBuilder.AppendLine();
+						}
 					}
 
 					if (!string.IsNullOrWhiteSpace(errorOutput))
@@ -153,10 +157,25 @@ public static class ShellTools
 							errorOutput = errorOutput.Substring(0, 10000) + "\n[Error output truncated]";
 						}
 
-						response += $"\nStderr:\n{errorOutput}";
+						if (responseBuilder.Length > 0)
+						{
+							responseBuilder.AppendLine();
+						}
+						responseBuilder.AppendLine("Stderr:");
+						responseBuilder.Append(errorOutput);
+						if (!errorOutput.EndsWith('\n'))
+						{
+							responseBuilder.AppendLine();
+						}
 					}
 
-					result = new ToolResult(response, false);
+					if (responseBuilder.Length > 0)
+					{
+						responseBuilder.AppendLine();
+					}
+					responseBuilder.Append($"Exit Code: {process.ExitCode}");
+
+					result = new ToolResult(responseBuilder.ToString(), false);
 				}
 				catch (Exception ex)
 				{

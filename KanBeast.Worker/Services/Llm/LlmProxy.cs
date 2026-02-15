@@ -27,6 +27,19 @@ public class LlmProxy
 		}
 	}
 
+	// Replaces the service list with fresh instances, resetting all disabled/rate-limited state.
+	public void UpdateConfigs(List<LLMConfig> configs)
+	{
+		_services.Clear();
+		foreach (LLMConfig config in configs)
+		{
+			_services.Add(new LlmService(config));
+		}
+
+		_preferredIndex = 0;
+		Console.WriteLine($"LlmProxy: Updated to {configs.Count} LLM config(s)");
+	}
+
 	public string CurrentModel => _preferredIndex < _services.Count ? _services[_preferredIndex].Model : "none";
 
 	// Resets preferred LLM to the first configured endpoint.
@@ -34,6 +47,43 @@ public class LlmProxy
 	public void ResetFallback()
 	{
 		_preferredIndex = 0;
+	}
+
+	// Runs the conversation using only the LLM identified by configId.
+	// Falls back to the normal selection if configId is not found or unavailable.
+	public async Task<LlmResult> ContinueWithConfigIdAsync(string configId, LlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
+	{
+		for (int i = 0; i < _services.Count; i++)
+		{
+			if (_services[i].Config.Id == configId)
+			{
+				_preferredIndex = i;
+				break;
+			}
+		}
+
+		return await ContinueAsync(conversation, maxCompletionTokens, cancellationToken);
+	}
+
+	// Builds a summary of available LLMs for the planning agent to choose from.
+	// Filters out paid models when the ticket has no remaining budget.
+	public List<(string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable)> GetAvailableLlmSummaries(bool includePaid)
+	{
+		List<(string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable)> summaries = new();
+
+		foreach (LlmService service in _services)
+		{
+			LLMConfig config = service.Config;
+
+			if (!includePaid && config.IsPaid)
+			{
+				continue;
+			}
+
+			summaries.Add((config.Id, config.Model, config.Strengths, config.Weaknesses, config.IsPaid, !service.IsPermanentlyDown));
+		}
+
+		return summaries;
 	}
 
 	// Runs the conversation, selecting available LLMs and retrying on rate limits or failures.

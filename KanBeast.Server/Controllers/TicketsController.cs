@@ -333,6 +333,21 @@ public class TicketsController : ControllerBase
         await _hubContext.Clients.All.TicketUpdated(ticket);
         return Ok(ticket);
     }
+
+    [HttpPatch("{id}/plannerllm")]
+    public async Task<ActionResult<Ticket>> SetPlannerLlm(string id, [FromBody] PlannerLlmUpdate update)
+    {
+        Ticket? ticket = await _ticketService.SetPlannerLlmAsync(id, update.PlannerLlmId);
+        if (ticket == null)
+        {
+            return NotFound();
+        }
+
+        _logger.LogInformation("PATCH /tickets/{Id}/plannerllm - set to {PlannerLlmId}", id, update.PlannerLlmId ?? "auto");
+        await _hubContext.Clients.Group($"ticket-{id}").TicketUpdated(ticket);
+        await _hubContext.Clients.All.TicketUpdated(ticket);
+        return Ok(ticket);
+    }
 }
 
 public record TicketStatusUpdate(TicketStatus Status);
@@ -342,3 +357,4 @@ public record BranchUpdate(string BranchName);
 public record CostUpdate(decimal Cost);
 public record MaxCostUpdate(decimal MaxCost);
 public record TicketTitleDescriptionUpdate(string Title, string Description);
+public record PlannerLlmUpdate(string? PlannerLlmId);

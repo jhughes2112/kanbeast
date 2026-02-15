@@ -23,6 +23,7 @@ public interface ITicketService
     Task<Ticket?> SetBranchNameAsync(string id, string branchName);
     Task<Ticket?> AddLlmCostAsync(string id, decimal cost);
     Task<Ticket?> SetMaxCostAsync(string id, decimal maxCost);
+    Task<Ticket?> SetPlannerLlmAsync(string id, string? plannerLlmId);
     Task<Ticket?> DeleteAllTasksAsync(string id);
 }
 
@@ -455,6 +456,19 @@ public class TicketService : ITicketService
         }
 
         ticket.Tasks.Clear();
+        ticket.UpdatedAt = DateTime.UtcNow;
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
+    }
+
+    public async Task<Ticket?> SetPlannerLlmAsync(string id, string? plannerLlmId)
+    {
+        if (!_tickets.TryGetValue(id, out Ticket? ticket))
+        {
+            return null;
+        }
+
+        ticket.PlannerLlmId = plannerLlmId;
         ticket.UpdatedAt = DateTime.UtcNow;
         await SaveTicketToDiskAsync(ticket);
         return ticket;

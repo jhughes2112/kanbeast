@@ -131,11 +131,10 @@ public class CompactionSummarizer : ICompaction
 
 		ToolContext parentContext = conversation.ToolContext;
 		ToolContext compactionContext = new ToolContext(conversation, parentContext.CurrentTaskId, parentContext.CurrentSubtaskId, parentContext.Memories);
-		string compactLogDir = conversation.LogDirectory;
-		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.LogPrefix) ? $"{conversation.LogPrefix}-compact" : string.Empty;
+		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.DisplayName) ? $"{conversation.DisplayName} (Compaction)" : "Compaction";
 		ICompaction noCompaction = new CompactionNone();
 
-		LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, LlmRole.Compaction, compactionContext, noCompaction, compactLogDir, compactLogPrefix, $"{conversation.DisplayName} (Compaction)");
+		LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, LlmRole.Compaction, compactionContext, noCompaction, compactLogPrefix);
 		await summaryConversation.AddUserMessageAsync($"""
 			<history>
 			{historyBlock}

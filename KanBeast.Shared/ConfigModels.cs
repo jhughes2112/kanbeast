@@ -11,6 +11,10 @@ public class LLMConfig
 	public decimal InputTokenPrice { get; set; } = 0m;
 	public decimal OutputTokenPrice { get; set; } = 0m;
 	public double Temperature { get; set; } = 0.2;
+	public string Strengths { get; set; } = string.Empty;
+	public string Weaknesses { get; set; } = string.Empty;
+
+	public bool IsPaid => InputTokenPrice > 0 || OutputTokenPrice > 0;
 }
 
 // Git integration settings.

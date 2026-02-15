@@ -161,6 +161,7 @@ public class LlmService
 
 	public string Model => _config.Model;
 	public int ContextLength => _config.ContextLength;
+	public LLMConfig Config => _config;
 	public bool IsAvailable => !_isPermanentlyDown && DateTimeOffset.UtcNow >= _availableAt;
 	public bool IsPermanentlyDown => _isPermanentlyDown;
 	public DateTimeOffset AvailableAt => _availableAt;

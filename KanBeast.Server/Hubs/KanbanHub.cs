@@ -49,10 +49,24 @@ public class KanbanHub : Hub<IKanbanHubClient>
         await Clients.Group($"ticket-{ticketId}").ConversationFinished(ticketId, conversationId);
     }
 
+    // Called by a worker after it resets a conversation back to its initial state.
+    public async Task ResetConversation(string ticketId, string conversationId)
+    {
+        List<ConversationInfo> infos = _conversationStore.GetInfoList(ticketId);
+        await Clients.Group($"ticket-{ticketId}").ConversationsUpdated(ticketId, infos);
+        await Clients.Group($"ticket-{ticketId}").ConversationReset(ticketId, conversationId);
+    }
+
     // Called by a browser to send a chat message to the worker.
     public async Task SendChatToWorker(string ticketId, string conversationId, string message)
     {
         await Clients.Group($"worker-{ticketId}").WorkerChatMessage(ticketId, conversationId, message);
+    }
+
+    // Called by a browser to request the worker clear a conversation back to its initial state.
+    public async Task RequestClearConversation(string ticketId, string conversationId)
+    {
+        await Clients.Group($"worker-{ticketId}").ClearConversation(ticketId, conversationId);
     }
 }
 
@@ -64,5 +78,8 @@ public interface IKanbanHubClient
     Task ConversationsUpdated(string ticketId, List<ConversationInfo> conversations);
     Task ConversationSynced(string ticketId, string conversationId);
     Task ConversationFinished(string ticketId, string conversationId);
+    Task ConversationReset(string ticketId, string conversationId);
+    Task ClearConversation(string ticketId, string conversationId);
+    Task SettingsUpdated(List<LLMConfig> llmConfigs);
     Task WorkerChatMessage(string ticketId, string conversationId, string message);
 }

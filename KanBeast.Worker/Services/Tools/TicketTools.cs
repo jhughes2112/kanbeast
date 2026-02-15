@@ -240,6 +240,141 @@ public static class TicketTools
         return result;
     }
 
+    [Description("""
+        Get the next subtask (or task without subtasks) that needs work, along with the list of available LLMs you can delegate to.
+        Call this to find what to work on next.
+        The response includes:
+        - The next work item details (task name, subtask name, IDs, description)
+        - A list of available LLM configurations with their strengths, weaknesses, and pricing
+        - Paid models are automatically filtered out when the ticket has no remaining budget
+        If there is no remaining work, the response will indicate all work is complete.
+        If no LLMs are available, the response will indicate the work is blocked.
+        """)]
+    public static Task<ToolResult> GetNextWorkItemAsync(ToolContext context)
+    {
+        Ticket ticket = WorkerSession.TicketHolder.Ticket;
+
+        // Find the next incomplete subtask, or first task with no subtasks that hasn't been completed.
+        string? nextTaskId = null;
+        string? nextTaskName = null;
+        string? nextTaskDescription = null;
+        string? nextSubtaskId = null;
+        string? nextSubtaskName = null;
+        string? nextSubtaskDescription = null;
+
+        foreach (KanbanTask task in ticket.Tasks)
+        {
+            if (task.Subtasks.Count == 0)
+            {
+                // Task with no subtasks — treat the task itself as a work item.
+                nextTaskId = task.Id;
+                nextTaskName = task.Name;
+                nextTaskDescription = task.Description;
+                break;
+            }
+
+            foreach (KanbanSubtask subtask in task.Subtasks)
+            {
+                if (subtask.Status != SubtaskStatus.Complete)
+                {
+                    nextTaskId = task.Id;
+                    nextTaskName = task.Name;
+                    nextTaskDescription = task.Description;
+                    nextSubtaskId = subtask.Id;
+                    nextSubtaskName = subtask.Name;
+                    nextSubtaskDescription = subtask.Description;
+                    break;
+                }
+            }
+
+            if (nextTaskId != null)
+            {
+                break;
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+
+        if (nextTaskId == null)
+        {
+            sb.AppendLine("ALL WORK COMPLETE: No remaining incomplete tasks or subtasks.");
+            sb.AppendLine("You should move the ticket to Done status if all work is verified.");
+            ToolResult doneResult = new ToolResult(sb.ToString(), false);
+            return Task.FromResult(doneResult);
+        }
+
+        sb.AppendLine("NEXT WORK ITEM:");
+        sb.AppendLine($"  Task: {nextTaskName} (id: {nextTaskId})");
+        sb.AppendLine($"  Task Description: {nextTaskDescription}");
+
+        if (nextSubtaskId != null)
+        {
+            sb.AppendLine($"  Subtask: {nextSubtaskName} (id: {nextSubtaskId})");
+            sb.AppendLine($"  Subtask Description: {nextSubtaskDescription}");
+        }
+        else
+        {
+            sb.AppendLine("  (This task has no subtasks — delegate it directly as a single work item)");
+        }
+
+        sb.AppendLine();
+
+        // Build available LLM list, filtering paid models when budget is exhausted.
+        bool hasBudget = ticket.MaxCost <= 0 || ticket.LlmCost < ticket.MaxCost;
+        bool includePaid = hasBudget;
+        List<(string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable)> llms =
+            WorkerSession.LlmProxy.GetAvailableLlmSummaries(includePaid);
+
+        // Filter to only available LLMs.
+        List<(string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable)> availableLlms = new();
+        foreach ((string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable) llm in llms)
+        {
+            if (llm.isAvailable)
+            {
+                availableLlms.Add(llm);
+            }
+        }
+
+        if (availableLlms.Count == 0)
+        {
+            sb.AppendLine("BLOCKED: No LLMs are available to perform this work.");
+
+            if (!includePaid)
+            {
+                sb.AppendLine("  Reason: Budget exhausted and all remaining LLMs are paid.");
+            }
+            else
+            {
+                sb.AppendLine("  Reason: All configured LLMs are permanently down or unavailable.");
+            }
+
+            ToolResult blockedResult = new ToolResult(sb.ToString(), false);
+            return Task.FromResult(blockedResult);
+        }
+
+        sb.AppendLine("AVAILABLE LLMs (choose one to delegate this work to via start_developer):");
+
+        foreach ((string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable) llm in availableLlms)
+        {
+            sb.AppendLine($"  - id: {llm.id}");
+            sb.AppendLine($"    model: {llm.model}");
+            sb.AppendLine($"    paid: {(llm.isPaid ? "yes" : "no")}");
+
+            if (!string.IsNullOrWhiteSpace(llm.strengths))
+            {
+                sb.AppendLine($"    strengths: {llm.strengths}");
+            }
+
+            if (!string.IsNullOrWhiteSpace(llm.weaknesses))
+            {
+                sb.AppendLine($"    weaknesses: {llm.weaknesses}");
+            }
+        }
+
+        ToolResult result = new ToolResult(sb.ToString(), false);
+        return Task.FromResult(result);
+    }
+
     private static string FormatTicketSummary(Ticket ticket, string header)
     {
         StringBuilder sb = new StringBuilder();

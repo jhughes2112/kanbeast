@@ -31,6 +31,7 @@ public static class ToolsFactory
 	{
 		List<Tool> tools = new List<Tool>();
 		ToolHelper.AddTools(tools, typeof(DeveloperTools), nameof(DeveloperTools.StartDeveloperAsync));
+		ToolHelper.AddTools(tools, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync));
 		return tools;
 	}
 

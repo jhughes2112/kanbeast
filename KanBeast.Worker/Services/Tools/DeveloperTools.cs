@@ -12,15 +12,17 @@ public static class DeveloperTools
 		The developer has full capabilities: shell, files, search, web, and the ability to launch sub-agents.
 
 		When to use:
-		- After planning is complete and the ticket status is Active, call this for each subtask that needs implementation.
+		- After planning is complete and the ticket status is Active, call get_next_work_item first to find the next subtask and available LLMs.
+		- Choose the best LLM for the work based on its strengths/weaknesses and pass its id as llmConfigId.
 		- The developer will work autonomously on the subtask and return a summary of what was accomplished.
-		- You receive the developer's final report and can decide whether to move on or re-try the subtask with different instructions.
+		- You receive the developer's final report and can decide whether to move on or re-try the subtask with a different LLM.
 
 		Usage notes:
 		1. Provide the task name, subtask name, and full description so the developer has complete context.
 		2. Each invocation is a full developer session — the developer works until it calls end_subtask.
 		3. The developer can read files, write code, run commands, search, and launch sub-agents to assist.
 		4. After the developer returns, review its report and decide the next step.
+		5. If the developer fails, call get_next_work_item again to try with a different LLM.
 		""")]
 	public static async Task<ToolResult> StartDeveloperAsync(
 		[Description("The name of the parent task")] string taskName,
@@ -28,6 +30,7 @@ public static class DeveloperTools
 		[Description("Full description and acceptance criteria for the subtask")] string subtaskDescription,
 		[Description("The task ID from the ticket")] string taskId,
 		[Description("The subtask ID from the ticket")] string subtaskId,
+		[Description("The LLM config id to use for this developer session, from get_next_work_item")] string llmConfigId,
 		ToolContext context)
 	{
 		ToolResult result;
@@ -68,8 +71,6 @@ public static class DeveloperTools
 					LlmRole.Developer,
 					devContext,
 					compaction,
-					"/workspace/logs",
-					$"TIK-{ticketId}-dev",
 					$"Developer - {subtaskName}");
 
 				string content = string.Empty;
@@ -79,7 +80,9 @@ public static class DeveloperTools
 
 				for (;;)
 				{
-					LlmResult llmResult = await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
+					LlmResult llmResult = !string.IsNullOrWhiteSpace(llmConfigId)
+						? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(llmConfigId, conversation, null, WorkerSession.CancellationToken)
+						: await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
 
 					if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
 					{
@@ -123,7 +126,7 @@ public static class DeveloperTools
 								0.9);
 
 							ToolContext continueContext = new ToolContext(null, taskId, subtaskId, memories);
-							conversation = new LlmConversation(systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, "/workspace/logs", $"TIK-{ticketId}-dev", $"Developer - {subtaskName} (retry)");
+							conversation = new LlmConversation(systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, $"Developer - {subtaskName} (retry)");
 							iterationCount = 0;
 						}
 						else if (iterationCount == 3)

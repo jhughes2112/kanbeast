@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using CommandLine;
 using KanBeast.Shared;
@@ -65,7 +66,7 @@ public class Program
 			logger.LogInformation("Connected to server hub for ticket {TicketId}", options.TicketId);
 
 			WorkerConfig config = BuildConfiguration(options);
-			string repoDir = Path.GetFullPath(options.RepoPath);
+			string repoDir = ResolveRepoPath(options.RepoPath);
 
 			await RunAsync(logger, apiClient, config, repoDir, hubClient, cts.Token);
 
@@ -163,70 +164,11 @@ public class Program
 		// Create or reconstitute the planning conversation immediately so the user
 		// can see it in the chat dropdown even before the ticket goes Active.
 		await orchestrator.EnsurePlanningConversationAsync(ticketHolder, cancellationToken);
-		logger.LogInformation("Planning conversation ready, entering Active wait loop");
+		logger.LogInformation("Planning conversation ready, entering reactive loop");
 
 		try
 		{
-			while (!cancellationToken.IsCancellationRequested)
-			{
-				// Refresh ticket so we have the latest status (it may have gone Active while
-				// we were cloning, branching, and creating the planning conversation).
-				Ticket? latestTicket = await apiClient.GetTicketAsync(config.TicketId, cancellationToken);
-				if (latestTicket != null)
-				{
-					ticket = latestTicket;
-					ticketHolder.Update(ticket);
-				}
-
-				// Wait until the ticket is Active.
-				while (ticket.Status != TicketStatus.Active)
-				{
-					logger.LogInformation("Ticket status is {Status}, waiting for Active", ticket.Status);
-					await hubClient.WaitForTicketChangeAsync(cancellationToken);
-					Ticket? refreshed = await apiClient.GetTicketAsync(config.TicketId, cancellationToken);
-					if (refreshed != null)
-					{
-						ticket = refreshed;
-						ticketHolder.Update(ticket);
-					}
-				}
-
-				hubClient.DrainPendingSignals();
-				logger.LogInformation("Ticket is Active, starting work: {Title}", ticket.Title);
-				await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Starting work", cancellationToken);
-
-				// Run with a token that is cancelled when the ticket leaves Active.
-				CancellationToken activeToken = hubClient.BeginActiveWork(cancellationToken);
-				WorkerSession.UpdateCancellationToken(activeToken);
-				try
-				{
-					await orchestrator.StartAgents(ticketHolder, repoDir, activeToken);
-				}
-				catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
-				{
-					logger.LogInformation("Work paused - ticket deactivated");
-					await apiClient.AddActivityLogAsync(ticket.Id, "Worker: Work paused - ticket deactivated", cancellationToken);
-				}
-				finally
-				{
-					hubClient.EndActiveWork();
-					WorkerSession.UpdateCancellationToken(cancellationToken);
-				}
-
-				bool pushed = await gitService.CommitAndPushAsync(repoDir, $"[KanBeast] Work on ticket {ticket.Id}");
-				if (pushed)
-				{
-					logger.LogInformation("Changes committed and pushed to feature branch");
-				}
-
-				// Refresh ticket for next iteration.
-				Ticket? updated = await apiClient.GetTicketAsync(config.TicketId, cancellationToken);
-				if (updated != null)
-				{
-					ticket = updated;
-					ticketHolder.Update(ticket);
-				}
-			}
+			await orchestrator.RunReactiveLoopAsync(ticketHolder, cancellationToken);
 		}
 		finally
 		{
@@ -343,6 +285,25 @@ public class Program
 	private static string ResolvePromptDirectory()
 	{
 		return Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, "prompts"));
+	}
+
+	// Resolves a repo path that may be relative to the CWD.
+	// On Windows, converts to WSL format /mnt/driveletter/... for Docker/WSL compatibility.
+	private static string ResolveRepoPath(string repoPath)
+	{
+		if (!Path.IsPathFullyQualified(repoPath))
+		{
+			repoPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, repoPath));
+		}
+
+		if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && repoPath.Length >= 2 && repoPath[1] == ':')
+		{
+			char drive = char.ToLowerInvariant(repoPath[0]);
+			string rest = repoPath.Substring(2).Replace('\\', '/');
+			return $"/mnt/{drive}{rest}";
+		}
+
+		return repoPath;
 	}
 
 	// Git marks pack files as read-only, which causes Directory.Delete to throw on Windows.
