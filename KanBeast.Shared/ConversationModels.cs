@@ -85,4 +85,7 @@ public class ConversationInfo
 
 	[JsonPropertyName("isFinished")]
 	public bool IsFinished { get; set; }
+
+	[JsonPropertyName("startedAt")]
+	public string StartedAt { get; set; } = string.Empty;
 }

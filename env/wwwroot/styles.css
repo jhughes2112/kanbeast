@@ -1522,6 +1522,12 @@ nav {
     font-size: 0.8125rem;
 }
 
+.detail-chat-messages::after {
+    content: '';
+    min-height: 0.5rem;
+    flex-shrink: 0;
+}
+
 .detail-chat-messages .chat-msg {
     max-width: 90%;
     padding: 0.375rem 0.625rem;
@@ -1668,6 +1674,12 @@ nav {
     flex-direction: column;
     gap: 0.75rem;
     min-height: 0;
+}
+
+.chat-messages::after {
+    content: '';
+    min-height: 1rem;
+    flex-shrink: 0;
 }
 
 .chat-msg {

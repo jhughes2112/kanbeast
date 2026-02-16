@@ -104,6 +104,8 @@ EXECUTION LOOP:
 6. When all work is complete, move the ticket to Done.
 
 LLM NOTES:
+The notes you write via update_llm_notes are persistent — they are saved to the settings file and shown to you on every future get_next_work_item call across all tickets. Use them to build a durable profile of each LLM's capabilities so you make better selection decisions over time.
+
 When calling update_llm_notes, write short keyword phrases (max 25 words per field). Think of it as tagging. Examples:
   strengths: "strong C# refactoring, reliable tool use, good at test generation"
   weaknesses: "struggles with CSS, misses edge cases in async code"

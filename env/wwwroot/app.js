@@ -11,6 +11,68 @@ let currentDetailTicketId = null;
 let activityLogExpanded = false;
 let expandedDescriptions = { tasks: {}, subtasks: {} };
 
+// Audio context for notification sounds (created lazily after user interaction).
+let audioCtx = null;
+
+function ensureAudioContext() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioCtx;
+}
+
+function playTone(frequency, durationMs) {
+    const ctx = ensureAudioContext();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = frequency;
+    gain.gain.value = 0.12;
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + durationMs / 1000);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + durationMs / 1000);
+}
+
+function playDing() { playTone(880, 150); }
+function playDong() { playTone(523, 250); }
+
+// Counts completed subtasks and fully-complete tasks from a ticket object.
+function countCompletions(ticket) {
+    let subtasks = 0;
+    let tasks = 0;
+    if (!ticket.tasks) return { subtasks, tasks };
+    for (let t = 0; t < ticket.tasks.length; t++) {
+        const task = ticket.tasks[t];
+        const subs = task.subtasks || [];
+        if (subs.length === 0) continue;
+        let allDone = true;
+        for (let s = 0; s < subs.length; s++) {
+            if (subs[s].status === 'Complete' || subs[s].status === 3) {
+                subtasks++;
+            } else {
+                allDone = false;
+            }
+        }
+        if (allDone) tasks++;
+    }
+    return { subtasks, tasks };
+}
+
+// Checks a ticket update for new completions and plays sounds.
+function checkCompletionSounds(updatedTicket) {
+    const old = tickets.find(t => t.id === updatedTicket.id);
+    if (!old) return;
+    const before = countCompletions(old);
+    const after = countCompletions(updatedTicket);
+    if (after.tasks > before.tasks) {
+        playDong();
+    } else if (after.subtasks > before.subtasks) {
+        playDing();
+    }
+}
+
 // Allowed status transitions
 // Backlog -> Active (start work)
 // Active/Failed/Done -> Backlog (cancel/reset)
@@ -82,6 +144,7 @@ function setupSignalR() {
     // All events trigger full state refresh for idempotency
     connection.on('TicketUpdated', (ticket) => {
         console.log('SignalR: TicketUpdated received', ticket.id, ticket.title);
+        checkCompletionSounds(ticket);
         handleTicketEvent();
     });
     connection.on('TicketCreated', (ticket) => {
@@ -209,6 +272,13 @@ function setupSignalR() {
                 await connection.invoke('SubscribeToTicket', currentDetailTicketId);
             } catch (error) {
                 console.warn('Could not re-subscribe to ticket updates:', error);
+            }
+        }
+        if (chatModalTicketId && chatModalTicketId !== currentDetailTicketId) {
+            try {
+                await connection.invoke('SubscribeToTicket', chatModalTicketId);
+            } catch (error) {
+                console.warn('Could not re-subscribe to chat modal ticket:', error);
             }
         }
     });
@@ -440,10 +510,12 @@ function createTicketElement(ticket) {
             logClass = 'worker';
         }
 
+        const displayMessage = parsed.message.length > 75 ? parsed.message.substring(0, 75) + '…' : parsed.message;
+
         lastLogHtml = `
             <div class="ticket-activity-log ${logClass}">
                 ${parsed.timestamp ? `<span class="activity-timestamp ${logClass}" data-timestamp="${parsed.timestamp}">${formatRelativeTime(parsed.timestamp)}</span>` : ''}
-                <span class="activity-message">${escapeHtml(parsed.message)}</span>
+                <span class="activity-message">${escapeHtml(displayMessage)}</span>
             </div>
         `;
     }
@@ -716,10 +788,12 @@ async function showTicketDetails(ticketId) {
             logClass = 'worker';
         }
 
+        const displayMessage = parsed.message.length > 75 ? parsed.message.substring(0, 75) + '…' : parsed.message;
+
         latestActivityHtml = `
             <div class="detail-latest-activity ${logClass}">
                 ${parsed.timestamp ? `<span class="activity-timestamp ${logClass}" data-timestamp="${parsed.timestamp}">${formatRelativeTime(parsed.timestamp)}</span>` : ''}
-                <span class="activity-message">${escapeHtml(parsed.message)}</span>
+                <span class="activity-message">${escapeHtml(displayMessage)}</span>
             </div>
         `;
     }
@@ -819,6 +893,7 @@ async function showTicketDetails(ticketId) {
                     <select id="detailConversationDropdown" class="detail-chat-select">
                         <option value="">💬 Select conversation…</option>
                     </select>
+                    <button id="detailDeleteConvoBtn" class="detail-chat-maximize" title="Delete finished conversation" style="display:none;" onclick="deleteSelectedDetailConversation()">🗑️</button>
                     <button class="detail-chat-maximize" onclick="openChat('${ticketId}')" title="Maximize chat">⤢</button>
                 </div>
                 <div class="detail-chat-messages" id="detailChatMessages">
@@ -1068,10 +1143,11 @@ function setupDetailChat(ticketId) {
     const messagesDiv = document.getElementById('detailChatMessages');
     const input = document.getElementById('detailChatInput');
     const sendBtn = document.getElementById('detailChatSendBtn');
+    const deleteBtn = document.getElementById('detailDeleteConvoBtn');
     if (!dropdown || !messagesDiv || !input || !sendBtn) return;
 
     // Populate dropdown.
-    const convos = ticketConversations[ticketId] || [];
+    const convos = sortConversations(ticketConversations[ticketId] || []);
     dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
     for (let i = 0; i < convos.length; i++) {
         const c = convos[i];
@@ -1103,6 +1179,7 @@ function setupDetailChat(ticketId) {
         detailChatConversationId = selectedConvId;
         const info = convos.find(c => c.id === selectedConvId);
         setDetailChatEnabled(!(info && info.isFinished));
+        if (deleteBtn) deleteBtn.style.display = (info && info.isFinished) ? '' : 'none';
         loadAndRestoreDetailConversation(ticketId, selectedConvId, scrollState);
         updateBusyIndicators(ticketId, selectedConvId, !!busyConversations[`${ticketId}:${selectedConvId}`]);
     }
@@ -1114,12 +1191,14 @@ function setupDetailChat(ticketId) {
             loadAndDisplayDetailConversation(ticketId, convId);
             const info = convos.find(c => c.id === convId);
             setDetailChatEnabled(!(info && info.isFinished));
+            if (deleteBtn) deleteBtn.style.display = (info && info.isFinished) ? '' : 'none';
             saveTicketConversationState(ticketId, convId, { atBottom: true });
             updateBusyIndicators(ticketId, convId, !!busyConversations[`${ticketId}:${convId}`]);
         } else {
             detailChatConversationId = null;
             messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation above.</div>';
             setDetailChatEnabled(false);
+            if (deleteBtn) deleteBtn.style.display = 'none';
             updateBusyIndicators(ticketId, '', false);
         }
     });
@@ -1645,6 +1724,32 @@ async function clearConversation(ticketId) {
 
 window.clearConversation = clearConversation;
 
+async function deleteConversation(ticketId, conversationId) {
+    if (!ticketId || !conversationId) return;
+    const convos = ticketConversations[ticketId] || [];
+    const info = convos.find(c => c.id === conversationId);
+    if (!info || !info.isFinished) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/tickets/${ticketId}/conversations/${conversationId}`, { method: 'DELETE' });
+        if (!resp.ok) {
+            console.warn('Failed to delete conversation:', resp.status);
+        }
+    } catch (err) {
+        console.error('Error deleting conversation:', err);
+    }
+}
+
+window.deleteConversation = deleteConversation;
+
+function deleteSelectedDetailConversation() {
+    if (detailChatTicketId && detailChatConversationId) {
+        deleteConversation(detailChatTicketId, detailChatConversationId);
+    }
+}
+
+window.deleteSelectedDetailConversation = deleteSelectedDetailConversation;
+
 // Drag and drop
 function canMoveFrom(status) {
     return ALLOWED_TRANSITIONS[status] && ALLOWED_TRANSITIONS[status].length > 0;
@@ -1784,6 +1889,11 @@ function setupEventListeners() {
     document.querySelectorAll('.close').forEach(btn => {
         btn.addEventListener('click', () => {
             const modal = btn.closest('.modal');
+
+            if (modal.id === 'settingsModal') {
+                saveSettings();
+            }
+
             modal.classList.remove('active');
 
             if (modal.id === 'ticketDetailModal') {
@@ -1798,6 +1908,10 @@ function setupEventListeners() {
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', (e) => {
             if (e.target === modal) {
+                if (modal.id === 'settingsModal') {
+                    saveSettings();
+                }
+
                 modal.classList.remove('active');
 
                 if (modal.id === 'ticketDetailModal') {
@@ -1813,6 +1927,10 @@ function setupEventListeners() {
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
             document.querySelectorAll('.modal.active').forEach(modal => {
+                if (modal.id === 'settingsModal') {
+                    saveSettings();
+                }
+
                 modal.classList.remove('active');
 
                 if (modal.id === 'ticketDetailModal') {
@@ -1893,6 +2011,18 @@ function showSettings() {
     // Setup accordion handlers
     setupAccordions();
 
+    // Restore settings accordion states from localStorage.
+    const accordionStates = getSettingsAccordionStates();
+    document.querySelectorAll('#settingsContent > .accordion').forEach(accordion => {
+        const header = accordion.querySelector('.accordion-header');
+        const key = header ? header.getAttribute('data-accordion') : null;
+        if (key && accordionStates[key]) {
+            accordion.classList.remove('collapsed');
+        } else {
+            accordion.classList.add('collapsed');
+        }
+    });
+
     modal.classList.add('active');
 }
 
@@ -1906,6 +2036,13 @@ function setupAccordions() {
 function toggleAccordion(e) {
     const accordion = e.currentTarget.closest('.accordion');
     accordion.classList.toggle('collapsed');
+
+    // Persist settings accordion states.
+    const header = accordion.querySelector('.accordion-header');
+    const key = header ? header.getAttribute('data-accordion') : null;
+    if (key && accordion.closest('#settingsContent')) {
+        saveSettingsAccordionState(key, !accordion.classList.contains('collapsed'));
+    }
 }
 
 function updateCompactionVisibility() {
@@ -1926,12 +2063,13 @@ function renderLLMConfigs() {
 
     llmConfigs.forEach((config, index) => {
         const configEl = document.createElement('div');
-        configEl.className = 'llm-config accordion';
+        configEl.className = 'llm-config accordion collapsed';
         configEl.style.marginBottom = '8px';
         configEl.style.padding = '0';
         const modelName = config.model || `LLM ${index + 1}`;
+        const accordionKey = `llm-${config.model || index}`;
         configEl.innerHTML = `
-            <div class="accordion-header" style="padding: 10px 12px; margin: 0;">
+            <div class="accordion-header" data-accordion="${escapeHtml(accordionKey)}" style="padding: 10px 12px; margin: 0;">
                 <span>🧠 ${escapeHtml(modelName)}</span>
                 <span class="accordion-icon">▼</span>
             </div>
@@ -1980,6 +2118,13 @@ function renderLLMConfigs() {
 
         configEl.querySelector('.btn-danger').addEventListener('click', () => removeLLMConfig(index));
         configEl.querySelector('.accordion-header').addEventListener('click', toggleAccordion);
+
+        // Restore expanded state from localStorage.
+        const savedStates = getSettingsAccordionStates();
+        if (savedStates[accordionKey]) {
+            configEl.classList.remove('collapsed');
+        }
+
         container.appendChild(configEl);
     });
 }
@@ -2059,14 +2204,11 @@ async function saveSettings() {
 
         if (response.ok) {
             settings = normalizeSettings(await response.json());
-            document.getElementById('settingsModal').classList.remove('active');
         } else {
             console.error('Failed to save settings');
-            alert('Failed to save settings. Please check the console for details.');
         }
     } catch (error) {
         console.error('Error saving settings:', error);
-        alert('Error saving settings. Please check the console for details.');
     }
 }
 
@@ -2132,6 +2274,37 @@ function saveTicketAccordionStates(ticketId, states) {
     }
 }
 
+function getSettingsAccordionStates() {
+    try {
+        const stored = localStorage.getItem('settings-accordions');
+        return stored ? JSON.parse(stored) : {};
+    } catch {
+        return {};
+    }
+}
+
+function saveSettingsAccordionState(key, expanded) {
+    try {
+        const states = getSettingsAccordionStates();
+        states[key] = expanded;
+        localStorage.setItem('settings-accordions', JSON.stringify(states));
+    } catch (e) {
+        console.warn('Failed to save settings accordion state:', e);
+    }
+}
+
+// Sorts conversations: unfinished first, then finished. Within each group, newest first by startedAt.
+function sortConversations(convos) {
+    return [...convos].sort((a, b) => {
+        if (a.isFinished !== b.isFinished) return a.isFinished ? 1 : -1;
+        const ta = a.startedAt || '';
+        const tb = b.startedAt || '';
+        if (ta > tb) return -1;
+        if (ta < tb) return 1;
+        return 0;
+    });
+}
+
 function pickDefaultConversation(convos) {
     if (!convos || convos.length === 0) return null;
     // Prefer active (not finished) conversations with higher message count.
@@ -2149,7 +2322,7 @@ function updateConversationDropdown(ticketId) {
         return;
     }
 
-    const convos = ticketConversations[ticketId] || [];
+    const convos = sortConversations(ticketConversations[ticketId] || []);
     const previousValue = dropdown.value;
 
     dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
@@ -2166,6 +2339,13 @@ function updateConversationDropdown(ticketId) {
     if (previousValue && convos.some(c => c.id === previousValue)) {
         dropdown.value = previousValue;
     }
+
+    // Update delete button visibility.
+    const chatDeleteBtn = document.getElementById('chatDeleteConvoBtn');
+    if (chatDeleteBtn) {
+        const selectedInfo = convos.find(c => c.id === dropdown.value);
+        chatDeleteBtn.style.display = (selectedInfo && selectedInfo.isFinished) ? '' : 'none';
+    }
 }
 
 function updateDetailConversationDropdown(ticketId) {
@@ -2174,7 +2354,7 @@ function updateDetailConversationDropdown(ticketId) {
         return;
     }
 
-    const convos = ticketConversations[ticketId] || [];
+    const convos = sortConversations(ticketConversations[ticketId] || []);
     const previousValue = dropdown.value;
 
     dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
@@ -2189,6 +2369,13 @@ function updateDetailConversationDropdown(ticketId) {
 
     if (previousValue && convos.some(c => c.id === previousValue)) {
         dropdown.value = previousValue;
+    }
+
+    // Update delete button visibility.
+    const detailDeleteBtn = document.getElementById('detailDeleteConvoBtn');
+    if (detailDeleteBtn) {
+        const selectedInfo = convos.find(c => c.id === dropdown.value);
+        detailDeleteBtn.style.display = (selectedInfo && selectedInfo.isFinished) ? '' : 'none';
     }
 }
 
@@ -2225,7 +2412,7 @@ function openChat(ticketId) {
     dropdown.className = 'chat-conversation-select';
     dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
 
-    const convos = ticketConversations[ticketId] || [];
+    const convos = sortConversations(ticketConversations[ticketId] || []);
     for (let i = 0; i < convos.length; i++) {
         const c = convos[i];
         const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
@@ -2264,6 +2451,26 @@ function openChat(ticketId) {
     });
 
     dropdownContainer.appendChild(dropdown);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.id = 'chatDeleteConvoBtn';
+    deleteBtn.className = 'detail-chat-maximize';
+    deleteBtn.title = 'Delete finished conversation';
+    deleteBtn.textContent = '🗑️';
+    deleteBtn.style.display = 'none';
+    deleteBtn.addEventListener('click', () => {
+        deleteConversation(ticketId, dropdown.value);
+    });
+    dropdownContainer.appendChild(deleteBtn);
+
+    // Show/hide delete button based on selection.
+    function updateDeleteButton() {
+        const convId = dropdown.value;
+        const info = convos.find(c => c.id === convId);
+        deleteBtn.style.display = (info && info.isFinished) ? '' : 'none';
+    }
+    dropdown.addEventListener('change', updateDeleteButton);
+    updateDeleteButton();
 
     // Subscribe to this ticket's group for real-time updates.
     if (connection && connection.state === signalR.HubConnectionState.Connected) {

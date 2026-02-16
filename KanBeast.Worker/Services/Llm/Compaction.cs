@@ -47,6 +47,7 @@ public class CompactionNone : ICompaction
 public class CompactionSummarizer : ICompaction
 {
     private const int MinimumThreshold = 3072;
+    private const int CharsPerToken = 4;
 
     private static readonly HashSet<string> ValidLabels = new HashSet<string>
     {
@@ -70,8 +71,7 @@ public class CompactionSummarizer : ICompaction
 
     public Task CompactIfNeededAsync(LlmConversation conversation, CancellationToken cancellationToken)
     {
-        LlmService? service = _llmProxy.FindAvailableService();
-        int contextLength = service?.ContextLength ?? 0;
+        int contextLength = _llmProxy.GetSmallestContextLength();
         int effectiveThreshold;
 
         if (contextLength > 0 && _contextSizePercent > 0)
@@ -83,14 +83,14 @@ public class CompactionSummarizer : ICompaction
             effectiveThreshold = MinimumThreshold;
         }
 
-        int messageSize = GetMessageSize(conversation.Messages);
+        int estimatedTokens = GetMessageSize(conversation.Messages);
 
-        if (messageSize <= effectiveThreshold)
+        if (estimatedTokens <= effectiveThreshold)
         {
             return Task.CompletedTask;
         }
 
-        Console.WriteLine($"[Compaction] Context size {messageSize} exceeds threshold {effectiveThreshold}, compacting...");
+        Console.WriteLine($"[Compaction] ~{estimatedTokens} tokens exceeds {effectiveThreshold} threshold ({_contextSizePercent:P0} of {contextLength} smallest context), compacting...");
         return PerformCompactionAsync(conversation, cancellationToken);
     }
 
@@ -145,7 +145,7 @@ public class CompactionSummarizer : ICompaction
 			Finally, call summarize_history with a concise chapter summary as described in the instructions, which completes the compaction process.
 			""", cancellationToken);
 
-		for (;;)
+		for (int compactionAttempt = 0; compactionAttempt < 3; compactionAttempt++)
 		{
 			LlmResult result = await _llmProxy.ContinueAsync(summaryConversation, null, cancellationToken);
 
@@ -153,29 +153,27 @@ public class CompactionSummarizer : ICompaction
 			{
 				conversation.AddChapterSummary(result.Content);
 				await conversation.DeleteRangeAsync(startIndex, endIndex, cancellationToken);
-				Console.WriteLine($"[Compaction] Reduced to {GetMessageSize(conversation.Messages)} chars, now {conversation.ChapterSummaries.Count} chapters");
-				break;
+				Console.WriteLine($"[Compaction] Reduced to ~{GetMessageSize(conversation.Messages)} tokens, now {conversation.ChapterSummaries.Count} chapters");
+				return;
 			}
-			else if (result.ExitReason == LlmExitReason.Completed)
-			{
-				await summaryConversation.AddUserMessageAsync("Continue updating memories if needed, then call summarize_history tool with the summary.", cancellationToken);
-			}
-			else if (result.ExitReason == LlmExitReason.MaxIterationsReached)
+			else if (result.ExitReason == LlmExitReason.Completed || result.ExitReason == LlmExitReason.MaxIterationsReached)
 			{
 				summaryConversation.ResetIteration();
-				await summaryConversation.AddUserMessageAsync("Are you making forward progress?  Call summarize_history tool to complete the compaction process.", cancellationToken);
+				await summaryConversation.AddUserMessageAsync("Call summarize_history tool with the summary to complete the compaction process.", cancellationToken);
 			}
 			else if (result.ExitReason == LlmExitReason.CostExceeded)
 			{
 				Console.WriteLine("[Compaction] Cost budget exceeded during compaction");
-				break;
+				return;
 			}
 			else
 			{
 				Console.WriteLine($"[Compaction] LLM failed during compaction: {result.ErrorMessage}");
-				break;
+				return;
 			}
 		}
+
+		Console.WriteLine("[Compaction] LLM did not call summarize_history after 3 attempts, skipping compaction");
 	}
 
     private static string BuildHistoryBlock(List<ConversationMessage> messages, int startIndex, int endIndex)
@@ -304,22 +302,33 @@ public class CompactionSummarizer : ICompaction
 		return Task.FromResult(result);
 	}
 
+    // Estimates the token count of the conversation using ~4 characters per token.
+    // ContextLength from LLM configs is in tokens, so this must return tokens too.
+    // Includes system messages and a fixed overhead for tool definitions.
     private static int GetMessageSize(List<ConversationMessage> messages)
     {
-        int size = 0;
+        int chars = 0;
 
         foreach (ConversationMessage message in messages)
         {
-            if (string.Equals(message.Role, "system", StringComparison.Ordinal))
+            chars += message.Role.Length + 2;
+            chars += message.Content?.Length ?? 12;
+
+            if (message.ToolCalls != null)
             {
-                continue;
+                foreach (ConversationToolCall toolCall in message.ToolCalls)
+                {
+                    chars += toolCall.Function.Name.Length;
+                    chars += toolCall.Function.Arguments?.Length ?? 0;
+                }
             }
 
-            size += message.Role.Length + 2;
-            size += message.Content?.Length ?? 12;
-            size += 1;
+            chars += 1;
         }
 
-        return size;
+        // Tool definitions sent in the request consume context but aren't in messages.
+        int toolDefinitionOverhead = 2000;
+
+        return (chars / CharsPerToken) + toolDefinitionOverhead;
     }
 }

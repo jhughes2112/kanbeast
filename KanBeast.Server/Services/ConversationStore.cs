@@ -71,7 +71,8 @@ public class ConversationStore
                     Id = data.Id,
                     DisplayName = data.DisplayName,
                     MessageCount = data.Messages.Count,
-                    IsFinished = data.IsFinished
+                    IsFinished = data.IsFinished,
+                    StartedAt = data.StartedAt
                 });
             }
         }
@@ -100,6 +101,22 @@ public class ConversationStore
 
         data.IsFinished = true;
         await SaveToDiskAsync(ticketId);
+    }
+
+    public async Task<bool> DeleteAsync(string ticketId, string conversationId)
+    {
+        if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
+        {
+            return false;
+        }
+
+        if (!convos.TryRemove(conversationId, out _))
+        {
+            return false;
+        }
+
+        await SaveToDiskAsync(ticketId);
+        return true;
     }
 
     public void DeleteForTicket(string ticketId)

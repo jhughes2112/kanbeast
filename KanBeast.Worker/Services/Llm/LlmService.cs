@@ -152,12 +152,10 @@ public class LlmService
 	private readonly LLMConfig _config;
 	private readonly HttpClient _httpClient;
 
-	private ToolChoiceMode _toolChoiceMode = ToolChoiceMode.Required;
+	private bool _parallelToolCallsSupported = true;
 	private bool _hasSucceeded;
 	private DateTimeOffset _availableAt = DateTimeOffset.MinValue;
 	private bool _isPermanentlyDown;
-
-	private enum ToolChoiceMode { Required, Auto, Omit }
 
 	public string Model => _config.Model;
 	public int ContextLength => _config.ContextLength;
@@ -214,26 +212,12 @@ public class LlmService
 				await conversation.AddUserMessageAsync(chatMsg, cancellationToken);
 			}
 
-			string? toolChoice = null;
-			if (toolDefs != null)
-			{
-				if (_toolChoiceMode == ToolChoiceMode.Required)
-				{
-					toolChoice = "required";
-				}
-				else if (_toolChoiceMode == ToolChoiceMode.Auto)
-				{
-					toolChoice = "auto";
-				}
-			}
-
 			ChatCompletionRequest request = new ChatCompletionRequest
 			{
 				Model = _config.Model,
 				Messages = conversation.Messages,
 				Tools = toolDefs,
-				ToolChoice = toolChoice,
-				ParallelToolCalls = toolDefs != null ? true : null,
+				ParallelToolCalls = toolDefs != null && _parallelToolCallsSupported ? true : null,
 				Temperature = _config.Temperature,
 				TopP = 1.0,
 				FrequencyPenalty = 0.1,
@@ -250,6 +234,12 @@ public class LlmService
 				StringContent content = new StringContent(requestJson, System.Text.Encoding.UTF8, "application/json");
 				HttpResponseMessage httpResponse = await _httpClient.PostAsync(fullUrl, content, cancellationToken);
 				string responseBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
+
+				if (!httpResponse.IsSuccessStatusCode)
+				{
+					Console.WriteLine($"[LLM ERROR] {_config.Model} returned {(int)httpResponse.StatusCode} {httpResponse.StatusCode}");
+					Console.WriteLine($"[LLM ERROR] Response body: {responseBody}");
+				}
 
 				if (httpResponse.IsSuccessStatusCode)
 				{
@@ -352,10 +342,10 @@ public class LlmService
 					// Configuration adapted, retry immediately.
 				}
 				else if (IsRateLimited(httpResponse, responseBody))
-				{
-					_availableAt = ComputeRetryAfterTime(httpResponse, responseBody);
-					Console.WriteLine($"Rate limited by {_config.Model}, available at {_availableAt:HH:mm:ss}");
-					return (new LlmResult
+					{
+						_availableAt = ComputeRetryAfterTime(httpResponse, responseBody);
+						Console.WriteLine($"Rate limited by {_config.Model}, available at {_availableAt:HH:mm:ss}, body: {responseBody}");
+						return (new LlmResult
 					{
 						ExitReason = LlmExitReason.RateLimited,
 						RetryAfter = _availableAt
@@ -379,15 +369,27 @@ public class LlmService
 					await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
 				}
 				else
-				{
-					// Non-recoverable client error (4xx, not tool_choice, not rate limit).
-					MarkPermanentlyDown();
-					return (new LlmResult
 					{
-						ExitReason = LlmExitReason.LlmCallFailed,
-						ErrorMessage = $"API error {httpResponse.StatusCode}: {responseBody}"
-					}, accumulatedCost);
-				}
+						int statusCode = (int)httpResponse.StatusCode;
+
+						// Auth errors are permanent — the key is wrong or access is revoked.
+						if (statusCode == 401 || statusCode == 403)
+						{
+							MarkPermanentlyDown();
+							return (new LlmResult
+							{
+								ExitReason = LlmExitReason.LlmCallFailed,
+								ErrorMessage = $"Auth error {statusCode}: {responseBody}"
+							}, accumulatedCost);
+						}
+
+						// Other 4xx errors (400 bad request, 422 unprocessable, etc.) are request-specific, not permanent.
+						return (new LlmResult
+						{
+							ExitReason = LlmExitReason.LlmCallFailed,
+							ErrorMessage = $"API error {statusCode}: {responseBody}"
+						}, accumulatedCost);
+					}
 			}
 			catch (OperationCanceledException)
 			{
@@ -453,21 +455,26 @@ public class LlmService
 			return false;
 		}
 
+		if (!_parallelToolCallsSupported)
+		{
+			return false;
+		}
+
 		string lowerBody = responseBody.ToLowerInvariant();
 
-		if (_toolChoiceMode != ToolChoiceMode.Omit && (lowerBody.Contains("tool_choice") || lowerBody.Contains("tool choice")))
+		// Specific match: error body mentions parallel_tool_calls.
+		if (lowerBody.Contains("parallel_tool_calls") || lowerBody.Contains("parallel tool calls"))
 		{
-			if (_toolChoiceMode == ToolChoiceMode.Required)
-			{
-				_toolChoiceMode = ToolChoiceMode.Auto;
-				Console.WriteLine($"Model {_config.Model} does not support tool_choice=required, falling back to auto");
-			}
-			else
-			{
-				_toolChoiceMode = ToolChoiceMode.Omit;
-				Console.WriteLine($"Model {_config.Model} does not support tool_choice, omitting");
-			}
+			_parallelToolCallsSupported = false;
+			Console.WriteLine($"Model {_config.Model} does not support parallel_tool_calls, disabling");
+			return true;
+		}
 
+		// Generic upstream error with no specific parameter mentioned.
+		if (statusCode == 400 && (lowerBody.Contains("upstream_error") || lowerBody.Contains("provider returned error")))
+		{
+			_parallelToolCallsSupported = false;
+			Console.WriteLine($"Model {_config.Model} generic upstream 400, disabling parallel_tool_calls");
 			return true;
 		}
 
@@ -499,10 +506,17 @@ public class LlmService
 
 	private bool IsRateLimited(HttpResponseMessage response, string responseBody)
 	{
-		return response.StatusCode == System.Net.HttpStatusCode.TooManyRequests ||
-			responseBody.Contains("\"code\":429") ||
-			GetFirstHeaderValue(response.Headers, "Retry-After") != null ||
-			(GetFirstHeaderValue(response.Headers, "X-RateLimit-Remaining") is string remaining && int.TryParse(remaining, out int count) && count == 0);
+		if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+		{
+			return true;
+		}
+
+		if (responseBody.Contains("\"code\":429"))
+		{
+			return true;
+		}
+
+		return false;
 	}
 
 	private int ParseRateLimitSeconds(HttpResponseMessage response, string responseBody)

@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Text;
 using KanBeast.Shared;
 
 namespace KanBeast.Worker.Services.Tools;
@@ -48,11 +49,11 @@ public static class DeveloperTools
 					SubtaskStatus.InProgress, WorkerSession.CancellationToken);
 
 				await WorkerSession.ApiClient.AddActivityLogAsync(
-					WorkerSession.TicketHolder.Ticket.Id,
-					$"Started subtask: {subtaskName}",
-					WorkerSession.CancellationToken);
+						WorkerSession.TicketHolder.Ticket.Id,
+						$"Started subtask: {subtaskName}",
+						WorkerSession.CancellationToken);
 
-				string initialPrompt = $"Work on this subtask: '{subtaskName}' in task '{taskName}'.\n\nDescription: {subtaskDescription}\n\nCall end_subtask tool when complete.";
+					string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
 				string systemPrompt = WorkerSession.Prompts.TryGetValue("developer", out string? devPrompt) ? devPrompt : string.Empty;
 				ConversationMemories memories = new ConversationMemories(context.Memories);
@@ -174,5 +175,37 @@ public static class DeveloperTools
 		}
 
 		return result;
+	}
+
+	// Builds the user prompt for a developer conversation with full ticket context.
+	private static string BuildDeveloperPrompt(string taskName, string subtaskName, string subtaskDescription)
+	{
+		Ticket ticket = WorkerSession.TicketHolder.Ticket;
+
+		StringBuilder sb = new StringBuilder();
+		sb.AppendLine($"# Ticket: {ticket.Title}");
+		sb.AppendLine();
+		sb.AppendLine(ticket.Description);
+		sb.AppendLine();
+
+		sb.AppendLine("# Task Overview");
+		foreach (KanbanTask task in ticket.Tasks)
+		{
+			sb.AppendLine($"- {task.Name}");
+			foreach (KanbanSubtask subtask in task.Subtasks)
+			{
+				string marker = subtask.Status == SubtaskStatus.Complete ? "✓" : " ";
+				sb.AppendLine($"  [{marker}] {subtask.Name}");
+			}
+		}
+		sb.AppendLine();
+
+		sb.AppendLine($"# Your Assignment: {subtaskName} (in task '{taskName}')");
+		sb.AppendLine();
+		sb.AppendLine(subtaskDescription);
+		sb.AppendLine();
+		sb.AppendLine("Call end_subtask tool when complete.");
+
+		return sb.ToString();
 	}
 }

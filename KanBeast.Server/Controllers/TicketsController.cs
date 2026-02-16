@@ -71,6 +71,26 @@ public class TicketsController : ControllerBase
         return Ok(data);
     }
 
+    [HttpDelete("{id}/conversations/{conversationId}")]
+    public async Task<IActionResult> DeleteConversation(string id, string conversationId)
+    {
+        ConversationData? data = _conversationStore.Get(id, conversationId);
+        if (data == null)
+        {
+            return NotFound();
+        }
+
+        if (!data.IsFinished)
+        {
+            return BadRequest("Cannot delete an active conversation");
+        }
+
+        await _conversationStore.DeleteAsync(id, conversationId);
+        List<ConversationInfo> infos = _conversationStore.GetInfoList(id);
+        await _hubContext.Clients.Group($"ticket-{id}").ConversationsUpdated(id, infos);
+        return NoContent();
+    }
+
     [HttpGet("{id}/conversations/planning")]
     public ActionResult<ConversationData> GetPlanningConversation(string id)
     {

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Microsoft.AspNetCore.SignalR;
 using KanBeast.Server.Models;
 using KanBeast.Server.Services;
@@ -7,6 +8,9 @@ namespace KanBeast.Server.Hubs;
 
 public class KanbanHub : Hub<IKanbanHubClient>
 {
+    // Tracks which conversations are currently busy (LLM running) per ticket.
+    private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, bool>> BusyState = new();
+
     private readonly ConversationStore _conversationStore;
 
     public KanbanHub(ConversationStore conversationStore)
@@ -17,6 +21,18 @@ public class KanbanHub : Hub<IKanbanHubClient>
     public async Task SubscribeToTicket(string ticketId)
     {
         await Groups.AddToGroupAsync(Context.ConnectionId, $"ticket-{ticketId}");
+
+        // Replay current busy states so the caller knows which conversations are active.
+        if (BusyState.TryGetValue(ticketId, out ConcurrentDictionary<string, bool>? convos))
+        {
+            foreach ((string conversationId, bool isBusy) in convos)
+            {
+                if (isBusy)
+                {
+                    await Clients.Caller.ConversationBusy(ticketId, conversationId, true);
+                }
+            }
+        }
     }
 
     public async Task UnsubscribeFromTicket(string ticketId)
@@ -76,6 +92,16 @@ public class KanbanHub : Hub<IKanbanHubClient>
     // Called by a worker to signal that a conversation is busy (LLM running) or idle.
     public async Task SetConversationBusy(string ticketId, string conversationId, bool isBusy)
     {
+        ConcurrentDictionary<string, bool> convos = BusyState.GetOrAdd(ticketId, _ => new ConcurrentDictionary<string, bool>());
+        if (isBusy)
+        {
+            convos[conversationId] = true;
+        }
+        else
+        {
+            convos.TryRemove(conversationId, out _);
+        }
+
         await Clients.Group($"ticket-{ticketId}").ConversationBusy(ticketId, conversationId, isBusy);
     }
 

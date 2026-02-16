@@ -104,7 +104,7 @@ public class AgentOrchestrator
 		System.Collections.Concurrent.ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
 		System.Collections.Concurrent.ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
 
-		for (;;)
+		for (; ; )
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
@@ -144,7 +144,14 @@ public class AgentOrchestrator
 				}
 				if (latestTicket != null)
 				{
+					TicketStatus previousStatus = ticketHolder.Ticket.Status;
 					ticketHolder.Update(latestTicket);
+
+					// When the ticket transitions to Active, inject a message so the planning agent starts the execution loop.
+					if (previousStatus != TicketStatus.Active && latestTicket.Status == TicketStatus.Active)
+					{
+						chatQueue.Enqueue("Beast Mode Activated.  Call get_next_work_item and start the developer.");
+					}
 				}
 
 				await Task.Delay(250, cancellationToken);
@@ -155,14 +162,30 @@ public class AgentOrchestrator
 
 			await _planningConversation!.AddUserMessageAsync(message, cancellationToken);
 
-			await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation.Id, true);
-			try
+			bool isActive = ticketHolder.Ticket.Status == TicketStatus.Active;
+
+			if (isActive)
+			{
+				CancellationToken activeToken = WorkerSession.HubClient.BeginActiveWork(cancellationToken);
+				WorkerSession.UpdateCancellationToken(activeToken);
+				try
+				{
+					await RunLlmUntilIdleAsync(ticketHolder, activeToken);
+				}
+				catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+				{
+					_logger.LogInformation("Planning: Work cancelled (ticket left Active)");
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Work cancelled", CancellationToken.None);
+				}
+				finally
+				{
+					WorkerSession.HubClient.EndActiveWork();
+					WorkerSession.UpdateCancellationToken(cancellationToken);
+				}
+			}
+			else
 			{
 				await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
-			}
-			finally
-			{
-				await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation.Id, false);
 			}
 
 			await _planningConversation.ForceFlushAsync();
@@ -170,80 +193,123 @@ public class AgentOrchestrator
 	}
 
 	// Calls the LLM in a loop until it responds with text (idle), is interrupted,
-	// or hits a fatal/cost error. Tool calls execute inline.
+	// or hits a fatal/cost error. Tool calls execute inline. Between iterations,
+	// drains chat, interrupt, ticket, and settings queues so the agent stays responsive.
+	// Sets conversation busy state for the duration so the client shows the stop button.
 	private async Task RunLlmUntilIdleAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
 		int retryCount = 0;
 		System.Collections.Concurrent.ConcurrentQueue<string> interruptQueue = WorkerSession.HubClient.GetInterruptQueue();
+		System.Collections.Concurrent.ConcurrentQueue<string> chatQueue = WorkerSession.HubClient.GetChatQueue(_planningConversation!.Id);
+		System.Collections.Concurrent.ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
+		System.Collections.Concurrent.ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
 
-		for (;;)
+		await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, true);
+		try
 		{
-			cancellationToken.ThrowIfCancellationRequested();
 
-			// Check for interrupt requests between LLM calls.
-			bool interrupted = false;
-			while (interruptQueue.TryDequeue(out string? interruptConvId))
+			for (; ; )
 			{
-				if (interruptConvId == _planningConversation!.Id)
+				cancellationToken.ThrowIfCancellationRequested();
+
+				// Check for interrupt requests between LLM calls.
+				bool interrupted = false;
+				while (interruptQueue.TryDequeue(out string? interruptConvId))
 				{
-					interrupted = true;
+					if (interruptConvId == _planningConversation!.Id)
+					{
+						interrupted = true;
+					}
 				}
-			}
-			if (interrupted)
-			{
-				_logger.LogInformation("Planning: Interrupted by user");
-				await _planningConversation!.AddUserMessageAsync("[System: The user interrupted the current operation. Stop what you are doing and respond to the user.]", cancellationToken);
-				return;
-			}
-
-			string? plannerLlmId = ticketHolder.Ticket.PlannerLlmId;
-			LlmResult llmResult = !string.IsNullOrWhiteSpace(plannerLlmId)
-				? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(plannerLlmId, _planningConversation!, 16384, cancellationToken)
-				: await WorkerSession.LlmProxy.ContinueAsync(_planningConversation!, 16384, cancellationToken);
-			_logger.LogDebug("Planning response: {Response}", llmResult.Content);
-
-			if (llmResult.ExitReason == LlmExitReason.Completed)
-			{
-				// LLM responded with text and no tool calls. Idle until next user message.
-				return;
-			}
-			else if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
-			{
-				// A tool signalled exit. Sync and continue.
-				await _planningConversation!.ForceFlushAsync();
-				retryCount = 0;
-			}
-			else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
-			{
-				retryCount++;
-
-				if (retryCount >= 5)
+				if (interrupted)
 				{
-					_logger.LogWarning("Planning hit iteration limit {Count} times, pausing", retryCount);
-					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Paused - exceeded retry limit", cancellationToken);
+					_logger.LogInformation("Planning: Interrupted by user");
+					await _planningConversation!.AddUserMessageAsync("[System: The user interrupted the current operation. Stop what you are doing and respond to the user.]", cancellationToken);
 					return;
 				}
 
-				_logger.LogWarning("Planning hit iteration limit, prompting to continue");
-				_planningConversation!.ResetIteration();
+				// Append any user messages that arrived while the LLM was working.
+				while (chatQueue.TryDequeue(out string? userMessage))
+				{
+					_logger.LogInformation("Planning: Appending user message received mid-loop");
+					await _planningConversation!.AddUserMessageAsync(userMessage, cancellationToken);
+				}
 
-				await _planningConversation.AddUserMessageAsync(
-					"Continue working.",
-					cancellationToken);
+				// Apply any pending ticket updates so plannerLlmId and status stay current.
+				Ticket? latestTicket = null;
+				while (ticketQueue.TryDequeue(out Ticket? updated))
+				{
+					latestTicket = updated;
+				}
+				if (latestTicket != null)
+				{
+					ticketHolder.Update(latestTicket);
+				}
+
+				// Apply any pending LLM config updates.
+				List<LLMConfig>? latestConfigs = null;
+				while (settingsQueue.TryDequeue(out List<LLMConfig>? configs))
+				{
+					latestConfigs = configs;
+				}
+				if (latestConfigs != null && latestConfigs.Count > 0)
+				{
+					_logger.LogInformation("Applying updated LLM configs mid-loop ({Count} endpoint(s))", latestConfigs.Count);
+					WorkerSession.LlmProxy.UpdateConfigs(latestConfigs);
+					_llmConfigs = latestConfigs;
+				}
+
+				string? plannerLlmId = ticketHolder.Ticket.PlannerLlmId;
+				LlmResult llmResult = !string.IsNullOrWhiteSpace(plannerLlmId)
+					? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(plannerLlmId, _planningConversation!, 16384, cancellationToken)
+					: await WorkerSession.LlmProxy.ContinueAsync(_planningConversation!, 16384, cancellationToken);
+				_logger.LogDebug("Planning response: {Response}", llmResult.Content);
+
+				if (llmResult.ExitReason == LlmExitReason.Completed)
+				{
+					// LLM responded with text and no tool calls. Idle until next user message.
+					return;
+				}
+				else if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
+				{
+					// A tool signalled exit. Sync and continue.
+					await _planningConversation!.ForceFlushAsync();
+					retryCount = 0;
+				}
+				else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
+				{
+					retryCount++;
+
+					if (retryCount >= 5)
+					{
+						_logger.LogWarning("Planning hit iteration limit {Count} times, pausing", retryCount);
+						await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Paused - exceeded retry limit", cancellationToken);
+						return;
+					}
+
+					_logger.LogWarning("Planning hit iteration limit, prompting to continue");
+					_planningConversation!.ResetIteration();
+
+					await _planningConversation.AddUserMessageAsync("Continue working.", cancellationToken);
+				}
+				else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
+				{
+					_logger.LogWarning("Planning exceeded cost budget");
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Cost budget exceeded", cancellationToken);
+					await WorkerSession.ApiClient.UpdateTicketStatusAsync(ticketHolder.Ticket.Id, "Failed", cancellationToken);
+					return;
+				}
+				else
+				{
+					_logger.LogError("Planning LLM failed: {Error}", llmResult.ErrorMessage);
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Planning LLM failed: {llmResult.ErrorMessage}", cancellationToken);
+					return;
+				}
 			}
-			else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
-			{
-				_logger.LogWarning("Planning exceeded cost budget");
-				await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Cost budget exceeded", cancellationToken);
-				await WorkerSession.ApiClient.UpdateTicketStatusAsync(ticketHolder.Ticket.Id, "Failed", cancellationToken);
-				return;
-			}
-			else
-			{
-				_logger.LogError("Planning LLM failed: {Error}", llmResult.ErrorMessage);
-				await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Planning LLM failed: {llmResult.ErrorMessage}", cancellationToken);
-				return;
-			}
+		}
+		finally
+		{
+			await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, false);
 		}
 	}
 

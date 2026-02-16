@@ -1,4 +1,3 @@
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using CommandLine;
 using KanBeast.Shared;
@@ -286,7 +285,8 @@ public class Program
 	}
 
 	// Resolves a repo path that may be relative to the CWD.
-	// On Windows, converts to WSL format /mnt/driveletter/... for Docker/WSL compatibility.
+	// Normalizes to forward slashes so LLMs can reason about the path without
+	// backslash escaping issues. Windows APIs accept forward slashes natively.
 	private static string ResolveRepoPath(string repoPath)
 	{
 		if (!Path.IsPathFullyQualified(repoPath))
@@ -294,14 +294,7 @@ public class Program
 			repoPath = Path.GetFullPath(Path.Combine(Environment.CurrentDirectory, repoPath));
 		}
 
-		if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && repoPath.Length >= 2 && repoPath[1] == ':')
-		{
-			char drive = char.ToLowerInvariant(repoPath[0]);
-			string rest = repoPath.Substring(2).Replace('\\', '/');
-			return $"/mnt/{drive}{rest}";
-		}
-
-		return repoPath;
+		return repoPath.Replace('\\', '/');
 	}
 
 	// Git marks pack files as read-only, which causes Directory.Delete to throw on Windows.
