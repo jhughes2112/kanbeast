@@ -212,10 +212,23 @@ public class LlmService
 				await conversation.AddUserMessageAsync(chatMsg, cancellationToken);
 			}
 
+			// Some providers (e.g. Anthropic) reject conversations that don't end with a user or tool message.
+			// Build the message list for the request, appending a kickoff if the last message is not user/tool.
+			List<ConversationMessage> requestMessages = conversation.Messages;
+			if (requestMessages.Count > 0)
+			{
+				string lastRole = requestMessages[requestMessages.Count - 1].Role;
+				if (lastRole != "user" && lastRole != "tool")
+				{
+					requestMessages = new List<ConversationMessage>(requestMessages);
+					requestMessages.Add(new ConversationMessage { Role = "user", Content = "Continue." });
+				}
+			}
+
 			ChatCompletionRequest request = new ChatCompletionRequest
 			{
 				Model = _config.Model,
-				Messages = conversation.Messages,
+				Messages = requestMessages,
 				Tools = toolDefs,
 				ParallelToolCalls = toolDefs != null && _parallelToolCallsSupported ? true : null,
 				Temperature = _config.Temperature,
