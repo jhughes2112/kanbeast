@@ -19,6 +19,7 @@ public class ToolContext
 	public HashSet<string> ReadFiles { get; }
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
+	public string? SubAgentLlmConfigId { get; set; }
 	public ShellState? Shell { get; internal set; }
 	public ConversationMemories Memories { get; }
 	public Action? OnMemoriesChanged { get; set; }

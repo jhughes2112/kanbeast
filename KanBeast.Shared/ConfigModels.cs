@@ -14,7 +14,8 @@ public class LLMConfig
 	public string Strengths { get; set; } = string.Empty;
 	public string Weaknesses { get; set; } = string.Empty;
 
-	public bool IsPaid => InputTokenPrice > 0 || OutputTokenPrice > 0;
+	// Combined cost per 1M tokens (input + output) for relative cost ranking.
+	public decimal CostPer1MTokens => InputTokenPrice + OutputTokenPrice;
 }
 
 // Git integration settings.

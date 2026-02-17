@@ -159,9 +159,10 @@ function setupSignalR() {
     // Conversation events from workers.
     connection.on('ConversationsUpdated', (ticketId, conversations) => {
         ticketConversations[ticketId] = conversations;
-        // If viewing this ticket's detail, update both dropdowns.
-        if (currentDetailTicketId === ticketId) {
+        if (chatModalTicketId === ticketId) {
             updateConversationDropdown(ticketId);
+        }
+        if (currentDetailTicketId === ticketId) {
             updateDetailConversationDropdown(ticketId);
         }
     });
@@ -235,14 +236,40 @@ function setupSignalR() {
                 c.isFinished = true;
             }
         }
+
+        // Auto-switch: if the user was watching this conversation, jump to the next active one.
+        const nextActiveId = pickDefaultConversation((convos || []).filter(c => !c.isFinished));
+
         if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
-            setChatInputEnabled(false);
+            if (nextActiveId) {
+                chatModalConversationId = nextActiveId;
+                const dropdown = document.getElementById('conversationDropdown');
+                if (dropdown) {
+                    dropdown.value = nextActiveId;
+                    dropdown.dispatchEvent(new Event('change'));
+                }
+            } else {
+                setChatInputEnabled(false);
+            }
         }
+
         if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
-            setDetailChatEnabled(false);
+            if (nextActiveId) {
+                detailChatConversationId = nextActiveId;
+                const dropdown = document.getElementById('detailConversationDropdown');
+                if (dropdown) {
+                    dropdown.value = nextActiveId;
+                    dropdown.dispatchEvent(new Event('change'));
+                }
+            } else {
+                setDetailChatEnabled(false);
+            }
+        }
+
+        if (chatModalTicketId === ticketId) {
+            updateConversationDropdown(ticketId);
         }
         if (currentDetailTicketId === ticketId) {
-            updateConversationDropdown(ticketId);
             updateDetailConversationDropdown(ticketId);
         }
     });
@@ -893,7 +920,7 @@ async function showTicketDetails(ticketId) {
                     <select id="detailConversationDropdown" class="detail-chat-select">
                         <option value="">💬 Select conversation…</option>
                     </select>
-                    <button id="detailDeleteConvoBtn" class="detail-chat-maximize" title="Delete finished conversation" style="display:none;" onclick="deleteSelectedDetailConversation()">🗑️</button>
+                    <button id="detailDeleteConvoBtn" class="detail-chat-maximize" title="Delete conversation" style="display:none;" onclick="deleteSelectedDetailConversation()">🗑️</button>
                     <button class="detail-chat-maximize" onclick="openChat('${ticketId}')" title="Maximize chat">⤢</button>
                 </div>
                 <div class="detail-chat-messages" id="detailChatMessages">
@@ -1179,7 +1206,7 @@ function setupDetailChat(ticketId) {
         detailChatConversationId = selectedConvId;
         const info = convos.find(c => c.id === selectedConvId);
         setDetailChatEnabled(!(info && info.isFinished));
-        if (deleteBtn) deleteBtn.style.display = (info && info.isFinished) ? '' : 'none';
+        if (deleteBtn) deleteBtn.style.display = info ? '' : 'none';
         loadAndRestoreDetailConversation(ticketId, selectedConvId, scrollState);
         updateBusyIndicators(ticketId, selectedConvId, !!busyConversations[`${ticketId}:${selectedConvId}`]);
     }
@@ -1191,7 +1218,7 @@ function setupDetailChat(ticketId) {
             loadAndDisplayDetailConversation(ticketId, convId);
             const info = convos.find(c => c.id === convId);
             setDetailChatEnabled(!(info && info.isFinished));
-            if (deleteBtn) deleteBtn.style.display = (info && info.isFinished) ? '' : 'none';
+            if (deleteBtn) deleteBtn.style.display = info ? '' : 'none';
             saveTicketConversationState(ticketId, convId, { atBottom: true });
             updateBusyIndicators(ticketId, convId, !!busyConversations[`${ticketId}:${convId}`]);
         } else {
@@ -1553,7 +1580,7 @@ function buildPlannerLlmDropdown(ticket, elementId) {
         options += `<option value="${escapeHtml(id)}"${selected}>${escapeHtml(model)}</option>`;
     });
 
-    return `<select id="${elementId}" class="detail-chat-select" style="max-width: 160px;" onchange="updatePlannerLlm('${ticket.id}', this.value)" title="Planner LLM">${options}</select>`;
+    return `<select id="${elementId}" class="${elementId === 'chatPlannerLlm' ? 'chat-conversation-select' : 'detail-chat-select'}" onchange="updatePlannerLlm('${ticket.id}', this.value)" title="Planner LLM">${options}</select>`;
 }
 
 // Update the planner LLM for a ticket and sync both dropdowns
@@ -1726,9 +1753,6 @@ window.clearConversation = clearConversation;
 
 async function deleteConversation(ticketId, conversationId) {
     if (!ticketId || !conversationId) return;
-    const convos = ticketConversations[ticketId] || [];
-    const info = convos.find(c => c.id === conversationId);
-    if (!info || !info.isFinished) return;
 
     try {
         const resp = await fetch(`${API_BASE}/tickets/${ticketId}/conversations/${conversationId}`, { method: 'DELETE' });
@@ -2315,7 +2339,7 @@ function pickDefaultConversation(convos) {
     return sorted[0].id;
 }
 
-// Updates the conversation dropdown in the ticket detail view.
+// Updates the conversation dropdown in the full chat modal.
 function updateConversationDropdown(ticketId) {
     const dropdown = document.getElementById('conversationDropdown');
     if (!dropdown) {
@@ -2340,11 +2364,19 @@ function updateConversationDropdown(ticketId) {
         dropdown.value = previousValue;
     }
 
+    // Auto-follow: if nothing is selected, pick the best active conversation.
+    if (!dropdown.value && convos.length > 0) {
+        const bestId = pickDefaultConversation(convos);
+        if (bestId) {
+            dropdown.value = bestId;
+            dropdown.dispatchEvent(new Event('change'));
+        }
+    }
+
     // Update delete button visibility.
     const chatDeleteBtn = document.getElementById('chatDeleteConvoBtn');
     if (chatDeleteBtn) {
-        const selectedInfo = convos.find(c => c.id === dropdown.value);
-        chatDeleteBtn.style.display = (selectedInfo && selectedInfo.isFinished) ? '' : 'none';
+        chatDeleteBtn.style.display = dropdown.value ? '' : 'none';
     }
 }
 
@@ -2371,11 +2403,19 @@ function updateDetailConversationDropdown(ticketId) {
         dropdown.value = previousValue;
     }
 
+    // Auto-follow: if nothing is selected, pick the best active conversation.
+    if (!dropdown.value && convos.length > 0) {
+        const bestId = pickDefaultConversation(convos);
+        if (bestId) {
+            dropdown.value = bestId;
+            dropdown.dispatchEvent(new Event('change'));
+        }
+    }
+
     // Update delete button visibility.
     const detailDeleteBtn = document.getElementById('detailDeleteConvoBtn');
     if (detailDeleteBtn) {
-        const selectedInfo = convos.find(c => c.id === dropdown.value);
-        detailDeleteBtn.style.display = (selectedInfo && selectedInfo.isFinished) ? '' : 'none';
+        detailDeleteBtn.style.display = dropdown.value ? '' : 'none';
     }
 }
 
@@ -2439,7 +2479,8 @@ function openChat(ticketId) {
         if (convId) {
             chatModalConversationId = convId;
             loadAndDisplayConversation(ticketId, convId);
-            const info = convos.find(c => c.id === convId);
+            const currentConvos = ticketConversations[ticketId] || [];
+            const info = currentConvos.find(c => c.id === convId);
             setChatInputEnabled(!(info && info.isFinished));
             updateBusyIndicators(ticketId, convId, !!busyConversations[`${ticketId}:${convId}`]);
         } else {
@@ -2455,7 +2496,7 @@ function openChat(ticketId) {
     const deleteBtn = document.createElement('button');
     deleteBtn.id = 'chatDeleteConvoBtn';
     deleteBtn.className = 'detail-chat-maximize';
-    deleteBtn.title = 'Delete finished conversation';
+    deleteBtn.title = 'Delete conversation';
     deleteBtn.textContent = '🗑️';
     deleteBtn.style.display = 'none';
     deleteBtn.addEventListener('click', () => {
@@ -2465,9 +2506,7 @@ function openChat(ticketId) {
 
     // Show/hide delete button based on selection.
     function updateDeleteButton() {
-        const convId = dropdown.value;
-        const info = convos.find(c => c.id === convId);
-        deleteBtn.style.display = (info && info.isFinished) ? '' : 'none';
+        deleteBtn.style.display = dropdown.value ? '' : 'none';
     }
     dropdown.addEventListener('change', updateDeleteButton);
     updateDeleteButton();

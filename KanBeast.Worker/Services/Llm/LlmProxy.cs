@@ -82,21 +82,22 @@ public class LlmProxy
 	}
 
 	// Builds a summary of available LLMs for the planning agent to choose from.
-	// Filters out paid models when the ticket has no remaining budget.
-	public List<(string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable)> GetAvailableLlmSummaries(bool includePaid)
+	// Excludes models too expensive for the remaining budget (0 = unlimited).
+	public List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> GetAvailableLlmSummaries(decimal remainingBudget)
 	{
-		List<(string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable)> summaries = new();
+		List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> summaries = new();
 
 		foreach (LlmService service in _services)
 		{
 			LLMConfig config = service.Config;
 
-			if (!includePaid && config.IsPaid)
+			// Skip models we can't afford at least 1M tokens from.
+			if (remainingBudget > 0 && config.CostPer1MTokens > 0 && config.CostPer1MTokens > remainingBudget)
 			{
 				continue;
 			}
 
-			summaries.Add((config.Id, config.Model, config.Strengths, config.Weaknesses, config.IsPaid, !service.IsPermanentlyDown));
+			summaries.Add((config.Id, config.Model, config.Strengths, config.Weaknesses, config.CostPer1MTokens, !service.IsPermanentlyDown));
 		}
 
 		return summaries;

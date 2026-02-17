@@ -14,9 +14,10 @@ public static class DeveloperTools
 
 		When to use:
 		- After planning is complete and the ticket status is Active, call get_next_work_item first to find the next subtask and available LLMs.
-		- Choose the best LLM for the work based on its strengths/weaknesses and pass its id as llmConfigId.
-		- The developer will work autonomously on the subtask and return a summary of what was accomplished.
+		- Choose the best LLM for the work based on its strengths/weaknesses and cost. Pass the developer model as llmConfigId and a cheaper model for its sub-agents as subAgentLlmConfigId.
+		- The developer will work autonomously on the subtask and return a summary of what was accomplished, including a brief evaluation of each sub-agent's performance.
 		- You receive the developer's final report and can decide whether to move on or re-try the subtask with a different LLM.
+		- Use the sub-agent evaluation in the report to update_llm_notes for both the developer and sub-agent models.
 
 		Usage notes:
 		1. Provide the task name, subtask name, and full description so the developer has complete context.
@@ -32,6 +33,7 @@ public static class DeveloperTools
 		[Description("The task ID from the ticket")] string taskId,
 		[Description("The subtask ID from the ticket")] string subtaskId,
 		[Description("The LLM config id to use for this developer session, from get_next_work_item")] string llmConfigId,
+		[Description("The LLM config id to use for sub-agents spawned by this developer. Use a cheaper model for research and file searches.")] string subAgentLlmConfigId,
 		ToolContext context)
 	{
 		ToolResult result;
@@ -63,6 +65,7 @@ public static class DeveloperTools
 					0.9);
 
 				ToolContext devContext = new ToolContext(taskId, subtaskId, memories);
+				devContext.SubAgentLlmConfigId = string.IsNullOrWhiteSpace(subAgentLlmConfigId) ? null : subAgentLlmConfigId;
 
 				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
 				LlmConversation conversation = new LlmConversation(
@@ -128,6 +131,7 @@ public static class DeveloperTools
 								0.9);
 
 							ToolContext continueContext = new ToolContext(taskId, subtaskId, memories);
+							continueContext.SubAgentLlmConfigId = devContext.SubAgentLlmConfigId;
 							conversation = new LlmConversation(systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, $"Developer - {subtaskName} (retry)");
 							continueContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
 							iterationCount = 0;
@@ -205,6 +209,9 @@ public static class DeveloperTools
 		sb.AppendLine(subtaskDescription);
 		sb.AppendLine();
 		sb.AppendLine("Call end_subtask tool when complete.");
+		sb.AppendLine();
+		sb.AppendLine("# Sub-agent evaluation");
+		sb.AppendLine("If you use sub-agents, include a brief evaluation of each one's performance in your end_subtask summary (25 words max). Note what it did well and what it struggled with.");
 
 		return sb.ToString();
 	}

@@ -1627,6 +1627,14 @@ nav {
 }
 
 .chat-modal-header h2 {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
+.chat-conversation-picker {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     flex: 1;
 }
 
@@ -1638,8 +1646,7 @@ nav {
     color: var(--gray-700);
     font-size: 0.875rem;
     font-family: inherit;
-    min-width: 200px;
-    max-width: 50%;
+    min-width: 0;
     flex: 1;
 }
 

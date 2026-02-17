@@ -65,9 +65,9 @@ public static class TicketTools
         return sb.ToString();
     }
 
-    [Description("Signal that you have finished working on the current subtask. Call this when your work is complete or is blocked in some way.")]
+    [Description("Signal that you have finished working on the current subtask. Call this when your work is complete or is blocked in some way. If you used sub-agents, include a brief performance evaluation of each (25 words max per sub-agent).")]
     public static Task<ToolResult> EndSubtaskAsync(
-        [Description("Summary of what you accomplished or a detailed explanation of what the blockers are")] string summary,
+        [Description("Summary of what you accomplished or a detailed explanation of what the blockers are. Include sub-agent performance evaluations if any were used.")] string summary,
         ToolContext context)
     {
         ToolResult result;
@@ -296,8 +296,9 @@ public static class TicketTools
         Call this to find what to work on next.
         The response includes:
         - The next work item details (task name, subtask name, IDs, description)
-        - A list of available LLM configurations with their strengths, weaknesses, and pricing
+        - A list of available LLM configurations with their strengths, weaknesses, and relative cost (cost_per_1m_tokens)
         - Paid models are automatically filtered out when the ticket has no remaining budget
+        Use cost ranking to choose inexpensive models for straightforward work and reserve expensive models for complex planning or reasoning tasks.
         If there is no remaining work, the response will indicate all work is complete.
         If no LLMs are available, the response will indicate the work is blocked.
         """)]
@@ -370,15 +371,14 @@ public static class TicketTools
 
         sb.AppendLine();
 
-        // Build available LLM list, filtering paid models when budget is exhausted.
-        bool hasBudget = ticket.MaxCost <= 0 || ticket.LlmCost < ticket.MaxCost;
-        bool includePaid = hasBudget;
-        List<(string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable)> llms =
-            WorkerSession.LlmProxy.GetAvailableLlmSummaries(includePaid);
+        // Build available LLM list, excluding models too expensive for the remaining budget.
+        decimal remainingBudget = ticket.MaxCost <= 0 ? 0m : Math.Max(0m, ticket.MaxCost - ticket.LlmCost);
+        List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> llms =
+            WorkerSession.LlmProxy.GetAvailableLlmSummaries(remainingBudget);
 
         // Filter to only available LLMs.
-        List<(string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable)> availableLlms = new();
-        foreach ((string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable) llm in llms)
+        List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> availableLlms = new();
+        foreach ((string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable) llm in llms)
         {
             if (llm.isAvailable)
             {
@@ -390,9 +390,9 @@ public static class TicketTools
         {
             sb.AppendLine("BLOCKED: No LLMs are available to perform this work.");
 
-            if (!includePaid)
+            if (remainingBudget > 0)
             {
-                sb.AppendLine("  Reason: Budget exhausted and all remaining LLMs are paid.");
+                sb.AppendLine($"  Reason: Remaining budget (${remainingBudget:F2}) cannot afford 1M tokens from any configured model.");
             }
             else
             {
@@ -403,13 +403,13 @@ public static class TicketTools
             return Task.FromResult(blockedResult);
         }
 
-        sb.AppendLine("AVAILABLE LLMs (choose one to delegate this work to via start_developer):");
+        sb.AppendLine("AVAILABLE LLMs (choose one to delegate this work to via start_developer; prefer cheaper models for straightforward work):");
 
-        foreach ((string id, string model, string strengths, string weaknesses, bool isPaid, bool isAvailable) llm in availableLlms)
+        foreach ((string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable) llm in availableLlms)
         {
             sb.AppendLine($"  - id: {llm.id}");
             sb.AppendLine($"    model: {llm.model}");
-            sb.AppendLine($"    paid: {(llm.isPaid ? "yes" : "no")}");
+            sb.AppendLine($"    cost_per_1m_tokens: ${llm.costPer1MTokens:F2}");
 
             if (!string.IsNullOrWhiteSpace(llm.strengths))
             {

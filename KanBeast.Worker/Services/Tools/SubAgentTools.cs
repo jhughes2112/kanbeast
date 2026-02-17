@@ -19,15 +19,17 @@ public static class SubAgentTools
 		- If you want to read a specific file path and see the exact code, use the read_file or glob or grep instead of the start_sub_agent tool, to find the match more quickly
 		- If you are searching for a specific class definition like \"class Foo\", use the glob or grep tool to find the match more quickly
 		- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Agent tool, to find the match more quickly
-		
+
 		Usage notes:
 		1. Launch multiple agents concurrently whenever possible to maximize performance; to do that, use a single message with multiple tool uses
 		2. Each agent invocation is stateless. You will not be able to send additional messages to the agent, nor will the agent be able to communicate with you outside of its final report. Therefore, your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.
 		3. The agent's outputs should generally be trusted
 		4. Each agent is provided the current set of Memories, but it will not be able to modify them. It has the same system prompt as you, but no further context. Be precise and explicit about its permissions and limitations in the instructions so it understands its duty, and provides value to help advance the task in development.
 		5. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the context outside of your instructions.
+		6. After each sub-agent returns, evaluate its performance in your end_subtask summary (25 words max per sub-agent). Note what it did well and what it struggled with.
 
 		The sub-agent runs to completion and returns its final result as requested in the instructions.
+		The model used by the sub-agent is chosen by the planning agent, not by you.
 		""")]
 	public static async Task<ToolResult> StartSubAgentAsync(
 		[Description("Clear, self-contained instructions for what the sub-agent needs to accomplish and detailed expectations for its response. You will not see anything else, so be specific.")] string instructions,
@@ -62,9 +64,13 @@ public static class SubAgentTools
 
 				string content = string.Empty;
 
+				string? subAgentConfigId = context.SubAgentLlmConfigId;
+
 				for (; ; )
 				{
-					LlmResult llmResult = await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
+					LlmResult llmResult = !string.IsNullOrWhiteSpace(subAgentConfigId)
+						? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(subAgentConfigId, conversation, null, WorkerSession.CancellationToken)
+						: await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
 
 					if (llmResult.ExitReason == LlmExitReason.Completed)
 					{

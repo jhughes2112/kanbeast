@@ -80,11 +80,6 @@ public class TicketsController : ControllerBase
             return NotFound();
         }
 
-        if (!data.IsFinished)
-        {
-            return BadRequest("Cannot delete an active conversation");
-        }
-
         await _conversationStore.DeleteAsync(id, conversationId);
         List<ConversationInfo> infos = _conversationStore.GetInfoList(id);
         await _hubContext.Clients.Group($"ticket-{id}").ConversationsUpdated(id, infos);
