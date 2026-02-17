@@ -11,20 +11,10 @@ public static class ShellTools
 	private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(60);
 
 	[Description("""
-		Executes a single bash command and immediately returns stdout, stderr, and exit code.
-		Output format is stdout (if any), then 'Stderr:\n...' (if any), then 'Exit Code: N' at the bottom.
-		Commands time out after 60 seconds. Output is truncated if very long.
-
-		Do NOT use for file operations — use read_file, write_file, edit_file, multi_edit_file, list_directory instead of cat, head, tail, awk, sed, ls.
-		Do NOT use for search — use glob and grep tools instead of find, grep, rg.
-		Do NOT use interactive flags like git rebase -i or git add -i; they require TTY input that is not available.
-		Reserve run_command for: builds, tests, git commands, package management, installing tools, and system utilities.
-
-		Best practices:
-		- Always quote file paths containing spaces with double quotes.
-		- Use absolute paths to avoid working-directory confusion.
-		- Before creating directories or files, verify the parent exists with list_directory.
-		- Prefer the persistent shell (start_shell / send_shell) when you need cd, env vars, or venvs to persist across commands.
+		Execute a bash command, returns stdout, stderr, and exit code. Times out after 60s.
+		Do NOT use for file operations (use read_file, write_file, edit_file, list_directory) or search (use glob, grep).
+		Reserve for: builds, tests, git, package management, system utilities.
+		Use absolute paths. Prefer start_shell for stateful use or long running processes time out.
 		""")]
 	public static async Task<ToolResult> RunCommandAsync(
 		[Description("The bash command to execute. Use && to chain dependent commands (stops on failure). Use ; to chain independent commands. Do not use newlines; keep the command on one line.")] string command,

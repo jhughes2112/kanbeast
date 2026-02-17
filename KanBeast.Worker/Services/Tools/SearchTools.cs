@@ -204,12 +204,9 @@ public static class SearchTools
 	}
 
 	[Description("""
-		Searches file contents using regular expressions. Skips directories that start with dot. 
-		Output depends on outputMode:
-		- 'files_with_matches' (default): one relative file path per line for each file containing a match.
-		- 'content': matching lines grouped by file with headers '--- path ---'. Lines are numbered as 'N: content'. Context lines are included around matches with '...' separating non-contiguous blocks.
-		- 'count': one 'path: N' line per matching file, plus a 'Total: N matches' summary.
-		Use this instead of run_command with grep or rg. Use maxResults to limit broad searches.
+		Search file contents using regex. Skips dot-directories.
+		Output modes: 'files_with_matches' (default, file paths), 'content' (matching lines with line numbers and context), 'count' (match counts per file).
+		Use instead of grep/rg via run_command. Use maxResults to limit broad searches.
 		""")]
 	public static Task<ToolResult> GrepAsync(
 		[Description("Regular expression to search for (e.g. 'class\\s+Foo', 'TODO', 'import.*http'). Standard regex syntax. Cannot be empty.")] string pattern,

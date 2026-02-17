@@ -11,11 +11,26 @@ public class KanbanHub : Hub<IKanbanHubClient>
     // Tracks which conversations are currently busy (LLM running) per ticket.
     private static readonly ConcurrentDictionary<string, ConcurrentDictionary<string, bool>> BusyState = new();
 
+    // Tracks the last heartbeat time per ticket from its worker.
+    private static readonly ConcurrentDictionary<string, DateTimeOffset> WorkerHeartbeats = new();
+
     private readonly ConversationStore _conversationStore;
 
     public KanbanHub(ConversationStore conversationStore)
     {
         _conversationStore = conversationStore;
+    }
+
+    // Returns the last heartbeat time for all tracked tickets.
+    public static IReadOnlyDictionary<string, DateTimeOffset> GetWorkerHeartbeats()
+    {
+        return WorkerHeartbeats;
+    }
+
+    // Removes the heartbeat entry for a ticket (called when the ticket leaves Active).
+    public static void ClearHeartbeat(string ticketId)
+    {
+        WorkerHeartbeats.TryRemove(ticketId, out _);
     }
 
     public async Task SubscribeToTicket(string ticketId)
@@ -44,14 +59,22 @@ public class KanbanHub : Hub<IKanbanHubClient>
     public async Task RegisterWorker(string ticketId)
     {
         Console.WriteLine($"Hub: RegisterWorker called for ticket '{ticketId}', connectionId: {Context.ConnectionId}");
+        WorkerHeartbeats[ticketId] = DateTimeOffset.UtcNow;
         await Groups.AddToGroupAsync(Context.ConnectionId, $"ticket-{ticketId}");
         await Groups.AddToGroupAsync(Context.ConnectionId, $"worker-{ticketId}");
         Console.WriteLine($"Hub: Worker registered in groups ticket-{ticketId} and worker-{ticketId}");
     }
 
+    // Called periodically by a worker to signal it is still alive.
+    public void WorkerHeartbeat(string ticketId)
+    {
+        WorkerHeartbeats[ticketId] = DateTimeOffset.UtcNow;
+    }
+
     // Called by a worker to push the full conversation snapshot.
     public async Task SyncConversation(string ticketId, ConversationData data)
     {
+        WorkerHeartbeats[ticketId] = DateTimeOffset.UtcNow;
         await _conversationStore.UpsertAsync(ticketId, data);
         List<ConversationInfo> infos = _conversationStore.GetInfoList(ticketId);
         await Clients.Group($"ticket-{ticketId}").ConversationsUpdated(ticketId, infos);
@@ -92,6 +115,7 @@ public class KanbanHub : Hub<IKanbanHubClient>
     // Called by a worker to signal that a conversation is busy (LLM running) or idle.
     public async Task SetConversationBusy(string ticketId, string conversationId, bool isBusy)
     {
+        WorkerHeartbeats[ticketId] = DateTimeOffset.UtcNow;
         ConcurrentDictionary<string, bool> convos = BusyState.GetOrAdd(ticketId, _ => new ConcurrentDictionary<string, bool>());
         if (isBusy)
         {

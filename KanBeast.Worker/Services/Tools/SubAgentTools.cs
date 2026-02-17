@@ -7,59 +7,65 @@ namespace KanBeast.Worker.Services.Tools;
 public static class SubAgentTools
 {
 	[Description("""
-		Launch a sub-agent to handle complex, multi-step tasks autonomously.
-		The sub-agent has the same capabilities as you (shell, files, search, web) except it cannot start further sub-agents or create tasks/subtasks. 
+		Launch a sub-agent to handle complex, multi-step tasks autonomously. The sub-agent has the same capabilities as you (shell, files, search, web).
 
 		When to use:
-		- For researching complex questions, searching for code, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use a sub-agent to perform the search for you.
-		- Summarizing or analyzing documentation, web pages, or search results. If you want to understand the content of a long document or a set of documents, use a sub-agent to read and summarize them for you.
-		- Generating code based on complex requirements. A sub-agent can be your hands where you do the thinking and it does incremental coding tasks. Realize that after it responds, the files it modified will have changed and you should read them again.
+		- For researching complex questions, searching for code that you aren't certain will be located on the first attempt, and executing multi-step tasks.
+		- Digging through documentation, summarizing code, web pages, or search results. 
+		- Reading long documents or code files.  Rather than read a lot of files to learn how something works, use a subagent to do that.
+		- Generating code based on complex requirements. A sub-agent can be your hands where you do the thinking and it does incremental coding tasks. Realize that after it responds, the files it modified will have changed and you might want to read them again.
 
 		When NOT to use the start_sub_agent tool:
-		- If you want to read a specific file path and see the exact code, use the read_file or glob or grep instead of the start_sub_agent tool, to find the match more quickly
-		- If you are searching for a specific class definition like \"class Foo\", use the glob or grep tool to find the match more quickly
+		- If you want to read a specific file path and see the exact code, or make an edit, use the read_file or glob or grep instead of the start_sub_agent tool, to find the match more quickly
+		- If you are searching for a specific class definition like \"class Foo\", use the glob or grep tool to find the match quickly
 		- If you are searching for code within a specific file or set of 2-3 files, use the Read tool instead of the Agent tool, to find the match more quickly
 
 		Usage notes:
 		1. Launch multiple agents concurrently whenever possible to maximize performance; to do that, use a single message with multiple tool uses
-		2. Each agent invocation is stateless. You will not be able to send additional messages to the agent, nor will the agent be able to communicate with you outside of its final report. Therefore, your prompt should contain a highly detailed task description for the agent to perform autonomously and you should specify exactly what information the agent should return back to you in its final and only message to you.
-		3. The agent's outputs should generally be trusted
-		4. Each agent is provided the current set of Memories, but it will not be able to modify them. It has the same system prompt as you, but no further context. Be precise and explicit about its permissions and limitations in the instructions so it understands its duty, and provides value to help advance the task in development.
-		5. Clearly tell the agent whether you expect it to write code or just to do research (search, file reads, web fetches, etc.), since it is not aware of the context outside of your instructions.
-		6. After each sub-agent returns, evaluate its performance in your end_subtask summary (25 words max per sub-agent). Note what it did well and what it struggled with.
-
-		The sub-agent runs to completion and returns its final result as requested in the instructions.
-		The model used by the sub-agent is chosen by the planning agent, not by you.
+		2. Each agent invocation begins with a system prompt, the memories list, and instructions passed in here. It has access to the same repo workspace as you do. 
+		3. You will not be able to send additional messages to the agent, and it will only be able to provide a final report of its actions.  Therefore, your instructions should be highly detailed task description for the agent to perform autonomously, specifying exactly what information the agent should return back to you in its response.
+		4. The agent's outputs should generally be trusted unless there is evidence to the contrary.
+		5. Clearly tell the agent whether you expect it to write code, learn (and explain) how something works, research and make recommendations about something, etc.
+		6. After each sub-agent returns, evaluate its performance in your end_subtask summary (25 words max per sub-agent). Note what it did well and what it struggled with.  If you didn't use any subagents, don't mention them.
 		""")]
 	public static async Task<ToolResult> StartSubAgentAsync(
-		[Description("Clear, self-contained instructions for what the sub-agent needs to accomplish and detailed expectations for its response. You will not see anything else, so be specific.")] string instructions,
+		[Description("Brief summary of the sub-agent's mission (logged to activity feed and shown to the sub-agent as context).")] string taskSummary,
+		[Description("Detailed, self-contained instructions and expectations for the sub-agent's response.")] string instructions,
 		ToolContext context)
 	{
 		ToolResult result;
 
-		if (string.IsNullOrWhiteSpace(instructions))
+		if (string.IsNullOrWhiteSpace(taskSummary))
 		{
-			result = new ToolResult("Error: Instructions cannot be empty", false);
+			result = new ToolResult("Error: taskSummary cannot be empty", false);
+		}
+		else if (string.IsNullOrWhiteSpace(instructions))
+		{
+			result = new ToolResult("Error: instructions cannot be empty", false);
 		}
 		else
 		{
 			try
 			{
+				await WorkerSession.ApiClient.AddActivityLogAsync(
+					WorkerSession.TicketHolder.Ticket.Id, $"Sub-agent: {taskSummary}", WorkerSession.CancellationToken);
+
+				string fullInstructions = $"{taskSummary}\n\n{instructions}";
+
 				string systemPrompt = WorkerSession.Prompts.TryGetValue("subagent", out string? prompt) ? prompt : string.Empty;
 
-				ConversationMemories memories = new ConversationMemories(context.Memories);  // copy the original memories to avoid subagents modifying the original one
+				ConversationMemories memories = new ConversationMemories(context.Memories);
 				ICompaction compaction = new CompactionNone();
-				ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, memories);
+				ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, memories, null, null);
 
-				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
 				LlmConversation conversation = new LlmConversation(
 					systemPrompt,
-					instructions,
+					fullInstructions,
 					memories,
 					LlmRole.SubAgent,
 					subContext,
 					compaction,
-					"Sub-agent");
+					$"Sub-agent: {taskSummary}");
 				subContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
 
 				string content = string.Empty;

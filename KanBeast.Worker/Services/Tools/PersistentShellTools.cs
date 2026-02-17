@@ -23,16 +23,14 @@ public static class PersistentShellTools
 {
 	[Description("""
 		Start a persistent background bash shell. Only one shell may be running at a time.
-		The shell starts in the repository root. Send ^C to interrupt a hung or long-running process.
+		The shell starts in the repository root. To interrupt a hung or long-running process, send the two characters ^C
 
 		Only use the persistent shell instead of run_command when stateful manipulation of a bash shell is necessary!
 		- When cd, environment variables, or virtual-env activation must persist across commands.
 		- When running long-lived or streaming processes (dev servers, watch-mode tests, tailing logs) that would be terminated by the 60 second timer of run_command.
 		- When interactive programs require input mid-execution.
 
-		When to prefer run_command instead:
-		- A single, self-contained command whose output you need immediately (builds, test runs, git status).
-		- You do not need state to carry over between commands.
+		Prefer run_command when work can be done with a single, self-contained command whose output can be obtained immediately.
 		""")]
  
 	public static async Task<ToolResult> StartShellAsync(

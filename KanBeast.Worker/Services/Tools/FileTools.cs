@@ -192,13 +192,10 @@ public static class FileTools
         return result;
     }
 
-    [Description("""
-		This tool will overwrite the existing file if there is one at the provided path. Caution: this creates the file and any missing parent directories if they do not exist. 
-		If the file already exists, you must use read_file first; this tool will error if you attempt to overwrite without reading. 
-		ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
-		Use this for new files or full rewrites. Prefer edit_file for changing part of an existing file.
-		Only use emojis if the user explicitly requests it. Avoid writing emojis to files unless asked.
-		NEVER create files that are not explicitly requested by the user or required to complete the task, including documentation (*.md) files.
+	[Description("""
+		Create a new file or overwrite an existing one. Creates parent directories if needed.
+		If the file already exists, you must read_file first. Prefer edit_file for partial changes.
+		Never create files not required by the task.
 		""")]
     public static async Task<ToolResult> WriteFileAsync(
         [Description("The exact full path to the file to create or overwrite. Absolute paths only.")] string filePath,

@@ -3,101 +3,100 @@ using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
 
-// Centralized static registry of all tools, keyed by role.
-// Planning tools are composed at runtime based on ticket state.
+// Centralized static registry of all tools.
+// Tool sets are pre-built for each meaningful combination of role and ticket state.
 public static class ToolsFactory
 {
-	private static readonly Dictionary<LlmRole, List<Tool>> ToolsByRole = BuildToolsByRole();
-	private static readonly List<Tool> BacklogOnlyPlanningTools = BuildBacklogOnlyPlanningTools();
-	private static readonly List<Tool> ActiveOnlyPlanningTools = BuildActiveOnlyPlanningTools();
-
-	public static List<Tool> GetTools(LlmRole role)
+	private enum ToolSet
 	{
-		if (!ToolsByRole.TryGetValue(role, out List<Tool>? tools))
+		PlanningBacklog,
+		PlanningActive,
+		PlanningOther,
+		Developer,
+		SubAgent,
+		Compaction
+	}
+
+	private static readonly Dictionary<ToolSet, List<Tool>> Tools = BuildAllToolSets();
+
+	public static List<Tool> GetTools(LlmRole role, TicketStatus status)
+	{
+		ToolSet key = role switch
 		{
-			return new List<Tool>();
+			LlmRole.Planning when status == TicketStatus.Backlog => ToolSet.PlanningBacklog,
+			LlmRole.Planning when status == TicketStatus.Active => ToolSet.PlanningActive,
+			LlmRole.Planning => ToolSet.PlanningOther,
+			LlmRole.Developer => ToolSet.Developer,
+			LlmRole.SubAgent => ToolSet.SubAgent,
+			LlmRole.Compaction => ToolSet.Compaction,
+			_ => ToolSet.PlanningOther
+		};
+
+		if (Tools.TryGetValue(key, out List<Tool>? tools))
+		{
+			return tools;
 		}
 
-		if (role == LlmRole.Planning)
-		{
-			List<Tool> composed = new List<Tool>(tools);
-			TicketStatus status = WorkerSession.TicketHolder.Ticket.Status;
-
-			if (status == TicketStatus.Backlog)
-			{
-				composed.AddRange(BacklogOnlyPlanningTools);
-			}
-			else if (status == TicketStatus.Active)
-			{
-				composed.AddRange(ActiveOnlyPlanningTools);
-			}
-
-			return composed;
-		}
-
-		return tools;
+		return new List<Tool>();
 	}
 
-	private static List<Tool> BuildBacklogOnlyPlanningTools()
+	private static Dictionary<ToolSet, List<Tool>> BuildAllToolSets()
 	{
-		List<Tool> tools = new List<Tool>();
-		ToolHelper.AddTools(tools, typeof(TicketTools), nameof(TicketTools.CreateTaskAsync), nameof(TicketTools.CreateSubtaskAsync), nameof(TicketTools.DeleteAllTasksAsync));
-		return tools;
-	}
+		// Shared tool groups built once and reused across sets.
+		List<Tool> commonPlanningTools = new List<Tool>();
+		ToolHelper.AddTools(commonPlanningTools, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
+		ToolHelper.AddTools(commonPlanningTools, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
+		ToolHelper.AddTools(commonPlanningTools, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
+		ToolHelper.AddTools(commonPlanningTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
+		ToolHelper.AddTools(commonPlanningTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync));
+		ToolHelper.AddTools(commonPlanningTools, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
 
-	private static List<Tool> BuildActiveOnlyPlanningTools()
-	{
-		List<Tool> tools = new List<Tool>();
-		ToolHelper.AddTools(tools, typeof(DeveloperTools), nameof(DeveloperTools.StartDeveloperAsync));
-		ToolHelper.AddTools(tools, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.UpdateLlmNotesAsync));
-		return tools;
-	}
+		// Planning + Backlog: common + task creation tools.
+		List<Tool> planningBacklog = new List<Tool>(commonPlanningTools);
+		ToolHelper.AddTools(planningBacklog, typeof(TicketTools), nameof(TicketTools.CreateTaskAsync), nameof(TicketTools.CreateSubtaskAsync), nameof(TicketTools.DeleteAllTasksAsync));
 
-	private static Dictionary<LlmRole, List<Tool>> BuildToolsByRole()
-	{
-		List<Tool> planningTools = new List<Tool>();
-		ToolHelper.AddTools(planningTools, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
-		ToolHelper.AddTools(planningTools, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
-		ToolHelper.AddTools(planningTools, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
-		ToolHelper.AddTools(planningTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
-		ToolHelper.AddTools(planningTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync));
-		ToolHelper.AddTools(planningTools, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
+		// Planning + Active: common + developer orchestration tools.
+		List<Tool> planningActive = new List<Tool>(commonPlanningTools);
+		ToolHelper.AddTools(planningActive, typeof(DeveloperTools), nameof(DeveloperTools.StartDeveloperAsync));
+		ToolHelper.AddTools(planningActive, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.UpdateLlmNotesAsync));
 
-		List<Tool> developerTools = new List<Tool>();
-		ToolHelper.AddTools(developerTools, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
-		ToolHelper.AddTools(developerTools, typeof(PersistentShellTools), nameof(PersistentShellTools.StartShellAsync), nameof(PersistentShellTools.SendShellAsync), nameof(PersistentShellTools.KillShellAsync));
-		ToolHelper.AddTools(developerTools, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync), nameof(FileTools.WriteFileAsync), nameof(FileTools.EditFileAsync), nameof(FileTools.MultiEditFileAsync));
-		ToolHelper.AddTools(developerTools, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
-		ToolHelper.AddTools(developerTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
-		ToolHelper.AddTools(developerTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync), nameof(TicketTools.EndSubtaskAsync));
-		ToolHelper.AddTools(developerTools, typeof(SubAgentTools), nameof(SubAgentTools.StartSubAgentAsync));
-		ToolHelper.AddTools(developerTools, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
+		// Developer: full capabilities including sub-agents.
+		List<Tool> developer = new List<Tool>();
+		ToolHelper.AddTools(developer, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
+		ToolHelper.AddTools(developer, typeof(PersistentShellTools), nameof(PersistentShellTools.StartShellAsync), nameof(PersistentShellTools.SendShellAsync), nameof(PersistentShellTools.KillShellAsync));
+		ToolHelper.AddTools(developer, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync), nameof(FileTools.WriteFileAsync), nameof(FileTools.EditFileAsync), nameof(FileTools.MultiEditFileAsync));
+		ToolHelper.AddTools(developer, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
+		ToolHelper.AddTools(developer, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
+		ToolHelper.AddTools(developer, typeof(TicketTools), nameof(TicketTools.LogMessageAsync), nameof(TicketTools.EndSubtaskAsync));
+		ToolHelper.AddTools(developer, typeof(SubAgentTools), nameof(SubAgentTools.StartSubAgentAsync));
+		ToolHelper.AddTools(developer, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
 
-		// Sub-agent tools: same as developer minus sub-agent spawning.
-		List<Tool> subAgentTools = new List<Tool>();
-		ToolHelper.AddTools(subAgentTools, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
-		ToolHelper.AddTools(subAgentTools, typeof(PersistentShellTools), nameof(PersistentShellTools.StartShellAsync), nameof(PersistentShellTools.SendShellAsync), nameof(PersistentShellTools.KillShellAsync));
-		ToolHelper.AddTools(subAgentTools, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync), nameof(FileTools.WriteFileAsync), nameof(FileTools.EditFileAsync), nameof(FileTools.MultiEditFileAsync));
-		ToolHelper.AddTools(subAgentTools, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
-		ToolHelper.AddTools(subAgentTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
-		ToolHelper.AddTools(subAgentTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync));
-		ToolHelper.AddTools(subAgentTools, typeof(SubAgentTools), nameof(SubAgentTools.AgentTaskCompleteAsync));
-		ToolHelper.AddTools(subAgentTools, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
+		// Sub-agent: same as developer minus sub-agent spawning.
+		List<Tool> subAgent = new List<Tool>();
+		ToolHelper.AddTools(subAgent, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
+		ToolHelper.AddTools(subAgent, typeof(PersistentShellTools), nameof(PersistentShellTools.StartShellAsync), nameof(PersistentShellTools.SendShellAsync), nameof(PersistentShellTools.KillShellAsync));
+		ToolHelper.AddTools(subAgent, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync), nameof(FileTools.WriteFileAsync), nameof(FileTools.EditFileAsync), nameof(FileTools.MultiEditFileAsync));
+		ToolHelper.AddTools(subAgent, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
+		ToolHelper.AddTools(subAgent, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
+		ToolHelper.AddTools(subAgent, typeof(TicketTools), nameof(TicketTools.LogMessageAsync));
+		ToolHelper.AddTools(subAgent, typeof(SubAgentTools), nameof(SubAgentTools.AgentTaskCompleteAsync));
+		ToolHelper.AddTools(subAgent, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
 
-		List<Tool> compactionTools = new List<Tool>();
-		ToolHelper.AddTools(compactionTools, typeof(CompactionSummarizer),
+		// Compaction: summarization tools only.
+		List<Tool> compaction = new List<Tool>();
+		ToolHelper.AddTools(compaction, typeof(CompactionSummarizer),
 			nameof(CompactionSummarizer.AddMemoryAsync),
 			nameof(CompactionSummarizer.RemoveMemoryAsync),
 			nameof(CompactionSummarizer.SummarizeHistoryAsync));
 
-		Dictionary<LlmRole, List<Tool>> result = new Dictionary<LlmRole, List<Tool>>
+		return new Dictionary<ToolSet, List<Tool>>
 		{
-			[LlmRole.Planning] = planningTools,
-			[LlmRole.Developer] = developerTools,
-			[LlmRole.Compaction] = compactionTools,
-			[LlmRole.SubAgent] = subAgentTools
+			[ToolSet.PlanningBacklog] = planningBacklog,
+			[ToolSet.PlanningActive] = planningActive,
+			[ToolSet.PlanningOther] = commonPlanningTools,
+			[ToolSet.Developer] = developer,
+			[ToolSet.SubAgent] = subAgent,
+			[ToolSet.Compaction] = compaction
 		};
-
-		return result;
 	}
 }

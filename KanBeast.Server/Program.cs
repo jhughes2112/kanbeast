@@ -54,6 +54,7 @@ public class Program
         builder.Services.AddSingleton<WorkerOrchestrator>();
         builder.Services.AddSingleton<IWorkerOrchestrator>(sp => sp.GetRequiredService<WorkerOrchestrator>());
         builder.Services.AddHostedService<WorkerOrchestrator>(sp => sp.GetRequiredService<WorkerOrchestrator>());
+        builder.Services.AddHostedService<ActiveTicketWatchdog>();
         builder.Services.AddSingleton(containerContext);
 
         // Give workers enough time to commit, push, and move tickets to Backlog during shutdown.

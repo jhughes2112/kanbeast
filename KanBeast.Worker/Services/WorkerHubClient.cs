@@ -189,6 +189,11 @@ public class WorkerHubClient : IAsyncDisposable
 		await HubSendAsync("SetConversationBusy", [_ticketId, conversationId, isBusy]);
 	}
 
+	public async Task SendHeartbeatAsync()
+	{
+		await HubSendAsync("WorkerHeartbeat", [_ticketId]);
+	}
+
 	public async Task ConnectAsync(CancellationToken cancellationToken)
 	{
 		await _connection.StartAsync(cancellationToken);

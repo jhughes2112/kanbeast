@@ -19,7 +19,7 @@ public class ToolContext
 	public HashSet<string> ReadFiles { get; }
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
-	public string? SubAgentLlmConfigId { get; set; }
+	public string? SubAgentLlmConfigId { get; }
 	public ShellState? Shell { get; internal set; }
 	public ConversationMemories Memories { get; }
 	public Action? OnMemoriesChanged { get; set; }
@@ -27,12 +27,17 @@ public class ToolContext
 	public ToolContext(
 		string? currentTaskId,
 		string? currentSubtaskId,
-		ConversationMemories memories)
+		ConversationMemories memories,
+		string? subAgentLlmConfigId,
+		Action? onMemoriesChanged)
 	{
 		ReadFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 		CurrentTaskId = currentTaskId;
 		CurrentSubtaskId = currentSubtaskId;
 		Memories = memories;
+		SubAgentLlmConfigId = subAgentLlmConfigId;
+		Shell = null;
+		OnMemoriesChanged = onMemoriesChanged;
 	}
 
 	// Disposes and removes the persistent shell if one exists.

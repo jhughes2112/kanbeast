@@ -52,7 +52,7 @@ public class AgentOrchestrator
 
 			ICompaction compaction = CreateCompaction();
 			ConversationMemories memories = new ConversationMemories(existing.Memories);
-			ToolContext context = new ToolContext(null, null, memories);
+			ToolContext context = new ToolContext(null, null, memories, null, null);
 			_planningConversation = new LlmConversation(existing, LlmRole.Planning, context, compaction);
 			context.OnMemoriesChanged = _planningConversation.RefreshMemoriesMessage;
 
@@ -72,7 +72,7 @@ public class AgentOrchestrator
 				""";
 
 			ICompaction compaction = CreateCompaction();
-			ToolContext context = new ToolContext(null, null, memories);
+			ToolContext context = new ToolContext(null, null, memories, null, null);
 			_planningConversation = new LlmConversation(
 				WorkerSession.Prompts["planning"],
 				userPrompt,
@@ -103,6 +103,7 @@ public class AgentOrchestrator
 		System.Collections.Concurrent.ConcurrentQueue<string> clearQueue = WorkerSession.HubClient.GetClearQueue();
 		System.Collections.Concurrent.ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
 		System.Collections.Concurrent.ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
+		DateTimeOffset lastHeartbeat = DateTimeOffset.UtcNow;
 
 		for (; ; )
 		{
@@ -112,6 +113,14 @@ public class AgentOrchestrator
 			while (!chatQueue.TryDequeue(out message))
 			{
 				cancellationToken.ThrowIfCancellationRequested();
+
+				// Send periodic heartbeat so the server knows the worker is alive.
+				DateTimeOffset now = DateTimeOffset.UtcNow;
+				if ((now - lastHeartbeat).TotalSeconds >= 30)
+				{
+					lastHeartbeat = now;
+					await WorkerSession.HubClient.SendHeartbeatAsync();
+				}
 
 				// Drain any pending clear requests while idle.
 				while (clearQueue.TryDequeue(out string? clearConversationId))

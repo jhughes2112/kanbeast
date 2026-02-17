@@ -158,12 +158,26 @@ function setupSignalR() {
 
     // Conversation events from workers.
     connection.on('ConversationsUpdated', (ticketId, conversations) => {
+        const oldConvos = ticketConversations[ticketId] || [];
         ticketConversations[ticketId] = conversations;
+
+        // Detect newly appeared active conversations to auto-follow.
+        const oldIds = new Set();
+        for (let i = 0; i < oldConvos.length; i++) {
+            oldIds.add(oldConvos[i].id);
+        }
+        let newestNewId = null;
+        for (let i = 0; i < conversations.length; i++) {
+            if (!conversations[i].isFinished && !oldIds.has(conversations[i].id)) {
+                newestNewId = conversations[i].id;
+            }
+        }
+
         if (chatModalTicketId === ticketId) {
-            updateConversationDropdown(ticketId);
+            updateConversationDropdown(ticketId, newestNewId);
         }
         if (currentDetailTicketId === ticketId) {
-            updateDetailConversationDropdown(ticketId);
+            updateDetailConversationDropdown(ticketId, newestNewId);
         }
     });
 
@@ -2340,7 +2354,8 @@ function pickDefaultConversation(convos) {
 }
 
 // Updates the conversation dropdown in the full chat modal.
-function updateConversationDropdown(ticketId) {
+// switchToId: if a new conversation just appeared, switch to it.
+function updateConversationDropdown(ticketId, switchToId) {
     const dropdown = document.getElementById('conversationDropdown');
     if (!dropdown) {
         return;
@@ -2359,12 +2374,15 @@ function updateConversationDropdown(ticketId) {
         dropdown.appendChild(option);
     }
 
-    // Preserve selection if still valid.
-    if (previousValue && convos.some(c => c.id === previousValue)) {
+    // Auto-follow: switch to a newly appeared conversation.
+    if (switchToId && convos.some(c => c.id === switchToId)) {
+        dropdown.value = switchToId;
+        dropdown.dispatchEvent(new Event('change'));
+    } else if (previousValue && convos.some(c => c.id === previousValue)) {
         dropdown.value = previousValue;
     }
 
-    // Auto-follow: if nothing is selected, pick the best active conversation.
+    // If still nothing selected, pick the best active conversation.
     if (!dropdown.value && convos.length > 0) {
         const bestId = pickDefaultConversation(convos);
         if (bestId) {
@@ -2380,7 +2398,7 @@ function updateConversationDropdown(ticketId) {
     }
 }
 
-function updateDetailConversationDropdown(ticketId) {
+function updateDetailConversationDropdown(ticketId, switchToId) {
     const dropdown = document.getElementById('detailConversationDropdown');
     if (!dropdown) {
         return;
@@ -2399,11 +2417,15 @@ function updateDetailConversationDropdown(ticketId) {
         dropdown.appendChild(option);
     }
 
-    if (previousValue && convos.some(c => c.id === previousValue)) {
+    // Auto-follow: switch to a newly appeared conversation.
+    if (switchToId && convos.some(c => c.id === switchToId)) {
+        dropdown.value = switchToId;
+        dropdown.dispatchEvent(new Event('change'));
+    } else if (previousValue && convos.some(c => c.id === previousValue)) {
         dropdown.value = previousValue;
     }
 
-    // Auto-follow: if nothing is selected, pick the best active conversation.
+    // If still nothing selected, pick the best active conversation.
     if (!dropdown.value && convos.length > 0) {
         const bestId = pickDefaultConversation(convos);
         if (bestId) {

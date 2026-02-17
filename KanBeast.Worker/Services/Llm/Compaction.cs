@@ -130,7 +130,7 @@ public class CompactionSummarizer : ICompaction
 			""";
 
 		ToolContext parentContext = conversation.ToolContext;
-		ToolContext compactionContext = new ToolContext(parentContext.CurrentTaskId, parentContext.CurrentSubtaskId, parentContext.Memories);
+		ToolContext compactionContext = new ToolContext(parentContext.CurrentTaskId, parentContext.CurrentSubtaskId, parentContext.Memories, null, null);
 		compactionContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
 		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.DisplayName) ? $"{conversation.DisplayName} (Compaction)" : "Compaction";
 		ICompaction noCompaction = new CompactionNone();
