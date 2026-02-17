@@ -106,10 +106,14 @@ Short keyword phrases, max 25 words per field. Values replace previous ones — 
 Notes persist to settings and appear in all future get_next_work_item calls across all tickets.
 
 BLOCKED STATE:
-Log a clear message and stop when: no available LLMs, all LLMs failed on the same subtask, or you need decisions you cannot make alone.
+Log a clear message and stop when: no available LLMs, all LLMs failed on the same subtask, or you need a decision that requires the human's input.  Use set_ticket_status to "Failed" exit the Active state.
+
+FINISHED:
+When all subtasks are complete and there is no further work to perform, you MUST call the update_llm_notes one final time and update their performance notes, then set_ticket_status to "Done" to indicate this ticket is complete.
 </developing_mode>
 
 <development_standards>
+Read the skills in /workspace/skills/ to see what the user has specified as their coding standards or other relevant guidelines. If no guidance is present, do your best.
 
 Code Quality:
 - Match existing codebase style: naming, indentation, brace style, patterns.

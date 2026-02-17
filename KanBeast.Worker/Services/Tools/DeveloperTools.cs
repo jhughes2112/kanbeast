@@ -68,7 +68,7 @@ public static class DeveloperTools
 				ToolContext devContext = new ToolContext(taskId, subtaskId, memories, resolvedSubAgentId, null);
 
 				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
-				LlmConversation conversation = new LlmConversation(
+				ILlmConversation conversation = new CompactingConversation(
 					systemPrompt,
 					initialPrompt,
 					memories,
@@ -131,7 +131,7 @@ public static class DeveloperTools
 								0.9);
 
 							ToolContext continueContext = new ToolContext(taskId, subtaskId, memories, devContext.SubAgentLlmConfigId, null);
-							conversation = new LlmConversation(systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, $"Developer - {subtaskName} (retry)");
+							conversation = new CompactingConversation(systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, $"Developer - {subtaskName} (retry)");
 							continueContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
 							iterationCount = 0;
 						}

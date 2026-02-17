@@ -58,7 +58,7 @@ public static class SubAgentTools
 				ICompaction compaction = new CompactionNone();
 				ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, memories, null, null);
 
-				LlmConversation conversation = new LlmConversation(
+				ILlmConversation conversation = new CompactingConversation(
 					systemPrompt,
 					fullInstructions,
 					memories,

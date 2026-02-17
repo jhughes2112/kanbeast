@@ -5,7 +5,7 @@ using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
 
-// Holds the content and sync state for a single LLM conversation.
+// Compaction-based conversation strategy.
 //
 // CONVERSATION STRUCTURE:
 // The conversation maintains a specific message structure for prompt cache efficiency and compaction:
@@ -26,7 +26,7 @@ namespace KanBeast.Worker.Services;
 // Rather than requiring explicit SyncToServerAsync calls, the conversation tracks when it first
 // became dirty via a UTC timestamp. Any awaited operation will auto-sync if 5+ seconds have elapsed.
 //
-public class LlmConversation
+public class CompactingConversation : ILlmConversation
 {
     private const long SyncDelayTicks = TimeSpan.TicksPerSecond * 5;
 
@@ -42,7 +42,7 @@ public class LlmConversation
     public string DisplayName => Data.DisplayName;
     public List<ConversationMessage> Messages => Data.Messages;
 
-    public LlmConversation(string systemPrompt, string userPrompt, ConversationMemories memories, LlmRole role, ToolContext toolContext, ICompaction compaction, string displayName)
+    public CompactingConversation(string systemPrompt, string userPrompt, ConversationMemories memories, LlmRole role, ToolContext toolContext, ICompaction compaction, string displayName)
     {
         Data = new ConversationData
         {
@@ -72,7 +72,7 @@ public class LlmConversation
     }
 
     // Restores a conversation from server data. Memories are reconstituted from Data.Memories.
-    public LlmConversation(ConversationData data, LlmRole role, ToolContext toolContext, ICompaction compaction)
+    public CompactingConversation(ConversationData data, LlmRole role, ToolContext toolContext, ICompaction compaction)
     {
         Data = data;
         _memories = new ConversationMemories(data.Memories);

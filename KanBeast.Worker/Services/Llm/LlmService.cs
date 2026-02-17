@@ -178,7 +178,7 @@ public class LlmService
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<(LlmResult result, decimal cost)> RunAsync(LlmConversation conversation, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
+	public async Task<(LlmResult result, decimal cost)> RunAsync(ILlmConversation conversation, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
 		List<Tool> tools = ToolsFactory.GetTools(conversation.Role, WorkerSession.TicketHolder.Ticket.Status);
 		List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;

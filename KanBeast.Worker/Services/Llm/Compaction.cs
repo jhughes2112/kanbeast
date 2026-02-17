@@ -8,19 +8,19 @@ namespace KanBeast.Worker.Services;
 // Defines the contract for context compaction strategies.
 public interface ICompaction
 {
-    Task CompactIfNeededAsync(LlmConversation conversation, CancellationToken cancellationToken);
-    Task CompactNowAsync(LlmConversation conversation, CancellationToken cancellationToken);
+    Task CompactIfNeededAsync(CompactingConversation conversation, CancellationToken cancellationToken);
+    Task CompactNowAsync(CompactingConversation conversation, CancellationToken cancellationToken);
 }
 
 // Keeps context untouched when compaction is disabled.
 public class CompactionNone : ICompaction
 {
-    public Task CompactIfNeededAsync(LlmConversation conversation, CancellationToken cancellationToken)
+    public Task CompactIfNeededAsync(CompactingConversation conversation, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
     }
 
-    public Task CompactNowAsync(LlmConversation conversation, CancellationToken cancellationToken)
+    public Task CompactNowAsync(CompactingConversation conversation, CancellationToken cancellationToken)
     {
         return Task.CompletedTask;
     }
@@ -29,7 +29,7 @@ public class CompactionNone : ICompaction
 // Summarizes conversation messages into a compact continuation summary.
 //
 // COMPACTION STRATEGY:
-// Works with the LlmConversation structure: [system][instructions][facts][summaries][conversation...]
+// Works with the CompactingConversation structure: [system][instructions][facts][summaries][conversation...]
 //
 // When context exceeds threshold:
 //   1. Messages 0-3 (system, instructions, facts, summaries) are NEVER compressed
@@ -69,7 +69,7 @@ public class CompactionSummarizer : ICompaction
         _contextSizePercent = contextSizePercent;
     }
 
-    public Task CompactIfNeededAsync(LlmConversation conversation, CancellationToken cancellationToken)
+    public Task CompactIfNeededAsync(CompactingConversation conversation, CancellationToken cancellationToken)
     {
         int contextLength = _llmProxy.GetSmallestContextLength();
         int effectiveThreshold;
@@ -94,15 +94,15 @@ public class CompactionSummarizer : ICompaction
         return PerformCompactionAsync(conversation, cancellationToken);
     }
 
-    public Task CompactNowAsync(LlmConversation conversation, CancellationToken cancellationToken)
+    public Task CompactNowAsync(CompactingConversation conversation, CancellationToken cancellationToken)
     {
         Console.WriteLine("[Compaction] Forced compaction to hoist memories...");
         return PerformCompactionAsync(conversation, cancellationToken);
     }
 
-    private async Task PerformCompactionAsync(LlmConversation conversation, CancellationToken cancellationToken)
+    private async Task PerformCompactionAsync(CompactingConversation conversation, CancellationToken cancellationToken)
     {
-        int startIndex = LlmConversation.FirstCompressibleIndex;
+        int startIndex = CompactingConversation.FirstCompressibleIndex;
         int totalCompressible = conversation.Messages.Count - startIndex;
 
         if (totalCompressible < 2)
@@ -135,7 +135,7 @@ public class CompactionSummarizer : ICompaction
 		string compactLogPrefix = !string.IsNullOrWhiteSpace(conversation.DisplayName) ? $"{conversation.DisplayName} (Compaction)" : "Compaction";
 		ICompaction noCompaction = new CompactionNone();
 
-		LlmConversation summaryConversation = new LlmConversation(_compactionPrompt, userPrompt, conversation.Memories, LlmRole.Compaction, compactionContext, noCompaction, compactLogPrefix);
+		CompactingConversation summaryConversation = new CompactingConversation(_compactionPrompt, userPrompt, conversation.Memories, LlmRole.Compaction, compactionContext, noCompaction, compactLogPrefix);
 		await summaryConversation.AddUserMessageAsync($"""
 			<history>
 			{historyBlock}

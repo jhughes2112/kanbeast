@@ -426,6 +426,53 @@ public static class TicketTools
         return Task.FromResult(result);
     }
 
+    [Description("Set the ticket status to Done or Failed. Call this when all work is verified complete (Done) or the ticket cannot be completed (Failed).")
+    ]
+    public static async Task<ToolResult> SetTicketStatusAsync(
+        [Description("The new status for the ticket. Must be 'Done' or 'Failed'.")] string status,
+        [Description("Brief reason for the status change.")] string reason,
+        ToolContext context)
+    {
+        ToolResult result;
+
+        if (status != "Done" && status != "Failed")
+        {
+            result = new ToolResult("Error: Status must be 'Done' or 'Failed'", false);
+        }
+        else if (string.IsNullOrWhiteSpace(reason))
+        {
+            result = new ToolResult("Error: Reason cannot be empty", false);
+        }
+        else
+        {
+            try
+            {
+                Ticket? updated = await WorkerSession.ApiClient.UpdateTicketStatusAsync(WorkerSession.TicketHolder.Ticket.Id, status, WorkerSession.CancellationToken);
+
+                if (updated == null)
+                {
+                    result = new ToolResult($"Error: API returned null when setting status to {status}", false);
+                }
+                else
+                {
+                    WorkerSession.TicketHolder.Update(updated);
+                    await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Manager set ticket to {status}: {reason}", WorkerSession.CancellationToken);
+                    result = new ToolResult($"Ticket status set to {status}. Reason: {reason}", true);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                result = new ToolResult("Error: Request timed out or cancelled while updating ticket status", false);
+            }
+            catch (Exception ex)
+            {
+                result = new ToolResult($"Error: Failed to update ticket status: {ex.Message}", false);
+            }
+        }
+
+        return result;
+    }
+
     private static string FormatTicketSummary(Ticket ticket, string header)
     {
         StringBuilder sb = new StringBuilder();

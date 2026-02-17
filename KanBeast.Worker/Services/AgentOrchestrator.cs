@@ -15,7 +15,7 @@ public class AgentOrchestrator
 	private readonly CompactionSettings _compactionSettings;
 	private List<LLMConfig> _llmConfigs;
 
-	private LlmConversation? _planningConversation;
+	private ILlmConversation? _planningConversation;
 
 	public AgentOrchestrator(
 		ILogger<AgentOrchestrator> logger,
@@ -53,7 +53,7 @@ public class AgentOrchestrator
 			ICompaction compaction = CreateCompaction();
 			ConversationMemories memories = new ConversationMemories(existing.Memories);
 			ToolContext context = new ToolContext(null, null, memories, null, null);
-			_planningConversation = new LlmConversation(existing, LlmRole.Planning, context, compaction);
+			_planningConversation = new CompactingConversation(existing, LlmRole.Planning, context, compaction);
 			context.OnMemoriesChanged = _planningConversation.RefreshMemoriesMessage;
 
 			// Force a sync so clients get a ConversationsUpdated notification.
@@ -73,7 +73,7 @@ public class AgentOrchestrator
 
 			ICompaction compaction = CreateCompaction();
 			ToolContext context = new ToolContext(null, null, memories, null, null);
-			_planningConversation = new LlmConversation(
+			_planningConversation = new CompactingConversation(
 				WorkerSession.Prompts["planning"],
 				userPrompt,
 				memories,

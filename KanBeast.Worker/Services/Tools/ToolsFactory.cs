@@ -58,7 +58,7 @@ public static class ToolsFactory
 		// Planning + Active: common + developer orchestration tools.
 		List<Tool> planningActive = new List<Tool>(commonPlanningTools);
 		ToolHelper.AddTools(planningActive, typeof(DeveloperTools), nameof(DeveloperTools.StartDeveloperAsync));
-		ToolHelper.AddTools(planningActive, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.UpdateLlmNotesAsync));
+		ToolHelper.AddTools(planningActive, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.UpdateLlmNotesAsync), nameof(TicketTools.SetTicketStatusAsync));
 
 		// Developer: full capabilities including sub-agents.
 		List<Tool> developer = new List<Tool>();

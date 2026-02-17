@@ -37,7 +37,7 @@ public class LlmProxy
 
 	// Runs the conversation using only the LLM identified by configId.
 	// Waits for short rate limits (≤20s), returns error for longer ones or failures.
-	public async Task<LlmResult> ContinueWithConfigIdAsync(string configId, LlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
+	public async Task<LlmResult> ContinueWithConfigIdAsync(string configId, ILlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
 		LlmService? service = null;
 		foreach (LlmService s in _services)
@@ -122,7 +122,7 @@ public class LlmProxy
 	// Runs the conversation using the first available LLM.
 	// Waits for short rate limits (≤20s), returns error for longer ones or failures.
 	// Does not silently cycle through LLMs — returns the result (success or failure) from the one it picks.
-	public async Task<LlmResult> ContinueAsync(LlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
+	public async Task<LlmResult> ContinueAsync(ILlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
 		cancellationToken.ThrowIfCancellationRequested();
 
