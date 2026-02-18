@@ -28,12 +28,12 @@ public static class TicketTools
 
         if (!updated)
         {
-            result = new ToolResult($"Error: LLM config '{llmConfigId}' not found", false);
+            result = new ToolResult($"Error: LLM config '{llmConfigId}' not found", false, false);
         }
         else
         {
             await WorkerSession.ApiClient.UpdateLlmNotesAsync(llmConfigId, strengths, weaknesses, WorkerSession.CancellationToken);
-            result = new ToolResult($"Updated notes for LLM '{llmConfigId}'. Strengths: {strengths}. Weaknesses: {weaknesses}.", false);
+            result = new ToolResult($"Updated notes for LLM '{llmConfigId}'. Strengths: {strengths}. Weaknesses: {weaknesses}.", false, false);
         }
 
         return result;
@@ -74,11 +74,11 @@ public static class TicketTools
 
         if (string.IsNullOrWhiteSpace(summary))
         {
-            result = new ToolResult("Error: Summary cannot be empty", false);
+            result = new ToolResult("Error: Summary cannot be empty", false, false);
         }
         else
         {
-            result = new ToolResult(summary, true);
+            result = new ToolResult(summary, true, false);
         }
 
         return Task.FromResult(result);
@@ -94,11 +94,11 @@ public static class TicketTools
         {
             WorkerSession.TicketHolder.Update(updated);
             await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, "Manager: Deleted all tasks to restart planning", WorkerSession.CancellationToken);
-            result = new ToolResult("All tasks and subtasks deleted. You can now create a new plan.", false);
+            result = new ToolResult("All tasks and subtasks deleted. You can now create a new plan.", false, false);
         }
         else
         {
-            result = new ToolResult("Error: Failed to delete tasks", false);
+            result = new ToolResult("Error: Failed to delete tasks", false, false);
         }
 
         return result;
@@ -113,22 +113,22 @@ public static class TicketTools
 
         if (string.IsNullOrWhiteSpace(message))
         {
-            result = new ToolResult("Error: Message cannot be empty", false);
+            result = new ToolResult("Error: Message cannot be empty", false, false);
         }
         else
         {
             try
             {
                 await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, message, WorkerSession.CancellationToken);
-                result = new ToolResult("Message logged", false);
+                result = new ToolResult("Message logged", false, false);
             }
             catch (OperationCanceledException)
             {
-                result = new ToolResult("Error: Request timed out or cancelled while logging message", false);
+                result = new ToolResult("Error: Request timed out or cancelled while logging message", false, false);
             }
             catch (Exception ex)
             {
-                result = new ToolResult($"Error: Failed to log message: {ex.Message}", false);
+                result = new ToolResult($"Error: Failed to log message: {ex.Message}", false, false);
             }
         }
 
@@ -161,7 +161,7 @@ public static class TicketTools
 
         if (string.IsNullOrWhiteSpace(taskName))
         {
-            result = new ToolResult("Error: Task name cannot be empty", false);
+            result = new ToolResult("Error: Task name cannot be empty", false, false);
         }
         else
         {
@@ -178,22 +178,22 @@ public static class TicketTools
 
                 if (updated == null)
                 {
-                    result = new ToolResult("Error: API returned null when creating task", false);
+                    result = new ToolResult("Error: API returned null when creating task", false, false);
                 }
                 else
                 {
                     WorkerSession.TicketHolder.Update(updated);
                     await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Created task '{taskName}'", WorkerSession.CancellationToken);
-                    result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created task '{taskName}'"), false);
+                    result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created task '{taskName}'"), false, false);
                 }
             }
             catch (OperationCanceledException)
             {
-                result = new ToolResult("Error: Request timed out or cancelled while creating task", false);
+                result = new ToolResult("Error: Request timed out or cancelled while creating task", false, false);
             }
             catch (Exception ex)
             {
-                result = new ToolResult($"Error: Failed to create task: {ex.Message}", false);
+                result = new ToolResult($"Error: Failed to create task: {ex.Message}", false, false);
             }
         }
 
@@ -239,11 +239,11 @@ public static class TicketTools
 
         if (string.IsNullOrWhiteSpace(taskName))
         {
-            result = new ToolResult("Error: Task name cannot be empty", false);
+            result = new ToolResult("Error: Task name cannot be empty", false, false);
         }
         else if (string.IsNullOrWhiteSpace(subtaskName))
         {
-            result = new ToolResult("Error: Subtask name cannot be empty", false);
+            result = new ToolResult("Error: Subtask name cannot be empty", false, false);
         }
         else
         {
@@ -251,7 +251,7 @@ public static class TicketTools
 
             if (taskId == null)
             {
-                result = new ToolResult($"Error: Task '{taskName}' not found", false);
+                result = new ToolResult($"Error: Task '{taskName}' not found", false, false);
             }
             else
             {
@@ -268,22 +268,22 @@ public static class TicketTools
 
                     if (updated == null)
                     {
-                        result = new ToolResult("Error: API returned null when creating subtask", false);
+                        result = new ToolResult("Error: API returned null when creating subtask", false, false);
                     }
                     else
                     {
                         WorkerSession.TicketHolder.Update(updated);
                         await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Created subtask '{subtaskName}' under task '{taskName}'", WorkerSession.CancellationToken);
-                        result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created subtask '{subtaskName}' under task '{taskName}'"), false);
+                        result = new ToolResult(FormatTicketSummary(updated, $"SUCCESS: Created subtask '{subtaskName}' under task '{taskName}'"), false, false);
                     }
                 }
                 catch (OperationCanceledException)
                 {
-                    result = new ToolResult("Error: Request timed out or cancelled while creating subtask", false);
+                    result = new ToolResult("Error: Request timed out or cancelled while creating subtask", false, false);
                 }
                 catch (Exception ex)
                 {
-                    result = new ToolResult($"Error: Failed to create subtask: {ex.Message}", false);
+                    result = new ToolResult($"Error: Failed to create subtask: {ex.Message}", false, false);
                 }
             }
         }
@@ -351,7 +351,7 @@ public static class TicketTools
         {
             sb.AppendLine("ALL WORK COMPLETE: No remaining incomplete tasks or subtasks.");
             sb.AppendLine("You should move the ticket to Done status if all work is verified.");
-            ToolResult doneResult = new ToolResult(sb.ToString(), false);
+            ToolResult doneResult = new ToolResult(sb.ToString(), false, false);
             return Task.FromResult(doneResult);
         }
 
@@ -399,7 +399,7 @@ public static class TicketTools
                 sb.AppendLine("  Reason: All configured LLMs are permanently down or unavailable.");
             }
 
-            ToolResult blockedResult = new ToolResult(sb.ToString(), false);
+            ToolResult blockedResult = new ToolResult(sb.ToString(), false, false);
             return Task.FromResult(blockedResult);
         }
 
@@ -422,7 +422,7 @@ public static class TicketTools
             }
         }
 
-        ToolResult result = new ToolResult(sb.ToString(), false);
+        ToolResult result = new ToolResult(sb.ToString(), false, false);
         return Task.FromResult(result);
     }
 
@@ -437,11 +437,11 @@ public static class TicketTools
 
         if (status != "Done" && status != "Failed")
         {
-            result = new ToolResult("Error: Status must be 'Done' or 'Failed'", false);
+            result = new ToolResult("Error: Status must be 'Done' or 'Failed'", false, false);
         }
         else if (string.IsNullOrWhiteSpace(reason))
         {
-            result = new ToolResult("Error: Reason cannot be empty", false);
+            result = new ToolResult("Error: Reason cannot be empty", false, false);
         }
         else
         {
@@ -451,22 +451,22 @@ public static class TicketTools
 
                 if (updated == null)
                 {
-                    result = new ToolResult($"Error: API returned null when setting status to {status}", false);
+                    result = new ToolResult($"Error: API returned null when setting status to {status}", false, false);
                 }
                 else
                 {
                     WorkerSession.TicketHolder.Update(updated);
                     await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Manager set ticket to {status}: {reason}", WorkerSession.CancellationToken);
-                    result = new ToolResult($"Ticket status set to {status}. Reason: {reason}", true);
+                    result = new ToolResult($"Ticket status set to {status}. Reason: {reason}", true, false);
                 }
             }
             catch (OperationCanceledException)
             {
-                result = new ToolResult("Error: Request timed out or cancelled while updating ticket status", false);
+                result = new ToolResult("Error: Request timed out or cancelled while updating ticket status", false, false);
             }
             catch (Exception ex)
             {
-                result = new ToolResult($"Error: Failed to update ticket status: {ex.Message}", false);
+                result = new ToolResult($"Error: Failed to update ticket status: {ex.Message}", false, false);
             }
         }
 

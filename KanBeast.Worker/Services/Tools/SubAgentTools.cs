@@ -37,11 +37,11 @@ public static class SubAgentTools
 
 		if (string.IsNullOrWhiteSpace(taskSummary))
 		{
-			result = new ToolResult("Error: taskSummary cannot be empty", false);
+			result = new ToolResult("Error: taskSummary cannot be empty", false, false);
 		}
 		else if (string.IsNullOrWhiteSpace(instructions))
 		{
-			result = new ToolResult("Error: instructions cannot be empty", false);
+			result = new ToolResult("Error: instructions cannot be empty", false, false);
 		}
 		else
 		{
@@ -55,18 +55,16 @@ public static class SubAgentTools
 				string systemPrompt = WorkerSession.Prompts.TryGetValue("subagent", out string? prompt) ? prompt : string.Empty;
 
 				ConversationMemories memories = new ConversationMemories(context.Memories);
-				ICompaction compaction = new CompactionNone();
-				ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, memories, null, null);
+					ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, memories, null, null);
 
-				ILlmConversation conversation = new CompactingConversation(
-					systemPrompt,
-					fullInstructions,
-					memories,
-					LlmRole.SubAgent,
-					subContext,
-					compaction,
-					$"Sub-agent: {taskSummary}");
-				subContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
+					ILlmConversation conversation = LlmConversationFactory.Create(
+						WorkerSession.ConversationType,
+						systemPrompt,
+						fullInstructions,
+						memories,
+						LlmRole.SubAgent,
+						subContext,
+						$"Sub-agent: {taskSummary}");
 
 				string content = string.Empty;
 
@@ -107,7 +105,7 @@ public static class SubAgentTools
 
 				await conversation.FinalizeAsync(WorkerSession.CancellationToken);
 
-				result = new ToolResult(content, false);
+				result = new ToolResult(content, false, false);
 			}
 			catch (OperationCanceledException)
 			{
@@ -115,7 +113,7 @@ public static class SubAgentTools
 			}
 			catch (Exception ex)
 			{
-				result = new ToolResult($"Error: Sub-agent failed: {ex.Message}", false);
+				result = new ToolResult($"Error: Sub-agent failed: {ex.Message}", false, false);
 			}
 		}
 
@@ -131,11 +129,11 @@ public static class SubAgentTools
 
 		if (string.IsNullOrWhiteSpace(result))
 		{
-			toolResult = new ToolResult("Error: Result cannot be empty", false);
+			toolResult = new ToolResult("Error: Result cannot be empty", false, false);
 		}
 		else
 		{
-			toolResult = new ToolResult(result, true);
+			toolResult = new ToolResult(result, true, false);
 		}
 
 		return Task.FromResult(toolResult);

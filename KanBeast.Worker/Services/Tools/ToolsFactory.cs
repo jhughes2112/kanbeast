@@ -13,31 +13,48 @@ public static class ToolsFactory
 		PlanningActive,
 		PlanningOther,
 		Developer,
-		SubAgent,
-		Compaction
+		SubAgent
 	}
 
 	private static readonly Dictionary<ToolSet, List<Tool>> Tools = BuildAllToolSets();
 
-	public static List<Tool> GetTools(LlmRole role, TicketStatus status)
+	public static List<Tool> GetTools(ILlmConversation conversation)
 	{
-		ToolSet key = role switch
+		TicketStatus status = WorkerSession.TicketHolder.Ticket.Status;
+
+		ToolSet key = conversation.Role switch
 		{
 			LlmRole.Planning when status == TicketStatus.Backlog => ToolSet.PlanningBacklog,
 			LlmRole.Planning when status == TicketStatus.Active => ToolSet.PlanningActive,
 			LlmRole.Planning => ToolSet.PlanningOther,
 			LlmRole.Developer => ToolSet.Developer,
 			LlmRole.SubAgent => ToolSet.SubAgent,
-			LlmRole.Compaction => ToolSet.Compaction,
 			_ => ToolSet.PlanningOther
 		};
 
-		if (Tools.TryGetValue(key, out List<Tool>? tools))
+		List<Tool> roleTools;
+		if (Tools.TryGetValue(key, out List<Tool>? cached))
 		{
-			return tools;
+			roleTools = cached;
+		}
+		else
+		{
+			roleTools = new List<Tool>();
 		}
 
-		return new List<Tool>();
+		IReadOnlyList<Tool> conversationTools = conversation.GetAdditionalTools();
+		if (conversationTools.Count == 0)
+		{
+			return roleTools;
+		}
+
+		List<Tool> merged = new List<Tool>(roleTools);
+		foreach (Tool tool in conversationTools)
+		{
+			merged.Add(tool);
+		}
+
+		return merged;
 	}
 
 	private static Dictionary<ToolSet, List<Tool>> BuildAllToolSets()
@@ -49,7 +66,6 @@ public static class ToolsFactory
 		ToolHelper.AddTools(commonPlanningTools, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
 		ToolHelper.AddTools(commonPlanningTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(commonPlanningTools, typeof(TicketTools), nameof(TicketTools.LogMessageAsync));
-		ToolHelper.AddTools(commonPlanningTools, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
 
 		// Planning + Backlog: common + task creation tools.
 		List<Tool> planningBacklog = new List<Tool>(commonPlanningTools);
@@ -69,7 +85,6 @@ public static class ToolsFactory
 		ToolHelper.AddTools(developer, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(developer, typeof(TicketTools), nameof(TicketTools.LogMessageAsync), nameof(TicketTools.EndSubtaskAsync));
 		ToolHelper.AddTools(developer, typeof(SubAgentTools), nameof(SubAgentTools.StartSubAgentAsync));
-		ToolHelper.AddTools(developer, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
 
 		// Sub-agent: same as developer minus sub-agent spawning.
 		List<Tool> subAgent = new List<Tool>();
@@ -80,14 +95,6 @@ public static class ToolsFactory
 		ToolHelper.AddTools(subAgent, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(subAgent, typeof(TicketTools), nameof(TicketTools.LogMessageAsync));
 		ToolHelper.AddTools(subAgent, typeof(SubAgentTools), nameof(SubAgentTools.AgentTaskCompleteAsync));
-		ToolHelper.AddTools(subAgent, typeof(MemoryTools), nameof(MemoryTools.AddMemoryAsync), nameof(MemoryTools.RemoveMemoryAsync));
-
-		// Compaction: summarization tools only.
-		List<Tool> compaction = new List<Tool>();
-		ToolHelper.AddTools(compaction, typeof(CompactionSummarizer),
-			nameof(CompactionSummarizer.AddMemoryAsync),
-			nameof(CompactionSummarizer.RemoveMemoryAsync),
-			nameof(CompactionSummarizer.SummarizeHistoryAsync));
 
 		return new Dictionary<ToolSet, List<Tool>>
 		{
@@ -95,8 +102,7 @@ public static class ToolsFactory
 			[ToolSet.PlanningActive] = planningActive,
 			[ToolSet.PlanningOther] = commonPlanningTools,
 			[ToolSet.Developer] = developer,
-			[ToolSet.SubAgent] = subAgent,
-			[ToolSet.Compaction] = compaction
+			[ToolSet.SubAgent] = subAgent
 		};
 	}
 }

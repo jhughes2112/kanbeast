@@ -180,7 +180,7 @@ public class LlmService
 
 	public async Task<(LlmResult result, decimal cost)> RunAsync(ILlmConversation conversation, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
-		List<Tool> tools = ToolsFactory.GetTools(conversation.Role, WorkerSession.TicketHolder.Ticket.Status);
+		List<Tool> tools = ToolsFactory.GetTools(conversation);
 		List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;
 		foreach (Tool tool in tools)
 		{
@@ -294,42 +294,53 @@ public class LlmService
 
 						if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
 						{
-							return (new LlmResult
-							{
-								ExitReason = LlmExitReason.Completed,
-								Content = assistantMessage.Content ?? string.Empty
-							}, accumulatedCost);
-						}
-
-						// Start all tool calls concurrently.
-						List<(ConversationToolCall Call, Task<ToolResult> Task)> pendingTools = new List<(ConversationToolCall, Task<ToolResult>)>();
-						foreach (ConversationToolCall toolCall in assistantMessage.ToolCalls)
-						{
-							Task<ToolResult> task = ExecuteTool(toolCall, tools, conversation.ToolContext);
-							pendingTools.Add((toolCall, task));
-						}
-
-						// Await each task and add messages in order.
-						foreach ((ConversationToolCall call, Task<ToolResult> task) in pendingTools)
-						{
-							ToolResult toolResult = await task;
-							await conversation.AddToolMessageAsync(call.Id, toolResult.Response, cancellationToken);
-						}
-
-						// Check for exit after all messages are added.
-						foreach ((ConversationToolCall call, Task<ToolResult> task) in pendingTools)
-						{
-							ToolResult toolResult = task.Result;
-							if (toolResult.ExitLoop)
+							// Let the conversation strategy handle text responses first (e.g., SFCM nudges).
+							bool handled = await conversation.HandleTextResponseAsync(assistantMessage.Content ?? string.Empty, cancellationToken);
+							if (!handled)
 							{
 								return (new LlmResult
 								{
-									ExitReason = LlmExitReason.ToolRequestedExit,
-									Content = toolResult.Response,
-									FinalToolCalled = call.Function.Name
+									ExitReason = LlmExitReason.Completed,
+									Content = assistantMessage.Content ?? string.Empty
 								}, accumulatedCost);
 							}
+
+							// Conversation injected a continuation; loop back to LLM.
+							continue;
 						}
+
+						// Sequential tool execution.
+						List<(string toolName, ToolResult result)> completedTools = new List<(string, ToolResult)>();
+
+						foreach (ConversationToolCall toolCall in assistantMessage.ToolCalls)
+						{
+							ToolResult toolResult = await ExecuteTool(toolCall, tools, conversation.ToolContext);
+							completedTools.Add((toolCall.Function.Name, toolResult));
+
+							if (!toolResult.MessageHandled)
+							{
+								await conversation.AddToolMessageAsync(toolCall.Id, toolResult.Response, cancellationToken);
+							}
+
+							if (toolResult.ExitLoop || toolResult.MessageHandled)
+							{
+								break;
+							}
+						}
+
+						// Check for exit after all messages are added.
+						foreach ((string toolName, ToolResult result) in completedTools)
+							{
+								if (result.ExitLoop)
+								{
+									return (new LlmResult
+									{
+										ExitReason = LlmExitReason.ToolRequestedExit,
+										Content = result.Response,
+										FinalToolCalled = toolName
+									}, accumulatedCost);
+								}
+							}
 					}
 					else
 					{
@@ -450,12 +461,12 @@ public class LlmService
 				}
 				catch (Exception ex)
 				{
-					return new ToolResult($"Error: {ex.Message}", false);
+					return new ToolResult($"Error: {ex.Message}", false, false);
 				}
 			}
 		}
 
-		return new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false);
+		return new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false, false);
 	}
 
 	// Checks whether a 4xx error is a known configuration mismatch and adapts settings for retry.

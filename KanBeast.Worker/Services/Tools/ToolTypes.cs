@@ -57,10 +57,14 @@ public readonly struct ToolResult
 	public string Response { get; init; }
 	public bool ExitLoop { get; init; }
 
-	public ToolResult(string response, bool exitLoop)
+	// When true, the handler already managed conversation messages. LlmService skips AddToolMessageAsync.
+	public bool MessageHandled { get; init; }
+
+	public ToolResult(string response, bool exitLoop, bool messageHandled)
 	{
 		Response = response;
 		ExitLoop = exitLoop;
+		MessageHandled = messageHandled;
 	}
 }
 

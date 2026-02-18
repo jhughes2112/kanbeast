@@ -27,11 +27,11 @@ public static class ShellTools
 
 		if (string.IsNullOrWhiteSpace(command))
 		{
-			result = new ToolResult("Error: Command cannot be empty", false);
+			result = new ToolResult("Error: Command cannot be empty", false, false);
 		}
 		else if (!string.IsNullOrWhiteSpace(workDir) && !Path.IsPathRooted(workDir))
 		{
-			result = new ToolResult($"Error: Working directory must be an absolute path: {workDir}", false);
+			result = new ToolResult($"Error: Working directory must be an absolute path: {workDir}", false, false);
 		}
 		else
 		{
@@ -39,7 +39,7 @@ public static class ShellTools
 
 			if (!Directory.Exists(effectiveWorkDir))
 			{
-				result = new ToolResult($"Error: Working directory does not exist: {workDir}", false);
+				result = new ToolResult($"Error: Working directory does not exist: {workDir}", false, false);
 			}
 			else
 			{
@@ -101,7 +101,7 @@ public static class ShellTools
 						{
 						}
 
-						result = new ToolResult($"Error: Command timed out or cancelled after {DefaultTimeout.TotalSeconds} seconds: {command}", false);
+						result = new ToolResult($"Error: Command timed out or cancelled after {DefaultTimeout.TotalSeconds} seconds: {command}", false, false);
 						return result;
 					}
 
@@ -119,7 +119,7 @@ public static class ShellTools
 						}
 						catch (ArgumentException ex)
 						{
-							result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}", false);
+							result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}", false, false);
 							return result;
 						}
 					}
@@ -165,11 +165,11 @@ public static class ShellTools
 					}
 					responseBuilder.Append($"Exit Code: {process.ExitCode}");
 
-					result = new ToolResult(responseBuilder.ToString(), false);
+					result = new ToolResult(responseBuilder.ToString(), false, false);
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: Failed to execute command: {ex.Message}", false);
+					result = new ToolResult($"Error: Failed to execute command: {ex.Message}", false, false);
 				}
 			}
 		}

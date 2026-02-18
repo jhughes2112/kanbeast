@@ -16,6 +16,8 @@ public static class WorkerSession
 	public static CancellationToken CancellationToken { get; private set; }
 	public static WorkerHubClient HubClient { get; private set; } = null!;
 	public static WebSearchConfig WebSearch { get; private set; } = new();
+	public static CompactionSettings Compaction { get; private set; } = new();
+	public static string ConversationType { get; private set; } = "sfcm";
 
 	public static ConcurrentQueue<string> GetChatQueue(string conversationId)
 	{
@@ -30,7 +32,9 @@ public static class WorkerSession
 		string workDir,
 		CancellationToken cancellationToken,
 		WorkerHubClient hubClient,
-		WebSearchConfig webSearch)
+		WebSearchConfig webSearch,
+		CompactionSettings compaction,
+		string conversationType)
 	{
 		ApiClient = apiClient;
 		LlmProxy = llmProxy;
@@ -40,6 +44,8 @@ public static class WorkerSession
 		CancellationToken = cancellationToken;
 		HubClient = hubClient;
 		WebSearch = webSearch;
+		Compaction = compaction;
+		ConversationType = conversationType;
 	}
 
 	public static void UpdateCancellationToken(CancellationToken cancellationToken)
@@ -57,5 +63,7 @@ public static class WorkerSession
 		CancellationToken = default;
 		HubClient = null!;
 		WebSearch = new();
+		Compaction = new();
+		ConversationType = "sfcm";
 	}
 }

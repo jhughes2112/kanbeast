@@ -155,10 +155,9 @@ public class Program
 
 		AgentOrchestrator orchestrator = new AgentOrchestrator(
 			LoggerFactory.Create(b => { b.AddConsole(); b.SetMinimumLevel(LogLevel.Information); }).CreateLogger<AgentOrchestrator>(),
-			config.Settings.Compaction,
 			config.Settings.LLMConfigs);
 
-		WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cancellationToken, hubClient, config.Settings.WebSearch);
+		WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cancellationToken, hubClient, config.Settings.WebSearch, config.Settings.Compaction, config.Settings.ConversationType);
 
 		// Create or reconstitute the planning conversation immediately so the user
 		// can see it in the chat dropdown even before the ticket goes Active.
@@ -190,7 +189,7 @@ public class Program
 			throw new DirectoryNotFoundException($"Prompt directory not found: {resolvedPromptDirectory}");
 		}
 
-		string[] requiredPrompts = new string[] { "planning", "developer", "subagent", "compaction" };
+		string[] requiredPrompts = new string[] { "planning", "developer", "subagent", "compaction", "sfcm" };
 
 		Dictionary<string, string> prompts = new Dictionary<string, string>();
 		string[] promptFiles = Directory.GetFiles(resolvedPromptDirectory, "*.txt");

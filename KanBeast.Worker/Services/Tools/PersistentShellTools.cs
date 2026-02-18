@@ -41,7 +41,7 @@ public static class PersistentShellTools
 
 		if (context.Shell != null)
 		{
-			result = new ToolResult("Error: Shell already running. Use kill_shell first to start a new one.", false);
+			result = new ToolResult("Error: Shell already running. Use kill_shell first to start a new one.", false, false);
 		}
 		else
 		{
@@ -51,7 +51,7 @@ public static class PersistentShellTools
 
 				if (!Directory.Exists(effectiveWorkDir))
 				{
-					result = new ToolResult($"Error: Working directory does not exist: {workDir}", false);
+					result = new ToolResult($"Error: Working directory does not exist: {workDir}", false, false);
 				}
 				else
 				{
@@ -111,12 +111,12 @@ public static class PersistentShellTools
 					await Task.Delay(50, cancellationToken);
 					DrainBuffers(context);
 
-					result = new ToolResult($"Shell started in: {effectiveWorkDir}\nUse send_shell_input to send commands and read_shell_output to see results.", false);
+					result = new ToolResult($"Shell started in: {effectiveWorkDir}\nUse send_shell_input to send commands and read_shell_output to see results.", false, false);
 				}
 			}
 			catch (Exception ex)
 			{
-				result = new ToolResult($"Error: Failed to start shell: {ex.Message}", false);
+				result = new ToolResult($"Error: Failed to start shell: {ex.Message}", false, false);
 			}
 		}
 
@@ -148,7 +148,7 @@ public static class PersistentShellTools
 
 		if (context.Shell == null)
 		{
-			result = new ToolResult("Error: No shell running. Use start_shell first.", false);
+			result = new ToolResult("Error: No shell running. Use start_shell first.", false, false);
 		}
 		else
 		{
@@ -160,7 +160,7 @@ public static class PersistentShellTools
 				{
 					if (!context.Shell.IsRunning)
 					{
-						result = new ToolResult("Error: Shell has exited.", false);
+						result = new ToolResult("Error: Shell has exited.", false, false);
 						return result;
 					}
 
@@ -190,7 +190,7 @@ public static class PersistentShellTools
 					}
 					catch (ArgumentException ex)
 					{
-						result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}", false);
+						result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}", false, false);
 						return result;
 					}
 				}
@@ -239,11 +239,11 @@ public static class PersistentShellTools
 					sb.AppendLine("(no output)");
 				}
 
-				result = new ToolResult(sb.ToString(), false);
+				result = new ToolResult(sb.ToString(), false, false);
 			}
 			catch (Exception ex)
 			{
-				result = new ToolResult($"Error: {ex.Message}", false);
+				result = new ToolResult($"Error: {ex.Message}", false, false);
 			}
 		}
 
@@ -257,18 +257,18 @@ public static class PersistentShellTools
 
 		if (context.Shell == null)
 		{
-			result = new ToolResult("Error: No shell running.", false);
+			result = new ToolResult("Error: No shell running.", false, false);
 		}
 		else
 		{
 			try
 			{
 				context.DestroyShell();
-				result = new ToolResult("Shell killed.", false);
+				result = new ToolResult("Shell killed.", false, false);
 			}
 			catch (Exception ex)
 			{
-				result = new ToolResult($"Error: Failed to kill shell: {ex.Message}", false);
+				result = new ToolResult($"Error: Failed to kill shell: {ex.Message}", false, false);
 			}
 		}
 

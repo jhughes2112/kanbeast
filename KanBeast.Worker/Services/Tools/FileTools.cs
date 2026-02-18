@@ -49,11 +49,11 @@ public static class FileTools
 
         if (string.IsNullOrWhiteSpace(filePath))
         {
-            result = new ToolResult("Error: Path cannot be empty", false);
+            result = new ToolResult("Error: Path cannot be empty", false, false);
         }
         else if (!Path.IsPathRooted(filePath))
         {
-            result = new ToolResult($"Error: Path must be absolute: {filePath}", false);
+            result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
         }
         else
         {
@@ -63,7 +63,7 @@ public static class FileTools
             {
                 if (!File.Exists(fullPath))
                 {
-                    result = new ToolResult($"Error: File not found: {filePath}", false);
+                    result = new ToolResult($"Error: File not found: {filePath}", false, false);
                 }
                 else
                 {
@@ -75,19 +75,19 @@ public static class FileTools
 
                     if (!offsetValid)
                     {
-                        result = new ToolResult($"Error: Invalid offset value: {offset}", false);
+                        result = new ToolResult($"Error: Invalid offset value: {offset}", false, false);
                     }
                     else if (!linesValid)
                     {
-                        result = new ToolResult($"Error: Invalid lines value: {lines}", false);
+                        result = new ToolResult($"Error: Invalid lines value: {lines}", false, false);
                     }
                     else if (offsetValue < 0)
                     {
-                        result = new ToolResult("Error: offset must be >= 0", false);
+                        result = new ToolResult("Error: offset must be >= 0", false, false);
                     }
                     else if (linesValue < 0)
                     {
-                        result = new ToolResult("Error: lines must be >= 0", false);
+                        result = new ToolResult("Error: lines must be >= 0", false, false);
                     }
                     else
                     {
@@ -144,11 +144,11 @@ public static class FileTools
                         {
                             if (currentLine == 0)
                             {
-                                result = new ToolResult($"File is empty: {filePath}", false);
+                                result = new ToolResult($"File is empty: {filePath}", false, false);
                             }
                             else
                             {
-                                result = new ToolResult($"Offset {startLine} is beyond the end of the file (file has {currentLine} lines).", false);
+                                result = new ToolResult($"Offset {startLine} is beyond the end of the file (file has {currentLine} lines).", false, false);
                             }
                         }
                         else
@@ -174,18 +174,18 @@ public static class FileTools
                                 sb.AppendLine($"[Output truncated at {MaxLines} lines. Use offset and lines parameters to read more.]");
                             }
 
-                            result = new ToolResult(sb.ToString(), false);
+                            result = new ToolResult(sb.ToString(), false, false);
                         }
                     }
                 }
             }
             catch (OperationCanceledException)
             {
-                result = new ToolResult($"Error: Timed out or cancelled reading file: {filePath}", false);
+                result = new ToolResult($"Error: Timed out or cancelled reading file: {filePath}", false, false);
             }
             catch (Exception ex)
             {
-                result = new ToolResult($"Error: Failed to read file: {ex.Message}", false);
+                result = new ToolResult($"Error: Failed to read file: {ex.Message}", false, false);
             }
         }
 
@@ -207,11 +207,11 @@ public static class FileTools
 
         if (string.IsNullOrWhiteSpace(filePath))
         {
-            result = new ToolResult("Error: Path cannot be empty", false);
+            result = new ToolResult("Error: Path cannot be empty", false, false);
         }
         else if (!Path.IsPathRooted(filePath))
         {
-            result = new ToolResult($"Error: Path must be absolute: {filePath}", false);
+            result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
         }
         else
         {
@@ -219,7 +219,7 @@ public static class FileTools
 
             if (File.Exists(fullPath) && !context.ReadFiles.Contains(fullPath))
             {
-                result = new ToolResult($"Error: You must use read_file on {filePath} before overwriting it.", false);
+                result = new ToolResult($"Error: You must use read_file on {filePath} before overwriting it.", false, false);
             }
             else
             {
@@ -237,15 +237,15 @@ public static class FileTools
 
                     context.ReadFiles.Add(fullPath);
 
-                    result = new ToolResult($"File written: {filePath}", false);
+                    result = new ToolResult($"File written: {filePath}", false, false);
                 }
                 catch (OperationCanceledException)
                 {
-                    result = new ToolResult($"Error: Timed out or cancelled writing file: {filePath}", false);
+                    result = new ToolResult($"Error: Timed out or cancelled writing file: {filePath}", false, false);
                 }
                 catch (Exception ex)
                 {
-                    result = new ToolResult($"Error: Failed to write file: {ex.Message}", false);
+                    result = new ToolResult($"Error: Failed to write file: {ex.Message}", false, false);
                 }
             }
         }
@@ -266,15 +266,15 @@ public static class FileTools
 
 		if (string.IsNullOrWhiteSpace(filePath))
 		{
-			result = new ToolResult("Error: Path cannot be empty", false);
+			result = new ToolResult("Error: Path cannot be empty", false, false);
 		}
 		else if (string.IsNullOrEmpty(oldContent))
 		{
-			result = new ToolResult("Error: oldContent cannot be empty", false);
+			result = new ToolResult("Error: oldContent cannot be empty", false, false);
 		}
 		else if (!Path.IsPathRooted(filePath))
 		{
-			result = new ToolResult($"Error: Path must be absolute: {filePath}", false);
+			result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
 		}
 		else
 		{
@@ -282,7 +282,7 @@ public static class FileTools
 
 			if (!context.ReadFiles.Contains(fullPath))
 			{
-				result = new ToolResult($"Error: You must use read_file on {filePath} before editing it.", false);
+				result = new ToolResult($"Error: You must use read_file on {filePath} before editing it.", false, false);
 			}
 			else
 			{
@@ -290,7 +290,7 @@ public static class FileTools
 				{
 					if (!File.Exists(fullPath))
 					{
-						result = new ToolResult($"Error: File not found: {filePath}", false);
+						result = new ToolResult($"Error: File not found: {filePath}", false, false);
 					}
 					else
 					{
@@ -301,31 +301,31 @@ public static class FileTools
 						int firstIndex = fileContent.IndexOf(oldContent, StringComparison.Ordinal);
 						if (firstIndex < 0)
 						{
-							result = new ToolResult($"Error: oldContent not found in file: {filePath}", false);
+							result = new ToolResult($"Error: oldContent not found in file: {filePath}", false, false);
 						}
 						else
 						{
 							int secondIndex = fileContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
 							if (secondIndex >= 0)
 							{
-								result = new ToolResult("Error: oldContent matched multiple times in file. Include more context to make it unique.", false);
+								result = new ToolResult("Error: oldContent matched multiple times in file. Include more context to make it unique.", false, false);
 							}
 							else
 							{
 								string updatedContent = fileContent[..firstIndex] + (newContent ?? string.Empty) + fileContent[(firstIndex + oldContent.Length)..];
 								await File.WriteAllTextAsync(fullPath, updatedContent, cts.Token);
-								result = new ToolResult($"File edited: {filePath}", false);
+								result = new ToolResult($"File edited: {filePath}", false, false);
 							}
 						}
 					}
 				}
 				catch (OperationCanceledException)
 				{
-					result = new ToolResult($"Error: Timed out or cancelled editing file: {filePath}", false);
+					result = new ToolResult($"Error: Timed out or cancelled editing file: {filePath}", false, false);
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: Failed to edit file: {ex.Message}", false);
+					result = new ToolResult($"Error: Failed to edit file: {ex.Message}", false, false);
 				}
 			}
 		}
@@ -350,15 +350,15 @@ public static class FileTools
 
 		if (string.IsNullOrWhiteSpace(filePath))
 		{
-			result = new ToolResult("Error: Path cannot be empty", false);
+			result = new ToolResult("Error: Path cannot be empty", false, false);
 		}
 		else if (!Path.IsPathRooted(filePath))
 		{
-			result = new ToolResult($"Error: Path must be absolute: {filePath}", false);
+			result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
 		}
 		else if (edits == null || edits.Count == 0)
 		{
-			result = new ToolResult("Error: edits array cannot be empty", false);
+			result = new ToolResult("Error: edits array cannot be empty", false, false);
 		}
 		else
 		{
@@ -366,7 +366,7 @@ public static class FileTools
 
 			if (!context.ReadFiles.Contains(fullPath))
 			{
-				result = new ToolResult($"Error: You must use read_file on {filePath} before editing it.", false);
+				result = new ToolResult($"Error: You must use read_file on {filePath} before editing it.", false, false);
 			}
 			else
 			{
@@ -374,7 +374,7 @@ public static class FileTools
 				{
 					if (!File.Exists(fullPath))
 					{
-						result = new ToolResult($"Error: File not found: {filePath}", false);
+						result = new ToolResult($"Error: File not found: {filePath}", false, false);
 					}
 					else
 					{
@@ -391,7 +391,7 @@ public static class FileTools
 
 							if (editNode is not JsonObject editObj)
 							{
-								result = new ToolResult($"Error: Edit {editIndex} is not a valid object.", false);
+								result = new ToolResult($"Error: Edit {editIndex} is not a valid object.", false, false);
 								return result;
 							}
 
@@ -401,14 +401,14 @@ public static class FileTools
 
 							if (string.IsNullOrEmpty(oldContent))
 							{
-								result = new ToolResult($"Error: Edit {editIndex}: oldContent cannot be empty.", false);
+								result = new ToolResult($"Error: Edit {editIndex}: oldContent cannot be empty.", false, false);
 								return result;
 							}
 
 							int firstIndex = workingContent.IndexOf(oldContent, StringComparison.Ordinal);
 							if (firstIndex < 0)
 							{
-								result = new ToolResult($"Error: Edit {editIndex}: oldContent not found in file. No edits were applied.", false);
+								result = new ToolResult($"Error: Edit {editIndex}: oldContent not found in file. No edits were applied.", false, false);
 								return result;
 							}
 
@@ -421,7 +421,7 @@ public static class FileTools
 								int secondIndex = workingContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
 								if (secondIndex >= 0)
 								{
-									result = new ToolResult($"Error: Edit {editIndex}: oldContent matched multiple times. Include more context to make it unique. No edits were applied.", false);
+									result = new ToolResult($"Error: Edit {editIndex}: oldContent matched multiple times. Include more context to make it unique. No edits were applied.", false, false);
 									return result;
 								}
 
@@ -430,16 +430,16 @@ public static class FileTools
 						}
 
 						await File.WriteAllTextAsync(fullPath, workingContent, cts.Token);
-						result = new ToolResult($"File edited: {filePath} ({edits.Count} edit(s) applied)", false);
+						result = new ToolResult($"File edited: {filePath} ({edits.Count} edit(s) applied)", false, false);
 					}
 				}
 				catch (OperationCanceledException)
 				{
-					result = new ToolResult($"Error: Timed out or cancelled editing file: {filePath}", false);
+					result = new ToolResult($"Error: Timed out or cancelled editing file: {filePath}", false, false);
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: Failed to edit file: {ex.Message}", false);
+					result = new ToolResult($"Error: Failed to edit file: {ex.Message}", false, false);
 				}
 			}
 		}

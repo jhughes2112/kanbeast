@@ -12,18 +12,15 @@ namespace KanBeast.Worker.Services;
 public class AgentOrchestrator
 {
 	private readonly ILogger<AgentOrchestrator> _logger;
-	private readonly CompactionSettings _compactionSettings;
 	private List<LLMConfig> _llmConfigs;
 
 	private ILlmConversation? _planningConversation;
 
 	public AgentOrchestrator(
 		ILogger<AgentOrchestrator> logger,
-		CompactionSettings compactionSettings,
 		List<LLMConfig> llmConfigs)
 	{
 		_logger = logger;
-		_compactionSettings = compactionSettings;
 		_llmConfigs = llmConfigs;
 	}
 
@@ -50,11 +47,9 @@ public class AgentOrchestrator
 				existing.Messages[0] = new ConversationMessage { Role = "system", Content = WorkerSession.Prompts["planning"] };
 			}
 
-			ICompaction compaction = CreateCompaction();
 			ConversationMemories memories = new ConversationMemories(existing.Memories);
-			ToolContext context = new ToolContext(null, null, memories, null, null);
-			_planningConversation = new CompactingConversation(existing, LlmRole.Planning, context, compaction);
-			context.OnMemoriesChanged = _planningConversation.RefreshMemoriesMessage;
+				ToolContext context = new ToolContext(null, null, memories, null, null);
+				_planningConversation = LlmConversationFactory.Reconstitute(existing, LlmRole.Planning, context);
 
 			// Force a sync so clients get a ConversationsUpdated notification.
 			await WorkerSession.HubClient.SyncConversationAsync(existing);
@@ -71,17 +66,15 @@ public class AgentOrchestrator
 				Description: {ticketHolder.Ticket.Description}
 				""";
 
-			ICompaction compaction = CreateCompaction();
 			ToolContext context = new ToolContext(null, null, memories, null, null);
-			_planningConversation = new CompactingConversation(
-				WorkerSession.Prompts["planning"],
-				userPrompt,
-				memories,
-				LlmRole.Planning,
-				context,
-				compaction,
-				"Planning");
-			context.OnMemoriesChanged = _planningConversation.RefreshMemoriesMessage;
+				_planningConversation = LlmConversationFactory.Create(
+						WorkerSession.ConversationType,
+					WorkerSession.Prompts["planning"],
+					userPrompt,
+					memories,
+					LlmRole.Planning,
+					context,
+					"Planning");
 		}
 
 		// Sync immediately so the client can see the conversation in the dropdown.
@@ -320,17 +313,5 @@ public class AgentOrchestrator
 		{
 			await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, false);
 		}
-	}
-
-	private ICompaction CreateCompaction()
-	{
-		ICompaction compaction = new CompactionNone();
-
-		if (string.Equals(_compactionSettings.Type, "summarize", StringComparison.OrdinalIgnoreCase) && _llmConfigs.Count > 0)
-		{
-			compaction = new CompactionSummarizer(WorkerSession.Prompts["compaction"], WorkerSession.LlmProxy, _compactionSettings.ContextSizePercent);
-		}
-
-		return compaction;
 	}
 }

@@ -40,7 +40,7 @@ public static class ToolHelper
             }
 
             ToolResult toolResult = await taskToolResult;
-            return new ToolResult(TruncateResponse(toolResult.Response), toolResult.ExitLoop);
+            return new ToolResult(TruncateResponse(toolResult.Response), toolResult.ExitLoop, toolResult.MessageHandled);
         };
 
         tools.Add(new Tool

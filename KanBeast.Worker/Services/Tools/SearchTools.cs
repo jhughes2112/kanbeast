@@ -32,11 +32,11 @@ public static class SearchTools
 
 		if (string.IsNullOrWhiteSpace(pattern))
 		{
-			result = new ToolResult("Error: Pattern cannot be empty", false);
+			result = new ToolResult("Error: Pattern cannot be empty", false, false);
 		}
 		else if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path))
 		{
-			result = new ToolResult($"Error: Path must be an absolute directory path: {path}", false);
+			result = new ToolResult($"Error: Path must be an absolute directory path: {path}", false, false);
 		}
 		else
 		{
@@ -44,7 +44,7 @@ public static class SearchTools
 
 			if (!Directory.Exists(searchDir))
 			{
-				result = new ToolResult($"Error: Directory not found: {path}", false);
+				result = new ToolResult($"Error: Directory not found: {path}", false, false);
 			}
 			else
 			{
@@ -70,7 +70,7 @@ public static class SearchTools
 
 					if (matches.Count == 0)
 					{
-						result = new ToolResult($"No files found matching: {pattern}", false);
+						result = new ToolResult($"No files found matching: {pattern}", false, false);
 					}
 					else
 					{
@@ -82,12 +82,12 @@ public static class SearchTools
 							sb.AppendLine(relativePath);
 						}
 
-						result = new ToolResult(sb.ToString(), false);
+						result = new ToolResult(sb.ToString(), false, false);
 					}
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: {ex.Message}", false);
+					result = new ToolResult($"Error: {ex.Message}", false, false);
 				}
 			}
 		}
@@ -111,7 +111,7 @@ public static class SearchTools
 
 		if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path))
 		{
-			result = new ToolResult($"Error: Path must be an absolute directory path: {path}", false);
+			result = new ToolResult($"Error: Path must be an absolute directory path: {path}", false, false);
 		}
 		else
 		{
@@ -119,7 +119,7 @@ public static class SearchTools
 
 			if (!Directory.Exists(targetDir))
 			{
-				result = new ToolResult($"Error: Directory not found: {path}", false);
+				result = new ToolResult($"Error: Directory not found: {path}", false, false);
 			}
 			else
 			{
@@ -186,16 +186,16 @@ public static class SearchTools
 
 					if (sb.Length == 0)
 					{
-						result = new ToolResult($"Directory is empty: {path}", false);
+						result = new ToolResult($"Directory is empty: {path}", false, false);
 					}
 					else
 					{
-						result = new ToolResult(sb.ToString(), false);
+						result = new ToolResult(sb.ToString(), false, false);
 					}
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: {ex.Message}", false);
+					result = new ToolResult($"Error: {ex.Message}", false, false);
 				}
 			}
 		}
@@ -223,11 +223,11 @@ public static class SearchTools
 
 		if (string.IsNullOrWhiteSpace(pattern))
 		{
-			result = new ToolResult("Error: Pattern cannot be empty", false);
+			result = new ToolResult("Error: Pattern cannot be empty", false, false);
 		}
 		else if (string.IsNullOrWhiteSpace(path) || !Path.IsPathRooted(path))
 		{
-			result = new ToolResult($"Error: Path must be absolute: {path}", false);
+			result = new ToolResult($"Error: Path must be absolute: {path}", false, false);
 		}
 		else
 		{
@@ -238,7 +238,7 @@ public static class SearchTools
 
 			if (!isFile && !isDir)
 			{
-				result = new ToolResult($"Error: Path not found: {path}", false);
+				result = new ToolResult($"Error: Path not found: {path}", false, false);
 			}
 			else
 			{
@@ -412,7 +412,7 @@ public static class SearchTools
 
 					if (sb.Length == 0)
 					{
-						result = new ToolResult($"No matches found for: {pattern}", false);
+						result = new ToolResult($"No matches found for: {pattern}", false, false);
 					}
 					else
 					{
@@ -421,16 +421,16 @@ public static class SearchTools
 							sb.AppendLine($"Total: {totalMatches} matches");
 						}
 
-						result = new ToolResult(sb.ToString(), false);
+						result = new ToolResult(sb.ToString(), false, false);
 					}
 				}
 				catch (RegexParseException ex)
 				{
-					result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}", false);
+					result = new ToolResult($"Error: Invalid regex pattern: {ex.Message}", false, false);
 				}
 				catch (Exception ex)
 				{
-					result = new ToolResult($"Error: {ex.Message}", false);
+					result = new ToolResult($"Error: {ex.Message}", false, false);
 				}
 			}
 		}

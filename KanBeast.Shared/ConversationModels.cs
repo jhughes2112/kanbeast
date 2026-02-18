@@ -69,6 +69,9 @@ public class ConversationData
 
 	[JsonPropertyName("isFinished")]
 	public bool IsFinished { get; set; }
+
+	[JsonPropertyName("conversationType")]
+	public string ConversationType { get; set; } = "compacting";
 }
 
 // Lightweight metadata returned in API responses.

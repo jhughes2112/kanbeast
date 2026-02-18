@@ -15,7 +15,7 @@ public static class ShellToolsTests
 
 		try
 		{
-			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!, new KanBeast.Shared.WebSearchConfig());
+			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!, new KanBeast.Shared.WebSearchConfig(), new KanBeast.Shared.CompactionSettings(), "sfcm");
 			ConversationMemories testMemories = new ConversationMemories();
 			ToolContext tc = new ToolContext(null, null, testMemories, null, null);
 

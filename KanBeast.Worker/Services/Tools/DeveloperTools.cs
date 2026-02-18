@@ -40,7 +40,7 @@ public static class DeveloperTools
 
 		if (string.IsNullOrWhiteSpace(subtaskName) || string.IsNullOrWhiteSpace(subtaskDescription))
 		{
-			result = new ToolResult("Error: subtaskName and subtaskDescription are required", false);
+			result = new ToolResult("Error: subtaskName and subtaskDescription are required", false, false);
 		}
 		else
 		{
@@ -58,25 +58,20 @@ public static class DeveloperTools
 					string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
 				string systemPrompt = WorkerSession.Prompts.TryGetValue("developer", out string? devPrompt) ? devPrompt : string.Empty;
-				ConversationMemories memories = new ConversationMemories(context.Memories);
-				ICompaction compaction = new CompactionSummarizer(
-					WorkerSession.Prompts.TryGetValue("compaction", out string? compPrompt) ? compPrompt : string.Empty,
-					WorkerSession.LlmProxy,
-					0.9);
+					ConversationMemories memories = new ConversationMemories(context.Memories);
 
-				string? resolvedSubAgentId = string.IsNullOrWhiteSpace(subAgentLlmConfigId) ? null : subAgentLlmConfigId;
-				ToolContext devContext = new ToolContext(taskId, subtaskId, memories, resolvedSubAgentId, null);
+					string? resolvedSubAgentId = string.IsNullOrWhiteSpace(subAgentLlmConfigId) ? null : subAgentLlmConfigId;
+					ToolContext devContext = new ToolContext(taskId, subtaskId, memories, resolvedSubAgentId, null);
 
-				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
-				ILlmConversation conversation = new CompactingConversation(
-					systemPrompt,
-					initialPrompt,
-					memories,
-					LlmRole.Developer,
-					devContext,
-					compaction,
-					$"Developer - {subtaskName}");
-				devContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
+					string ticketId = WorkerSession.TicketHolder.Ticket.Id;
+					ILlmConversation conversation = LlmConversationFactory.Create(
+						WorkerSession.ConversationType,
+						systemPrompt,
+						initialPrompt,
+						memories,
+						LlmRole.Developer,
+						devContext,
+						$"Developer - {subtaskName}");
 
 				string content = string.Empty;
 				int iterationCount = 0;
@@ -125,14 +120,9 @@ public static class DeveloperTools
 							await conversation.FinalizeAsync(WorkerSession.CancellationToken);
 
 							string continuePrompt = $"You were working on subtask '{subtaskName}' but got stuck. Look at the local changes and decide if you should continue or take a fresh approach.\nDescription: {subtaskDescription}\nCall end_subtask tool when complete.";
-							ICompaction continueCompaction = new CompactionSummarizer(
-								WorkerSession.Prompts.TryGetValue("compaction", out string? cp) ? cp : string.Empty,
-								WorkerSession.LlmProxy,
-								0.9);
 
 							ToolContext continueContext = new ToolContext(taskId, subtaskId, memories, devContext.SubAgentLlmConfigId, null);
-							conversation = new CompactingConversation(systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, continueCompaction, $"Developer - {subtaskName} (retry)");
-							continueContext.OnMemoriesChanged = conversation.RefreshMemoriesMessage;
+								conversation = LlmConversationFactory.Create(WorkerSession.ConversationType, systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, $"Developer - {subtaskName} (retry)");
 							iterationCount = 0;
 						}
 						else if (iterationCount == 3)
@@ -160,11 +150,11 @@ public static class DeveloperTools
 
 				if (subtaskComplete)
 				{
-					result = new ToolResult($"Developer completed subtask '{subtaskName}': {content}", false);
+					result = new ToolResult($"Developer completed subtask '{subtaskName}': {content}", false, false);
 				}
 				else
 				{
-					result = new ToolResult($"Developer could not complete subtask '{subtaskName}': {content}", false);
+					result = new ToolResult($"Developer could not complete subtask '{subtaskName}': {content}", false, false);
 				}
 			}
 			catch (OperationCanceledException)
@@ -173,7 +163,7 @@ public static class DeveloperTools
 			}
 			catch (Exception ex)
 			{
-				result = new ToolResult($"Error: Developer failed: {ex.Message}", false);
+				result = new ToolResult($"Error: Developer failed: {ex.Message}", false, false);
 			}
 		}
 
