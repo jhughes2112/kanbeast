@@ -7,6 +7,8 @@ namespace KanBeast.Worker.Services.Tools;
 // Helper to create tool definitions and handlers from methods with [Description] attributes.
 public static class ToolHelper
 {
+    private const int ToolTimeoutSeconds = 60;
+
     // Adds a tool from a method to the tools list.
     // For static methods, pass null as instance and specify the type.
     public static void AddTool(List<Tool> tools, object? instance, string methodName, Type? type = null)
@@ -31,16 +33,31 @@ public static class ToolHelper
 
         Func<JsonObject, ToolContext, Task<ToolResult>> handler = async (JsonObject args, ToolContext context) =>
         {
-            object?[] methodArgs = BuildMethodArguments(method, args, context);
-            object? result = method.Invoke(instance, methodArgs);
+            using CancellationTokenSource timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(WorkerSession.CancellationToken);
+            timeoutCts.CancelAfter(TimeSpan.FromSeconds(ToolTimeoutSeconds));
 
-            if (result is not Task<ToolResult> taskToolResult)
+            object?[] methodArgs = BuildMethodArguments(method, args, context, timeoutCts.Token);
+
+            try
             {
-                throw new InvalidOperationException($"Tool method '{methodName}' must return Task<ToolResult>");
-            }
+                object? result = method.Invoke(instance, methodArgs);
 
-            ToolResult toolResult = await taskToolResult;
-            return new ToolResult(TruncateResponse(toolResult.Response), toolResult.ExitLoop, toolResult.MessageHandled);
+                if (result is not Task<ToolResult> taskToolResult)
+                {
+                    throw new InvalidOperationException($"Tool method '{methodName}' must return Task<ToolResult>");
+                }
+
+                ToolResult toolResult = await taskToolResult;
+                return new ToolResult(TruncateResponse(toolResult.Response), toolResult.ExitLoop, toolResult.MessageHandled);
+            }
+            catch (OperationCanceledException) when (!WorkerSession.CancellationToken.IsCancellationRequested)
+            {
+                return new ToolResult($"Tool '{toolName}' timed out after {ToolTimeoutSeconds} seconds.", false, false);
+            }
+            catch (TargetInvocationException ex) when (ex.InnerException is OperationCanceledException && !WorkerSession.CancellationToken.IsCancellationRequested)
+            {
+                return new ToolResult($"Tool '{toolName}' timed out after {ToolTimeoutSeconds} seconds.", false, false);
+            }
         };
 
         tools.Add(new Tool
@@ -138,7 +155,7 @@ public static class ToolHelper
         return schema;
     }
 
-    private static object?[] BuildMethodArguments(MethodInfo method, JsonObject args, ToolContext context)
+    private static object?[] BuildMethodArguments(MethodInfo method, JsonObject args, ToolContext context, CancellationToken cancellationToken)
     {
         ParameterInfo[] parameters = method.GetParameters();
         object?[] result = new object?[parameters.Length];
@@ -154,7 +171,7 @@ public static class ToolHelper
             }
             else if (param.ParameterType == typeof(CancellationToken))
             {
-                result[i] = WorkerSession.CancellationToken;
+                result[i] = cancellationToken;
             }
             else if (args.TryGetPropertyValue(paramName, out JsonNode? node) && node != null)
             {

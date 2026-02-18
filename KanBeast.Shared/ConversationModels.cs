@@ -72,6 +72,10 @@ public class ConversationData
 
 	[JsonPropertyName("conversationType")]
 	public string ConversationType { get; set; } = "compacting";
+
+	[JsonPropertyName("activeModel")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public string? ActiveModel { get; set; }
 }
 
 // Lightweight metadata returned in API responses.
@@ -91,4 +95,8 @@ public class ConversationInfo
 
 	[JsonPropertyName("startedAt")]
 	public string StartedAt { get; set; } = string.Empty;
+
+	[JsonPropertyName("activeModel")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public string? ActiveModel { get; set; }
 }

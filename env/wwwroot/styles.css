@@ -32,8 +32,11 @@
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     background: #09090b;
-    min-height: 100vh;
+    height: 100vh;
     color: var(--gray-800);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 header {
@@ -156,21 +159,24 @@ nav {
     gap: 0.75rem;
     padding: 0.75rem;
     max-width: 1800px;
+    width: 100%;
     margin: 0 auto;
-    min-height: calc(100vh - 80px);
+    flex: 1;
+    min-height: 0;
 }
 
 .column {
     background: #1c1c1f;
     border-radius: var(--radius-lg);
     padding: 0.5rem;
-    min-height: 600px;
+    min-height: 0;
     box-shadow: var(--shadow-lg);
     display: flex;
     flex-direction: column;
     transition: background 0.2s ease;
     border: 1px solid var(--gray-200);
     min-width: 0;
+    overflow: hidden;
 }
 
 .column.drag-over {
@@ -1629,6 +1635,22 @@ nav {
 .chat-modal-header h2 {
     flex-shrink: 0;
     white-space: nowrap;
+}
+
+.chat-info-bar {
+    padding: 0.5rem 1.5rem;
+    border-bottom: 1px solid var(--gray-200);
+    flex-shrink: 0;
+}
+
+.chat-info-bar .ticket-detail-header {
+    margin-bottom: 0;
+    border-bottom: none;
+    padding: 0;
+}
+
+.chat-info-bar .detail-latest-activity {
+    margin: 0.5rem 0 0 0;
 }
 
 .chat-conversation-picker {

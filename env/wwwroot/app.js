@@ -362,6 +362,18 @@ async function handleTicketEvent() {
     if (currentDetailTicketId) {
         await showTicketDetails(currentDetailTicketId);
     }
+
+    // If the full-screen chat modal is open, refresh its info bar and planner LLM dropdown.
+    if (chatModalTicketId) {
+        refreshChatInfoBar(chatModalTicketId);
+        const ticket = tickets.find(t => t.id === chatModalTicketId);
+        if (ticket) {
+            const chatSelect = document.getElementById('chatPlannerLlm');
+            if (chatSelect) {
+                chatSelect.value = ticket.plannerLlmId || '';
+            }
+        }
+    }
 }
 
 async function refreshAllTickets() {
@@ -1370,7 +1382,7 @@ function renderDetailChatMessage(messages, index, container) {
         const content = (msg.content || '');
         appendDetailChatBubble('user', content);
     } else if (msg.role === 'assistant') {
-        if (msg.content) {
+        if (msg.content && (!msg.tool_calls || msg.content.trim() !== '')) {
             appendDetailChatBubble('assistant', msg.content);
         }
         if (msg.tool_calls) {
@@ -2441,6 +2453,60 @@ function updateDetailConversationDropdown(ticketId, switchToId) {
     }
 }
 
+// Builds the info bar content for the full-screen chat modal from the current ticket state.
+function refreshChatInfoBar(ticketId) {
+    const bar = document.getElementById('chatInfoBar');
+    if (!bar) {
+        return;
+    }
+
+    const ticket = tickets.find(t => t.id === ticketId);
+    if (!ticket) {
+        bar.style.display = 'none';
+        return;
+    }
+
+    const status = ticket.status || 'Backlog';
+
+    // Latest activity log line.
+    let latestActivityHtml = '';
+    if (ticket.activityLog && ticket.activityLog.length > 0) {
+        const latestLog = ticket.activityLog[ticket.activityLog.length - 1];
+        const parsed = parseLogEntry(latestLog);
+
+        let logClass = '';
+        if (parsed.message.includes('Manager:')) {
+            logClass = 'manager';
+        } else if (parsed.message.includes('Developer:')) {
+            logClass = 'developer';
+        } else if (parsed.message.includes('Worker:')) {
+            logClass = 'worker';
+        }
+
+        const displayMessage = parsed.message.length > 120 ? parsed.message.substring(0, 120) + '…' : parsed.message;
+
+        latestActivityHtml = `
+            <div class="detail-latest-activity ${logClass}">
+                ${parsed.timestamp ? `<span class="activity-timestamp ${logClass}" data-timestamp="${parsed.timestamp}">${formatRelativeTime(parsed.timestamp)}</span>` : ''}
+                <span class="activity-message">${escapeHtml(displayMessage)}</span>
+            </div>
+        `;
+    }
+
+    bar.innerHTML = `
+        <div class="ticket-detail-header">
+            <span class="status-badge ${status.toLowerCase()}">${status}</span>
+            ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : '<span class="branch-name-spacer"></span>'}
+            <div class="ticket-detail-right">
+                <span class="ticket-detail-id">#${ticket.id}</span>
+                <span class="ticket-detail-cost">$${ticket.llmCost.toFixed(2)} / $${ticket.maxCost.toFixed(2)}</span>
+            </div>
+        </div>
+        ${latestActivityHtml}
+    `;
+    bar.style.display = '';
+}
+
 function openChat(ticketId) {
     const modal = document.getElementById('chatModal');
     const messagesDiv = document.getElementById('chatMessages');
@@ -2468,6 +2534,8 @@ function openChat(ticketId) {
             dropdownContainer.appendChild(plannerWrapper.firstElementChild);
         }
     }
+
+    refreshChatInfoBar(ticketId);
 
     const dropdown = document.createElement('select');
     dropdown.id = 'conversationDropdown';
@@ -2607,7 +2675,7 @@ function renderSingleChatMessage(messages, index) {
         const content = (msg.content || '');
         appendChatUser(content);
     } else if (msg.role === 'assistant') {
-        if (msg.content) {
+        if (msg.content && (!msg.tool_calls || msg.content.trim() !== '')) {
             appendChatAssistant(msg.content);
         }
         if (msg.tool_calls) {

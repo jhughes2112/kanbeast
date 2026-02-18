@@ -118,6 +118,7 @@ public class SfcmConversation : ILlmConversation
     public async Task AddAssistantMessageAsync(ConversationMessage message, string modelName, CancellationToken cancellationToken)
     {
         Messages.Add(message);
+        Data.ActiveModel = modelName;
         string preview = message.Content?.Length > 50 ? message.Content.Substring(0, 50) + "..." : message.Content ?? "[no content]";
         if (message.ToolCalls?.Count > 0)
         {

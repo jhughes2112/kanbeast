@@ -72,7 +72,8 @@ public class ConversationStore
                     DisplayName = data.DisplayName,
                     MessageCount = data.Messages.Count,
                     IsFinished = data.IsFinished,
-                    StartedAt = data.StartedAt
+                    StartedAt = data.StartedAt,
+                    ActiveModel = data.ActiveModel
                 });
             }
         }
