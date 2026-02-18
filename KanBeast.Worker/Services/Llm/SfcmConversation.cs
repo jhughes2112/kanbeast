@@ -86,6 +86,15 @@ public class SfcmConversation : ILlmConversation
         _frameStack = new List<FrameInfo>();
 
         RebuildFrameStack();
+
+        // Refresh system prompt to latest version so prompt edits take effect.
+        string promptKey = role == LlmRole.Planning ? "planning" : "developer";
+        string rolePrompt = WorkerSession.Prompts[promptKey];
+        string sfcmInstructions = WorkerSession.Prompts["sfcm"];
+        if (Messages.Count > 0)
+        {
+            Messages[0] = new ConversationMessage { Role = "system", Content = $"{sfcmInstructions}\n\n{rolePrompt}" };
+        }
     }
 
     public void IncrementIteration()
@@ -166,9 +175,7 @@ public class SfcmConversation : ILlmConversation
         Data.ChapterSummaries.Clear();
 
         string promptKey = Role == LlmRole.Planning ? "planning" : "developer";
-        string systemPrompt = WorkerSession.Prompts.TryGetValue(promptKey, out string? latestPrompt)
-            ? latestPrompt
-            : string.Empty;
+        string systemPrompt = WorkerSession.Prompts[promptKey];
 
         Ticket ticket = WorkerSession.TicketHolder.Ticket;
         string userGoal = $"Ticket: {ticket.Title}\nDescription: {ticket.Description}";
@@ -298,6 +305,8 @@ public class SfcmConversation : ILlmConversation
     // Pushes a new frame onto the stack.
     private void HandlePush(string task, string details)
     {
+        // Task must not contain \n\n so it can be cleanly parsed back out of the user message on reconstitution.
+        task = task.Replace("\n\n", "\n");
         int depth = _frameStack.Count;
         string frameId = $"FRAME_{depth}";
         int boundaryIndex = Messages.Count - 1;
@@ -311,13 +320,14 @@ public class SfcmConversation : ILlmConversation
         {
             Id = frameId,
             Task = task,
+            Details = details,
             Depth = depth,
             BoundaryIndex = boundaryIndex,
             StartIndex = Messages.Count - 2
         });
     }
 
-    // Pops the current frame. Depth 1+ truncates to boundary and delivers tool_result.
+    // Pops the current frame. Depth 1+ truncates and rewrites as a user message.
     // Depth 0 appends result to memories and re-anchors FRAME_0.
     private void HandlePop(string result, string nextSteps)
     {
@@ -330,25 +340,20 @@ public class SfcmConversation : ILlmConversation
         FrameInfo current = _frameStack[_frameStack.Count - 1];
         _frameStack.RemoveAt(_frameStack.Count - 1);
 
-        // Truncate to just after the push_context assistant message.
+        // Truncate everything from the boundary onward (frame marker, user message, all frame work).
         TruncateMessagesTo(current.BoundaryIndex + 1);
 
-        // Find the push_context tool call ID from the assistant message at boundary_index.
-        string pushToolCallId = FindPushToolCallId(current.BoundaryIndex);
+        // Remove the push_context tool call from the assistant message so it isn't orphaned.
+        RemovePushToolCall(current.BoundaryIndex);
 
-        // Build tool_result: concise task + findings + next steps.
-        string toolContent = $"{current.Task}\n{result}";
+        // Rewrite as a user message: task + result + next steps.
+        string userContent = $"{current.Task}\n{result}";
         if (!string.IsNullOrWhiteSpace(nextSteps))
         {
-            toolContent = $"{toolContent}\nNext: {nextSteps}";
+            userContent = $"{userContent}\nNext: {nextSteps}";
         }
 
-        Messages.Add(new ConversationMessage
-        {
-            Role = "tool",
-            Content = toolContent,
-            ToolCallId = pushToolCallId
-        });
+        Messages.Add(new ConversationMessage { Role = "user", Content = userContent });
     }
 
     // Appends result to memories and rewrites FRAME_0 task to next_steps.
@@ -393,26 +398,42 @@ public class SfcmConversation : ILlmConversation
         }
     }
 
-    // Finds the tool_call ID for push_context in the assistant message at the given index.
-    private string FindPushToolCallId(int boundaryIndex)
+    // Removes the push_context tool call from the assistant message at or before the given index.
+    // If the assistant message becomes empty (no content, no tool calls), removes it entirely.
+    private void RemovePushToolCall(int searchFromIndex)
     {
-        if (boundaryIndex >= 0 && boundaryIndex < Messages.Count)
+        for (int i = searchFromIndex; i >= 0; i--)
         {
-            ConversationMessage msg = Messages[boundaryIndex];
-            if (msg.ToolCalls != null)
+            ConversationMessage msg = Messages[i];
+            if (msg.Role != "assistant" || msg.ToolCalls == null)
             {
-                foreach (ConversationToolCall tc in msg.ToolCalls)
+                continue;
+            }
+
+            ConversationToolCall? pushCall = null;
+            foreach (ConversationToolCall tc in msg.ToolCalls)
+            {
+                if (tc.Function.Name == "push_context")
                 {
-                    if (tc.Function.Name == "push_context")
-                    {
-                        return tc.Id;
-                    }
+                    pushCall = tc;
+                    break;
                 }
             }
-        }
 
-        // Fallback: generate a synthetic ID.
-        return $"sfcm_pop_{Guid.NewGuid():N}";
+            if (pushCall == null)
+            {
+                continue;
+            }
+
+            msg.ToolCalls.Remove(pushCall);
+
+            if (msg.ToolCalls.Count == 0 && string.IsNullOrEmpty(msg.Content))
+            {
+                Messages.RemoveAt(i);
+            }
+
+            return;
+        }
     }
 
     // Rebuilds the frame stack from the message array after reconstitution from server data.
@@ -440,9 +461,20 @@ public class SfcmConversation : ILlmConversation
             }
 
             string task = "";
+            string details = "";
             if (idx + 1 < Messages.Count && Messages[idx + 1].Role == "user")
             {
-                task = Messages[idx + 1].Content ?? "";
+                string userContent = Messages[idx + 1].Content ?? "";
+                int separatorPos = userContent.IndexOf("\n\n");
+                if (separatorPos >= 0)
+                {
+                    task = userContent.Substring(0, separatorPos);
+                    details = userContent.Substring(separatorPos + 2);
+                }
+                else
+                {
+                    task = userContent;
+                }
             }
 
             int depth = _frameStack.Count;
@@ -477,6 +509,7 @@ public class SfcmConversation : ILlmConversation
             {
                 Id = frameId,
                 Task = task,
+                Details = details,
                 Depth = depth,
                 BoundaryIndex = boundary,
                 StartIndex = idx
@@ -496,10 +529,8 @@ public class SfcmConversation : ILlmConversation
     // Builds the initial message structure: system prompt, user goal, memories, FRAME_0, sentinel.
     private void BuildInitialMessages(string systemPrompt, string userGoal)
     {
-        string sfcmInstructions = WorkerSession.Prompts.TryGetValue("sfcm", out string? sfcm) ? sfcm : string.Empty;
-        string fullSystemPrompt = !string.IsNullOrEmpty(sfcmInstructions)
-            ? $"{sfcmInstructions}\n\n{systemPrompt}"
-            : systemPrompt;
+        string sfcmInstructions = WorkerSession.Prompts["sfcm"];
+        string fullSystemPrompt = $"{sfcmInstructions}\n\n{systemPrompt}";
 
         Messages.Add(new ConversationMessage { Role = "system", Content = fullSystemPrompt });
         Messages.Add(new ConversationMessage { Role = "user", Content = userGoal });
@@ -580,6 +611,7 @@ public class SfcmConversation : ILlmConversation
     {
         public string Id { get; set; } = string.Empty;
         public string Task { get; set; } = string.Empty;
+        public string Details { get; set; } = string.Empty;
         public int Depth { get; set; }
         public int BoundaryIndex { get; set; }
         public int StartIndex { get; set; }

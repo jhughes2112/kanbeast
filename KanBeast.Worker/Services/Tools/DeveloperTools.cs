@@ -57,7 +57,7 @@ public static class DeveloperTools
 
 					string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
-				string systemPrompt = WorkerSession.Prompts.TryGetValue("developer", out string? devPrompt) ? devPrompt : string.Empty;
+				string systemPrompt = WorkerSession.Prompts["developer"];
 					ConversationMemories memories = new ConversationMemories(context.Memories);
 
 					string? resolvedSubAgentId = string.IsNullOrWhiteSpace(subAgentLlmConfigId) ? null : subAgentLlmConfigId;

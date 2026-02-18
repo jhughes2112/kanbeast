@@ -50,7 +50,7 @@ public static class LlmConversationFactory
             return new SfcmConversation(systemPrompt, userPrompt, memories, role, toolContext, displayName);
         }
 
-        string? compactionPrompt = WorkerSession.Prompts.TryGetValue("compaction", out string? cp) ? cp : null;
+        string compactionPrompt = WorkerSession.Prompts["compaction"];
         double contextSizePercent = WorkerSession.Compaction.ContextSizePercent;
         return new CompactingConversation(systemPrompt, userPrompt, memories, role, toolContext, compactionPrompt, contextSizePercent, displayName);
     }
@@ -63,7 +63,7 @@ public static class LlmConversationFactory
             return new SfcmConversation(data, role, toolContext);
         }
 
-        string? compactionPrompt = WorkerSession.Prompts.TryGetValue("compaction", out string? cp) ? cp : null;
+        string compactionPrompt = WorkerSession.Prompts["compaction"];
         double contextSizePercent = WorkerSession.Compaction.ContextSizePercent;
         return new CompactingConversation(data, role, toolContext, compactionPrompt, contextSizePercent);
     }

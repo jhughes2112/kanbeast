@@ -41,12 +41,6 @@ public class AgentOrchestrator
 			_logger.LogInformation("Reconstituting planning conversation from server: {Id}", existing.Id);
 			await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Reconstituted conversation from server", cancellationToken);
 
-			// Always patch message 0 with the latest system prompt so prompt changes take effect.
-			if (existing.Messages.Count > 0)
-			{
-				existing.Messages[0] = new ConversationMessage { Role = "system", Content = WorkerSession.Prompts["planning"] };
-			}
-
 			ConversationMemories memories = new ConversationMemories(existing.Memories);
 				ToolContext context = new ToolContext(null, null, memories, null, null);
 				_planningConversation = LlmConversationFactory.Reconstitute(existing, LlmRole.Planning, context);

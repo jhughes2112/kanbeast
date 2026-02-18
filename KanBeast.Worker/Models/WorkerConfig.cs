@@ -17,6 +17,6 @@ public class WorkerConfig
         {
             return prompt;
         }
-        return string.Empty;
+        throw new KeyNotFoundException($"Required prompt not found: {key}");
     }
 }

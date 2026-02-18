@@ -52,7 +52,7 @@ public static class SubAgentTools
 
 				string fullInstructions = $"{taskSummary}\n\n{instructions}";
 
-				string systemPrompt = WorkerSession.Prompts.TryGetValue("subagent", out string? prompt) ? prompt : string.Empty;
+				string systemPrompt = WorkerSession.Prompts["subagent"];
 
 				ConversationMemories memories = new ConversationMemories(context.Memories);
 					ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, memories, null, null);

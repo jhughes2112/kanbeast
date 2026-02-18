@@ -142,13 +142,14 @@ public class Program
 
 		// One-time session setup.
 		string dateNow = DateTime.Now.ToString();
-		Dictionary<string, string> prompts = new Dictionary<string, string>
+		Dictionary<string, string> prompts = new Dictionary<string, string>();
+		foreach ((string key, string raw) in config.Prompts)
 		{
-			{ "planning", config.GetPrompt("planning").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
-			{ "developer", config.GetPrompt("developer").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
-			{ "subagent", config.GetPrompt("subagent").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) },
-			{ "compaction", config.GetPrompt("compaction").Replace("{repoDir}", repoDir).Replace("{currentDate}", dateNow).Replace("{ticketId}", config.TicketId) }
-		};
+			prompts[key] = raw
+				.Replace("{repoDir}", repoDir)
+				.Replace("{currentDate}", dateNow)
+				.Replace("{ticketId}", config.TicketId);
+		}
 
 		TicketHolder ticketHolder = new TicketHolder(ticket);
 		LlmProxy llmProxy = new LlmProxy(config.Settings.LLMConfigs);

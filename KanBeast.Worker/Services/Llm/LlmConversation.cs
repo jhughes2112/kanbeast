@@ -96,6 +96,13 @@ public class CompactingConversation : ILlmConversation
 		_contextSizePercent = contextSizePercent;
 		_dirtyTimestamp = 0;
 		toolContext.OnMemoriesChanged = RefreshMemoriesMessage;
+
+		// Refresh system prompt to latest version so prompt edits take effect.
+		string promptKey = role == LlmRole.Planning ? "planning" : "developer";
+		if (Data.Messages.Count > 0)
+		{
+			Data.Messages[0] = new ConversationMessage { Role = "system", Content = WorkerSession.Prompts[promptKey] };
+		}
 	}
 
 	public void IncrementIteration()
@@ -260,9 +267,7 @@ public class CompactingConversation : ILlmConversation
 		Data.Memories.Clear();
 
 		string promptKey = Role == LlmRole.Planning ? "planning" : "developer";
-		string systemPrompt = WorkerSession.Prompts.TryGetValue(promptKey, out string? latestPrompt)
-			? latestPrompt
-			: string.Empty;
+		string systemPrompt = WorkerSession.Prompts[promptKey];
 		Messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
 
 		Ticket ticket = WorkerSession.TicketHolder.Ticket;
