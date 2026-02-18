@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace KanBeast.Shared;
 
 public enum TicketStatus
@@ -33,6 +35,29 @@ public class Ticket
 	public decimal LlmCost { get; set; } = 0m;
 	public decimal MaxCost { get; set; } = 0m;
 	public List<ConversationInfo> Conversations { get; set; } = new();
+
+	public string FormatPlanningGoal()
+	{
+		StringBuilder sb = new StringBuilder();
+		sb.AppendLine($"Ticket: {Title}");
+		sb.AppendLine($"Description: {Description}");
+
+		if (Tasks.Count > 0)
+		{
+			sb.AppendLine();
+			sb.AppendLine("Tasks:");
+			foreach (KanbanTask task in Tasks)
+			{
+				sb.AppendLine($"  - {task.Name}");
+				foreach (KanbanSubtask subtask in task.Subtasks)
+				{
+					sb.AppendLine($"      [{subtask.Status}] {subtask.Name}");
+				}
+			}
+		}
+
+		return sb.ToString().TrimEnd();
+	}
 }
 
 public class KanbanTask

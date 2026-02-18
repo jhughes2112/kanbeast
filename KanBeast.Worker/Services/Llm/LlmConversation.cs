@@ -262,6 +262,13 @@ public class CompactingConversation : ILlmConversation
 
 	public async Task ResetAsync()
 	{
+		string userPrompt = Messages.Count > 1 ? Messages[1].Content ?? "" : "";
+
+		if (Role == LlmRole.Planning)
+		{
+			userPrompt = WorkerSession.TicketHolder.Ticket.FormatPlanningGoal();
+		}
+
 		Messages.Clear();
 		_memories.Clear();
 		Data.ChapterSummaries.Clear();
@@ -271,8 +278,6 @@ public class CompactingConversation : ILlmConversation
 		string systemPrompt = WorkerSession.Prompts[promptKey];
 		Messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
 
-		Ticket ticket = WorkerSession.TicketHolder.Ticket;
-		string userPrompt = $"Ticket: {ticket.Title}\nDescription: {ticket.Description}";
 		Messages.Add(new ConversationMessage { Role = "user", Content = userPrompt });
 		Messages.Add(new ConversationMessage { Role = "assistant", Content = _memories.Format() });
 		Messages.Add(new ConversationMessage { Role = "assistant", Content = "[Chapter summaries: None yet]" });

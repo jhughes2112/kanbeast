@@ -156,6 +156,12 @@ function setupSignalR() {
         handleTicketEvent();
     });
 
+    connection.on('SettingsUpdated', async (llmConfigs) => {
+        if (settings) {
+            settings.llmConfigs = llmConfigs || [];
+        }
+    });
+
     // Conversation events from workers.
     connection.on('ConversationsUpdated', (ticketId, conversations) => {
         const oldConvos = ticketConversations[ticketId] || [];
@@ -366,12 +372,8 @@ async function handleTicketEvent() {
     // If the full-screen chat modal is open, refresh its info bar and planner LLM dropdown.
     if (chatModalTicketId) {
         refreshChatInfoBar(chatModalTicketId);
-        const ticket = tickets.find(t => t.id === chatModalTicketId);
-        if (ticket) {
-            const chatSelect = document.getElementById('chatPlannerLlm');
-            if (chatSelect) {
-                chatSelect.value = ticket.plannerLlmId || '';
-            }
+        if (chatModalConversationId) {
+            syncLlmDropdownToConversation(chatModalTicketId, chatModalConversationId, 'chatPlannerLlm');
         }
     }
 }
@@ -1235,6 +1237,7 @@ function setupDetailChat(ticketId) {
         if (deleteBtn) deleteBtn.style.display = info ? '' : 'none';
         loadAndRestoreDetailConversation(ticketId, selectedConvId, scrollState);
         updateBusyIndicators(ticketId, selectedConvId, !!busyConversations[`${ticketId}:${selectedConvId}`]);
+        syncLlmDropdownToConversation(ticketId, selectedConvId, 'detailPlannerLlm');
     }
 
     dropdown.addEventListener('change', () => {
@@ -1247,6 +1250,7 @@ function setupDetailChat(ticketId) {
             if (deleteBtn) deleteBtn.style.display = info ? '' : 'none';
             saveTicketConversationState(ticketId, convId, { atBottom: true });
             updateBusyIndicators(ticketId, convId, !!busyConversations[`${ticketId}:${convId}`]);
+            syncLlmDropdownToConversation(ticketId, convId, 'detailPlannerLlm');
         } else {
             detailChatConversationId = null;
             messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation above.</div>';
@@ -1588,6 +1592,35 @@ async function updateMaxCost(ticketId) {
 }
 
 window.updateMaxCost = updateMaxCost;
+
+// Syncs the planner LLM dropdown to the active model of the given conversation.
+function syncLlmDropdownToConversation(ticketId, conversationId, dropdownId) {
+    const select = document.getElementById(dropdownId);
+    if (!select) {
+        return;
+    }
+
+    const convos = ticketConversations[ticketId] || [];
+    const info = convos.find(c => c.id === conversationId);
+    const activeModel = info ? info.activeModel : null;
+
+    if (!activeModel) {
+        select.value = '';
+        return;
+    }
+
+    // Match active model name to a config id.
+    const llmConfigs = (settings && settings.llmConfigs) || [];
+    let matchedId = '';
+    for (let i = 0; i < llmConfigs.length; i++) {
+        if (llmConfigs[i].model === activeModel) {
+            matchedId = llmConfigs[i].id || '';
+            break;
+        }
+    }
+
+    select.value = matchedId;
+}
 
 // Build the planner LLM dropdown HTML
 function buildPlannerLlmDropdown(ticket, elementId) {
@@ -2392,6 +2425,7 @@ function updateConversationDropdown(ticketId, switchToId) {
         dropdown.dispatchEvent(new Event('change'));
     } else if (previousValue && convos.some(c => c.id === previousValue)) {
         dropdown.value = previousValue;
+        syncLlmDropdownToConversation(ticketId, previousValue, 'chatPlannerLlm');
     }
 
     // If still nothing selected, pick the best active conversation.
@@ -2435,6 +2469,7 @@ function updateDetailConversationDropdown(ticketId, switchToId) {
         dropdown.dispatchEvent(new Event('change'));
     } else if (previousValue && convos.some(c => c.id === previousValue)) {
         dropdown.value = previousValue;
+        syncLlmDropdownToConversation(ticketId, previousValue, 'detailPlannerLlm');
     }
 
     // If still nothing selected, pick the best active conversation.
@@ -2559,6 +2594,7 @@ function openChat(ticketId) {
         const info = convos.find(c => c.id === selectedConvId);
         setChatInputEnabled(!(info && info.isFinished));
         updateBusyIndicators(ticketId, selectedConvId, !!busyConversations[`${ticketId}:${selectedConvId}`]);
+        syncLlmDropdownToConversation(ticketId, selectedConvId, 'chatPlannerLlm');
     } else {
         messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation from the dropdown above.</div>';
         setChatInputEnabled(false);
@@ -2573,6 +2609,7 @@ function openChat(ticketId) {
             const info = currentConvos.find(c => c.id === convId);
             setChatInputEnabled(!(info && info.isFinished));
             updateBusyIndicators(ticketId, convId, !!busyConversations[`${ticketId}:${convId}`]);
+            syncLlmDropdownToConversation(ticketId, convId, 'chatPlannerLlm');
         } else {
             chatModalConversationId = null;
             messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation from the dropdown above.</div>';

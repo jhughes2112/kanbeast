@@ -170,6 +170,13 @@ public class SfcmConversation : ILlmConversation
 
     public async Task ResetAsync()
     {
+        string userGoal = Messages.Count > 1 ? Messages[1].Content ?? "" : "";
+
+        if (Role == LlmRole.Planning)
+        {
+            userGoal = WorkerSession.TicketHolder.Ticket.FormatPlanningGoal();
+        }
+
         Messages.Clear();
         _memories.Clear();
         Data.Memories.Clear();
@@ -177,9 +184,6 @@ public class SfcmConversation : ILlmConversation
 
         string promptKey = Role == LlmRole.Planning ? "planning" : "developer";
         string systemPrompt = WorkerSession.Prompts[promptKey];
-
-        Ticket ticket = WorkerSession.TicketHolder.Ticket;
-        string userGoal = $"Ticket: {ticket.Title}\nDescription: {ticket.Description}";
 
         BuildInitialMessages(systemPrompt, userGoal);
 
