@@ -287,6 +287,7 @@
 
 				if (typeof init === 'function') {
 					init();
+					setupChatEventListeners();
 				}
 			} catch (error) {
 				console.error('Failed to load application:', error);

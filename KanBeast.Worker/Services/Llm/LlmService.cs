@@ -279,12 +279,19 @@ public class LlmService
 
 						ConversationMessage assistantMessage = response.Choices[0].Message;
 
+						// Trim whitespace from function names and argument keys that some models produce.
+						if (assistantMessage.ToolCalls != null && assistantMessage.ToolCalls.Count > 0)
+						{
+							NormalizeToolCalls(assistantMessage.ToolCalls);
+						}
+
 						// If no native tool calls, try parsing XML-style tool calls from content.
 						if ((assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0) && !string.IsNullOrEmpty(assistantMessage.Content))
 						{
 							List<ConversationToolCall>? xmlToolCalls = TryParseXmlToolCalls(assistantMessage.Content, tools);
 							if (xmlToolCalls != null)
 							{
+								NormalizeToolCalls(xmlToolCalls);
 								assistantMessage.ToolCalls = xmlToolCalls;
 								Console.WriteLine($"Parsed {xmlToolCalls.Count} XML-style tool call(s) from {_config.Model} response");
 							}
@@ -613,6 +620,39 @@ public class LlmService
 		long nowSeconds = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
 		long delta = epochSeconds - nowSeconds + 1;
 		return delta > 0 ? (int)delta : 0;
+	}
+
+	// Trims whitespace from function names and argument keys that some models produce.
+	private static void NormalizeToolCalls(List<ConversationToolCall> toolCalls)
+	{
+		foreach (ConversationToolCall tc in toolCalls)
+		{
+			tc.Function.Name = tc.Function.Name.Trim();
+
+			try
+			{
+				JsonObject? argsObj = JsonNode.Parse(tc.Function.Arguments)?.AsObject();
+				if (argsObj != null)
+				{
+					List<(string key, JsonNode? value)> entries = new List<(string, JsonNode?)>();
+					foreach (KeyValuePair<string, JsonNode?> kvp in argsObj)
+					{
+						entries.Add((kvp.Key.Trim(), kvp.Value));
+					}
+
+					JsonObject trimmed = new JsonObject();
+					foreach ((string key, JsonNode? value) in entries)
+					{
+						trimmed[key] = value?.DeepClone();
+					}
+
+					tc.Function.Arguments = trimmed.ToJsonString();
+				}
+			}
+			catch
+			{
+			}
+		}
 	}
 
 	// Scans content for <tool_call> or <function_call> XML blocks containing JSON payloads.
