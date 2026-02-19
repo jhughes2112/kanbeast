@@ -35,10 +35,20 @@ public class LlmProxy
 		Console.WriteLine($"LlmProxy: Updated to {configs.Count} LLM config(s)");
 	}
 
-	// Runs the conversation using only the LLM identified by configId.
+	// Runs one LLM turn on the conversation using the specified LLM config.
 	// Waits for short rate limits (≤20s), returns error for longer ones or failures.
-	public async Task<LlmResult> ContinueWithConfigIdAsync(string configId, ILlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
+	public async Task<LlmResult> ContinueAsync(string configId, ILlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
+		cancellationToken.ThrowIfCancellationRequested();
+
+		conversation.ToolContext.LlmConfigId = configId;
+
+		decimal remainingBudget = conversation.GetRemainingBudget();
+		if (remainingBudget > 0 && remainingBudget <= 0)
+		{
+			return new LlmResult { ExitReason = LlmExitReason.CostExceeded };
+		}
+
 		LlmService? service = null;
 		foreach (LlmService s in _services)
 		{
@@ -59,7 +69,6 @@ public class LlmProxy
 			return new LlmResult { ExitReason = LlmExitReason.LlmCallFailed, ErrorMessage = $"LLM {service.Model} is permanently down" };
 		}
 
-		// Wait for short rate limits on the requested LLM.
 		if (!service.IsAvailable)
 		{
 			TimeSpan waitTime = service.AvailableAt - DateTimeOffset.UtcNow;
@@ -74,7 +83,6 @@ public class LlmProxy
 			}
 		}
 
-		decimal remainingBudget = conversation.GetRemainingBudget();
 		(LlmResult result, decimal cost) = await service.RunAsync(conversation, remainingBudget, maxCompletionTokens, cancellationToken);
 		await conversation.RecordCostAsync(cost, cancellationToken);
 
@@ -119,96 +127,66 @@ public class LlmProxy
 		return false;
 	}
 
-	// Runs the conversation using the first available LLM.
-	// Waits for short rate limits (≤20s), returns error for longer ones or failures.
-	// Does not silently cycle through LLMs — returns the result (success or failure) from the one it picks.
-	public async Task<LlmResult> ContinueAsync(ILlmConversation conversation, int? maxCompletionTokens, CancellationToken cancellationToken)
+	// Runs the conversation in a loop
+	// On MaxIterationsReached (or Completed when exitOnCompletion is false), resets iteration and nudges with continueMessage.
+	// maxResets: maximum reset-and-continue cycles before giving up (0 = unlimited).
+	public async Task<LlmResult> RunToCompletionAsync(
+		ILlmConversation conversation,
+		string configId,
+		int? maxCompletionTokens,
+		string continueMessage,
+		int maxResets,
+		bool exitOnCompletion,
+		CancellationToken cancellationToken)
 	{
-		cancellationToken.ThrowIfCancellationRequested();
+		LlmResult finalResult = new LlmResult { ExitReason = LlmExitReason.LlmCallFailed, ErrorMessage = "RunToCompletionAsync ended unexpectedly" };
 
-		decimal remainingBudget = conversation.GetRemainingBudget();
-		if (remainingBudget > 0 && remainingBudget <= 0)
+		for (int resets = 0; ; )
 		{
-			return new LlmResult { ExitReason = LlmExitReason.CostExceeded };
-		}
+			cancellationToken.ThrowIfCancellationRequested();
 
-		LlmService? service = FindAvailableService();
+			LlmResult result = await ContinueAsync(configId, conversation, maxCompletionTokens, cancellationToken);
 
-		if (service == null)
-		{
-			if (AreAllServicesPermanentlyDown())
+			bool shouldReset = false;
+
+			if (result.ExitReason == LlmExitReason.ToolRequestedExit)
 			{
-				return new LlmResult { ExitReason = LlmExitReason.LlmCallFailed, ErrorMessage = "All configured LLMs are permanently down" };
+				finalResult = result;
+			}
+			else if (result.ExitReason == LlmExitReason.Completed && exitOnCompletion)
+			{
+				finalResult = result;
+			}
+			else if (result.ExitReason == LlmExitReason.Completed || result.ExitReason == LlmExitReason.MaxIterationsReached)
+			{
+				resets++;
+				if (maxResets > 0 && resets >= maxResets)
+				{
+					result.ExitReason = LlmExitReason.MaxIterationsReached;
+					finalResult = result;
+				}
+				else
+				{
+					shouldReset = true;
+				}
+			}
+			else
+			{
+				finalResult = result;
 			}
 
-			// Wait for the soonest if it's a short delay.
-			DateTimeOffset soonest = FindSoonestAvailableTime();
-			TimeSpan waitTime = soonest - DateTimeOffset.UtcNow;
-
-			if (waitTime.TotalSeconds > ShortWaitThresholdSeconds)
+			if (shouldReset)
 			{
-				return new LlmResult { ExitReason = LlmExitReason.RateLimited, RetryAfter = soonest, ErrorMessage = $"All LLMs rate limited for {waitTime.TotalSeconds:F0}s" };
+				conversation.ResetIteration();
+				await conversation.AddUserMessageAsync(continueMessage, cancellationToken);
 			}
-
-			if (waitTime > TimeSpan.Zero)
+			else
 			{
-				Console.WriteLine($"All LLMs busy, waiting {waitTime.TotalSeconds:F0}s...");
-				await Task.Delay(waitTime, cancellationToken);
-			}
-
-			service = FindAvailableService();
-			if (service == null)
-			{
-				return new LlmResult { ExitReason = LlmExitReason.LlmCallFailed, ErrorMessage = "No LLM available after short wait" };
-			}
-		}
-
-		(LlmResult result, decimal cost) = await service.RunAsync(conversation, remainingBudget, maxCompletionTokens, cancellationToken);
-		await conversation.RecordCostAsync(cost, cancellationToken);
-
-		return result;
-	}
-
-	// Finds the first available service in configured order.
-	internal LlmService? FindAvailableService()
-	{
-		foreach (LlmService service in _services)
-		{
-			if (service.IsAvailable)
-			{
-				return service;
+				break;
 			}
 		}
 
-		return null;
-	}
-
-	private DateTimeOffset FindSoonestAvailableTime()
-	{
-		DateTimeOffset soonest = DateTimeOffset.MaxValue;
-
-		foreach (LlmService service in _services)
-		{
-			if (service.AvailableAt < soonest)
-			{
-				soonest = service.AvailableAt;
-			}
-		}
-
-		return soonest;
-	}
-
-	private bool AreAllServicesPermanentlyDown()
-	{
-		foreach (LlmService service in _services)
-		{
-			if (!service.IsPermanentlyDown)
-			{
-				return false;
-			}
-		}
-
-		return true;
+		return finalResult;
 	}
 
 	// Returns the smallest context length across all non-permanently-down services.

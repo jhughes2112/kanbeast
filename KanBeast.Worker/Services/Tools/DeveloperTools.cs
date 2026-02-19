@@ -58,7 +58,7 @@ public static class DeveloperTools
 					string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
 					string? resolvedSubAgentId = string.IsNullOrWhiteSpace(subAgentLlmConfigId) ? null : subAgentLlmConfigId;
-					ToolContext devContext = new ToolContext(taskId, subtaskId, resolvedSubAgentId);
+					ToolContext devContext = new ToolContext(taskId, subtaskId, llmConfigId, resolvedSubAgentId);
 
 					string ticketId = WorkerSession.TicketHolder.Ticket.Id;
 
@@ -86,15 +86,14 @@ public static class DeveloperTools
 					}
 
 				string content = string.Empty;
-				int iterationCount = 0;
-				int contextResetCount = 0;
 				bool subtaskComplete = false;
 
-				for (;;)
+				for (int contextResetCount = 0; ; )
 				{
-					LlmResult llmResult = !string.IsNullOrWhiteSpace(llmConfigId)
-						? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(llmConfigId, conversation, null, WorkerSession.CancellationToken)
-						: await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
+					LlmResult llmResult = await WorkerSession.LlmProxy.RunToCompletionAsync(
+						conversation, llmConfigId, null,
+						"Continue working or call end_subtask tool when done.",
+						7, false, WorkerSession.CancellationToken);
 
 					if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
 					{
@@ -113,38 +112,23 @@ public static class DeveloperTools
 						subtaskComplete = true;
 						break;
 					}
-					else if (llmResult.ExitReason == LlmExitReason.Completed || llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
+					else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
 					{
-						iterationCount++;
-						conversation.ResetIteration();
+						contextResetCount++;
 
-						if (iterationCount >= 7)
+						if (contextResetCount >= 2)
 						{
-							contextResetCount++;
-
-							if (contextResetCount >= 2)
-							{
-								await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Developer exceeded max context resets, giving up on subtask", WorkerSession.CancellationToken);
-								content = "Developer exceeded max context resets and could not complete the subtask.";
-								break;
-							}
-
-							await conversation.FinalizeAsync(WorkerSession.CancellationToken);
-
-							string continuePrompt = $"You were working on subtask '{subtaskName}' but got stuck. Look at the local changes and decide if you should continue or take a fresh approach.\nDescription: {subtaskDescription}\nCall end_subtask tool when complete.";
-
-							ToolContext continueContext = new ToolContext(taskId, subtaskId, devContext.SubAgentLlmConfigId);
-								conversation = LlmConversationFactory.Create(LlmRole.Developer, continueContext, continuePrompt, $"Developer - {subtaskName} (retry)", null);
-							iterationCount = 0;
+							await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Developer exceeded max context resets, giving up on subtask", WorkerSession.CancellationToken);
+							content = "Developer exceeded max context resets and could not complete the subtask.";
+							break;
 						}
-						else if (iterationCount == 3)
-						{
-							await conversation.AddUserMessageAsync("You've been working for a while. Are you making progress? If you're stuck, try a different approach. Call end_subtask tool when done.", WorkerSession.CancellationToken);
-						}
-						else
-						{
-							await conversation.AddUserMessageAsync("Continue working or call end_subtask tool when done.", WorkerSession.CancellationToken);
-						}
+
+						await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+
+						string continuePrompt = $"You were working on subtask '{subtaskName}' but got stuck. Look at the local changes and decide if you should continue or take a fresh approach.\nDescription: {subtaskDescription}\nCall end_subtask tool when complete.";
+
+						ToolContext continueContext = new ToolContext(taskId, subtaskId, llmConfigId, devContext.SubAgentLlmConfigId);
+						conversation = LlmConversationFactory.Create(LlmRole.Developer, continueContext, continuePrompt, $"Developer - {subtaskName} (retry)", null);
 					}
 					else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
 					{

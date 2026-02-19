@@ -19,7 +19,7 @@ public static class SearchToolsTests
 				CreateTestFiles(tempDir);
 
 				WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!, new KanBeast.Shared.WebSearchConfig(), new KanBeast.Shared.CompactionSettings());
-				ToolContext tc = new ToolContext(null, null, null);
+				ToolContext tc = new ToolContext(null, null, null, null);
 
 				TestGlobToRegex(ctx);
 				TestGlob(ctx, tc, tempDir);

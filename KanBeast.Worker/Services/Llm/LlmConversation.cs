@@ -140,22 +140,6 @@ public class CompactingConversation : ILlmConversation
 		return WorkerSession.Prompts[promptKey];
 	}
 
-	private void AddChapterSummary(string summary)
-	{
-		if (string.IsNullOrWhiteSpace(summary))
-		{
-			return;
-		}
-
-		if (Data.ChapterSummaries.Count >= MaxChapterSummaries)
-		{
-			Data.ChapterSummaries.RemoveAt(0);
-		}
-
-		Data.ChapterSummaries.Add(summary);
-		UpdateSummariesMessage();
-	}
-
 	private void UpdateSummariesMessage()
 	{
 		if (Messages.Count < FirstCompressibleIndex)
@@ -279,7 +263,13 @@ public class CompactingConversation : ILlmConversation
 
 	public async Task<string?> FinalizeAsync(CancellationToken cancellationToken)
 	{
-		string? handoffSummary = await CompactForHandoffAsync(cancellationToken);
+		string? handoffSummary = null;
+
+		if (Messages.Count > FirstCompressibleIndex)
+		{
+			string logPrefix = !string.IsNullOrWhiteSpace(DisplayName) ? $"{DisplayName} (Handoff)" : "Handoff";
+			handoffSummary = await RunCompactionSummaryAsync(FirstCompressibleIndex, Messages.Count, logPrefix, cancellationToken);
+		}
 
 		Data.CompletedAt = DateTime.UtcNow.ToString("O");
 		Data.IsFinished = true;
@@ -303,66 +293,62 @@ public class CompactingConversation : ILlmConversation
 
 	// ── Compaction ──────────────────────────────────────────────────────────
 
-	// Runs compaction on the entire conversation for handoff to a parent agent.
-	// Returns the summary produced by the compaction LLM, or null on failure.
-	private async Task<string?> CompactForHandoffAsync(CancellationToken cancellationToken)
+	// Runs a compaction LLM conversation over messages[startIndex..endIndex) and returns the summary, or null on failure.
+	private async Task<string?> RunCompactionSummaryAsync(int startIndex, int endIndex, string logPrefix, CancellationToken cancellationToken)
 	{
-		if (!CompactionEnabled || Messages.Count <= FirstCompressibleIndex)
+		string? llmConfigId = ToolContext.LlmConfigId;
+
+		if (!CompactionEnabled || endIndex <= startIndex || llmConfigId == null)
 		{
 			return null;
 		}
 
 		string originalTask = Messages.Count > 2 ? Messages[2].Content ?? "" : "";
-		string historyBlock = BuildHistoryBlock(Messages, FirstCompressibleIndex, Messages.Count);
+		string historyBlock = BuildHistoryBlock(Messages, startIndex, endIndex);
 
 		string compactionUserPrompt = $"""
 			[Original task]
 			{originalTask}
 			""";
 
-		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, null);
-		string compactLogPrefix = !string.IsNullOrWhiteSpace(DisplayName) ? $"{DisplayName} (Handoff)" : "Handoff";
+		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, llmConfigId, null);
 
-		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, compactionContext, compactionUserPrompt, compactLogPrefix, null);
+		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, compactionContext, compactionUserPrompt, logPrefix, null);
 
 		await summaryConversation.AddUserMessageAsync($"""
 			<history>
 			{historyBlock}
 			</history>
 
-			Read {WorkerSession.WorkDir}/MEMORY.md (create it if missing), update it with any critical project details from this history, then call summarize_history with a factual summary to return to the parent agent.
+			Read {WorkerSession.WorkDir}/MEMORY.md (create it if missing), update it with any critical project details from this history, then call summarize_history with a factual summary.
 			""", cancellationToken);
 
-		for (int attempt = 0; attempt < 3; attempt++)
-		{
-			LlmResult result = await WorkerSession.LlmProxy.ContinueAsync(summaryConversation, null, cancellationToken);
+		LlmResult result = await WorkerSession.LlmProxy.RunToCompletionAsync(
+			summaryConversation, llmConfigId, null,
+			"Call summarize_history with the chapter summary.",
+			3, false, cancellationToken);
 
-			if (result.ExitReason == LlmExitReason.ToolRequestedExit && result.FinalToolCalled == "summarize_history")
-			{
-				Console.WriteLine($"[Handoff] Compaction complete for {DisplayName}");
-				return result.Content;
-			}
-			else if (result.ExitReason == LlmExitReason.Completed || result.ExitReason == LlmExitReason.MaxIterationsReached)
-			{
-				summaryConversation.ResetIteration();
-				await summaryConversation.AddUserMessageAsync("Call summarize_history with the chapter summary.", cancellationToken);
-			}
-			else
-			{
-				Console.WriteLine($"[Handoff] Compaction failed for {DisplayName}: {result.ErrorMessage}");
-				return null;
-			}
+		string? summary = null;
+
+		if (result.ExitReason == LlmExitReason.ToolRequestedExit && result.FinalToolCalled == "summarize_history")
+		{
+			Console.WriteLine($"[{logPrefix}] Compaction complete");
+			summary = result.Content;
+		}
+		else
+		{
+			string reason = !string.IsNullOrWhiteSpace(result.ErrorMessage) ? result.ErrorMessage : result.ExitReason.ToString();
+			Console.WriteLine($"[{logPrefix}] Compaction failed: {reason}");
 		}
 
-		Console.WriteLine($"[Handoff] Compaction did not complete after 3 attempts for {DisplayName}");
-		return null;
+		return summary;
 	}
 
-	private Task CompactIfNeededAsync(CancellationToken cancellationToken)
+	private async Task CompactIfNeededAsync(CancellationToken cancellationToken)
 	{
 		if (!CompactionEnabled)
 		{
-			return Task.CompletedTask;
+			return;
 		}
 
 		double contextSizePercent = WorkerSession.Compaction.ContextSizePercent;
@@ -381,15 +367,11 @@ public class CompactingConversation : ILlmConversation
 		int estimatedTokens = EstimateTokenCount(Messages);
 		if (estimatedTokens <= effectiveThreshold)
 		{
-			return Task.CompletedTask;
+			return;
 		}
 
 		Console.WriteLine($"[Compaction] ~{estimatedTokens} tokens exceeds {effectiveThreshold} threshold ({contextSizePercent:P0} of {contextLength} smallest context), compacting...");
-		return PerformCompactionAsync(cancellationToken);
-	}
 
-	private async Task PerformCompactionAsync(CancellationToken cancellationToken)
-	{
 		int totalCompressible = Messages.Count - FirstCompressibleIndex;
 		if (totalCompressible < 2)
 		{
@@ -403,56 +385,21 @@ public class CompactingConversation : ILlmConversation
 			return;
 		}
 
-		string originalTask = Messages.Count > 2 ? Messages[2].Content ?? "" : "";
-		string historyBlock = BuildHistoryBlock(Messages, FirstCompressibleIndex, endIndex);
+		string logPrefix = !string.IsNullOrWhiteSpace(DisplayName) ? $"{DisplayName} (Compaction)" : "Compaction";
+		string? summary = await RunCompactionSummaryAsync(FirstCompressibleIndex, endIndex, logPrefix, cancellationToken);
 
-		string compactionUserPrompt = $"""
-			[Original task]
-			{originalTask}
-			""";
-
-		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, null);
-		string compactLogPrefix = !string.IsNullOrWhiteSpace(DisplayName) ? $"{DisplayName} (Compaction)" : "Compaction";
-
-		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, compactionContext, compactionUserPrompt, compactLogPrefix, null);
-
-		await summaryConversation.AddUserMessageAsync($"""
-			<history>
-			{historyBlock}
-			</history>
-
-			Read {WorkerSession.WorkDir}/MEMORY.md (create it if missing), update it with any critical project details from this history, then call summarize_history with a factual chapter summary.
-			""", cancellationToken);
-
-		for (int attempt = 0; attempt < 3; attempt++)
+		if (summary != null)
 		{
-			LlmResult result = await WorkerSession.LlmProxy.ContinueAsync(summaryConversation, null, cancellationToken);
+			if (Data.ChapterSummaries.Count >= MaxChapterSummaries)
+			{
+				Data.ChapterSummaries.RemoveAt(0);
+			}
 
-			if (result.ExitReason == LlmExitReason.ToolRequestedExit && result.FinalToolCalled == "summarize_history")
-			{
-				AddChapterSummary(result.Content);
-				DeleteRange(FirstCompressibleIndex, endIndex);
-				Console.WriteLine($"[Compaction] Reduced to ~{EstimateTokenCount(Messages)} tokens, now {Data.ChapterSummaries.Count} chapters");
-				return;
-			}
-			else if (result.ExitReason == LlmExitReason.Completed || result.ExitReason == LlmExitReason.MaxIterationsReached)
-			{
-				summaryConversation.ResetIteration();
-				await summaryConversation.AddUserMessageAsync("Call summarize_history with the chapter summary to complete the compaction process.", cancellationToken);
-			}
-			else if (result.ExitReason == LlmExitReason.CostExceeded)
-			{
-				Console.WriteLine("[Compaction] Cost budget exceeded during compaction");
-				return;
-			}
-			else
-			{
-				Console.WriteLine($"[Compaction] LLM failed during compaction: {result.ErrorMessage}");
-				return;
-			}
+			Data.ChapterSummaries.Add(summary);
+			UpdateSummariesMessage();
+			DeleteRange(FirstCompressibleIndex, endIndex);
+			Console.WriteLine($"[Compaction] Reduced to ~{EstimateTokenCount(Messages)} tokens, now {Data.ChapterSummaries.Count} chapters");
 		}
-
-		Console.WriteLine("[Compaction] LLM did not call summarize_history after 3 attempts, skipping compaction");
 	}
 
 	// Deletes messages from startIndex to endIndex (exclusive), preserving the fixed header messages.

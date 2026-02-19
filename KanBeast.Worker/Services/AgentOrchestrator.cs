@@ -56,7 +56,7 @@ public class AgentOrchestrator
 			_logger.LogInformation("Reconstituting planning conversation: {Id}", planningData.Id);
 			await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Reconstituted conversation from server", cancellationToken);
 
-			ToolContext context = new ToolContext(null, null, null);
+			ToolContext context = new ToolContext(null, null, ticketHolder.Ticket.PlannerLlmId, null);
 			_planningConversation = LlmConversationFactory.Reconstitute(planningData, LlmRole.Planning, context);
 
 			await WorkerSession.HubClient.SyncConversationAsync(planningData);
@@ -71,7 +71,7 @@ public class AgentOrchestrator
 				Description: {ticketHolder.Ticket.Description}
 				""";
 
-			ToolContext context = new ToolContext(null, null, null);
+			ToolContext context = new ToolContext(null, null, ticketHolder.Ticket.PlannerLlmId, null);
 			_planningConversation = LlmConversationFactory.Create(
 				LlmRole.Planning,
 				context,
@@ -320,9 +320,14 @@ public class AgentOrchestrator
 				}
 
 				string? plannerLlmId = ticketHolder.Ticket.PlannerLlmId;
-				LlmResult llmResult = !string.IsNullOrWhiteSpace(plannerLlmId)
-					? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(plannerLlmId, _planningConversation!, 16384, cancellationToken)
-					: await WorkerSession.LlmProxy.ContinueAsync(_planningConversation!, 16384, cancellationToken);
+				if (string.IsNullOrWhiteSpace(plannerLlmId))
+				{
+					_logger.LogError("Planning cannot continue: no PlannerLlmId set on ticket");
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: No LLM configured for planner", cancellationToken);
+					return;
+				}
+
+				LlmResult llmResult = await WorkerSession.LlmProxy.ContinueAsync(plannerLlmId, _planningConversation!, 16384, cancellationToken);
 				_logger.LogDebug("Planning response: {Response}", llmResult.Content);
 
 				if (llmResult.ExitReason == LlmExitReason.Completed)

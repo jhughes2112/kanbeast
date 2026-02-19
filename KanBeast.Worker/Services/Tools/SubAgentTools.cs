@@ -47,79 +47,7 @@ public static class SubAgentTools
 		{
 			try
 			{
-				await WorkerSession.ApiClient.AddActivityLogAsync(
-					WorkerSession.TicketHolder.Ticket.Id, $"Sub-agent: {taskSummary}", WorkerSession.CancellationToken);
-
-				string fullInstructions = $"{taskSummary}\n\n{instructions}";
-
-				ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, null);
-
-				// Check for a prior conversation from a crashed run. If found, reconstitute it.
-				ILlmConversation conversation;
-				string? toolCallId = ToolContext.ActiveToolCallId;
-
-				ConversationData? existing = toolCallId != null
-					? await WorkerSession.ApiClient.GetConversationAsync(WorkerSession.TicketHolder.Ticket.Id, toolCallId, WorkerSession.CancellationToken)
-					: null;
-
-				if (existing != null)
-				{
-					conversation = LlmConversationFactory.Reconstitute(existing, LlmRole.DeveloperSubagent, subContext);
-					Console.WriteLine($"[Sub-agent] Reconstituted conversation {toolCallId}");
-				}
-				else
-				{
-					conversation = LlmConversationFactory.Create(
-						LlmRole.DeveloperSubagent,
-						subContext,
-						fullInstructions,
-						$"Sub-agent: {taskSummary}",
-						toolCallId);
-				}
-
-				string content = string.Empty;
-
-				string? subAgentConfigId = context.SubAgentLlmConfigId;
-
-				for (; ; )
-				{
-					LlmResult llmResult = !string.IsNullOrWhiteSpace(subAgentConfigId)
-						? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(subAgentConfigId, conversation, null, WorkerSession.CancellationToken)
-						: await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
-
-					if (llmResult.ExitReason == LlmExitReason.Completed)
-					{
-						content = llmResult.Content;
-						break;
-					}
-					else if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
-					{
-						content = llmResult.Content;
-						break;
-					}
-					else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
-					{
-						conversation.ResetIteration();
-						await conversation.AddUserMessageAsync("Continue working. Call agent_task_complete with your result when done.", WorkerSession.CancellationToken);
-					}
-					else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
-					{
-						content = "Sub-agent stopped: cost budget exceeded";
-						break;
-					}
-					else
-					{
-						content = $"Sub-agent failed: {llmResult.ErrorMessage}";
-						break;
-					}
-				}
-
-				string? handoffSummary = await conversation.FinalizeAsync(WorkerSession.CancellationToken);
-				if (handoffSummary != null)
-				{
-					content = handoffSummary;
-				}
-
+				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.DeveloperSubagent, "Sub-agent", context);
 				result = new ToolResult(content, false, false);
 			}
 			catch (OperationCanceledException)
@@ -135,22 +63,13 @@ public static class SubAgentTools
 		return result;
 	}
 
-	[Description("You MUST call this to signify the end of your assigned task.")]
+	[Description("Call this to signify the end of your assigned task. Compaction will produce the real summary for the parent agent.")]
 	public static Task<ToolResult> AgentTaskCompleteAsync(
-		[Description("Supply only the requested information or an explanation of what went wrong.")] string result,
+		[Description("Brief note about what was accomplished, or empty to signal completion.")] string result,
 		ToolContext context)
 	{
-		ToolResult toolResult;
-
-		if (string.IsNullOrWhiteSpace(result))
-		{
-			toolResult = new ToolResult("Error: Result cannot be empty", false, false);
-		}
-		else
-		{
-			toolResult = new ToolResult(result, true, false);
-		}
-
+		string response = string.IsNullOrWhiteSpace(result) ? "Task complete." : result;
+		ToolResult toolResult = new ToolResult(response, true, false);
 		return Task.FromResult(toolResult);
 	}
 
@@ -188,91 +107,84 @@ public static class SubAgentTools
 		{
 			try
 			{
-				await WorkerSession.ApiClient.AddActivityLogAsync(
-					WorkerSession.TicketHolder.Ticket.Id, $"Inspection: {taskSummary}", WorkerSession.CancellationToken);
-
-				string fullInstructions = $"{taskSummary}\n\n{instructions}";
-
-				ToolContext inspectionContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, null);
-
-				// Check for a prior conversation from a crashed run.
-				ILlmConversation conversation;
-				string? toolCallId = ToolContext.ActiveToolCallId;
-
-				ConversationData? existing = toolCallId != null
-					? await WorkerSession.ApiClient.GetConversationAsync(WorkerSession.TicketHolder.Ticket.Id, toolCallId, WorkerSession.CancellationToken)
-					: null;
-
-				if (existing != null)
-				{
-					conversation = LlmConversationFactory.Reconstitute(existing, LlmRole.PlanningSubagent, inspectionContext);
-					Console.WriteLine($"[Inspection] Reconstituted conversation {toolCallId}");
-				}
-				else
-				{
-					conversation = LlmConversationFactory.Create(
-						LlmRole.PlanningSubagent,
-						inspectionContext,
-						fullInstructions,
-						$"Inspection: {taskSummary}",
-						toolCallId);
-				}
-
-				string content = string.Empty;
-
-				string? subAgentConfigId = context.SubAgentLlmConfigId;
-
-				for (; ; )
-				{
-					LlmResult llmResult = !string.IsNullOrWhiteSpace(subAgentConfigId)
-						? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(subAgentConfigId, conversation, null, WorkerSession.CancellationToken)
-						: await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
-
-					if (llmResult.ExitReason == LlmExitReason.Completed)
-					{
-						content = llmResult.Content;
-						break;
-					}
-					else if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
-					{
-						content = llmResult.Content;
-						break;
-					}
-					else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
-					{
-						conversation.ResetIteration();
-						await conversation.AddUserMessageAsync("Continue working. Call agent_task_complete with your result when done.", WorkerSession.CancellationToken);
-					}
-					else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
-					{
-						content = "Inspection agent stopped: cost budget exceeded";
-						break;
-					}
-					else
-					{
-								content = $"Inspection agent failed: {llmResult.ErrorMessage}";
-								break;
-							}
-							}
-
-							string? handoffSummary = await conversation.FinalizeAsync(WorkerSession.CancellationToken);
-							if (handoffSummary != null)
-							{
-								content = handoffSummary;
-							}
-
-							result = new ToolResult(content, false, false);
-						}
-						catch (OperationCanceledException)
-						{
-							throw;
-						}
-						catch (Exception ex)
-						{
-							result = new ToolResult($"Error: Inspection agent failed: {ex.Message}", false, false);
+				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.PlanningSubagent, "Inspection", context);
+				result = new ToolResult(content, false, false);
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch (Exception ex)
+			{
+				result = new ToolResult($"Error: Inspection agent failed: {ex.Message}", false, false);
 			}
 		}
 
 		return result;
+	}
+
+	// Shared agent conversation lifecycle: create/reconstitute, run to completion, finalize with compaction.
+	private static async Task<string> RunAgentConversationAsync(
+		string taskSummary,
+		string instructions,
+		LlmRole role,
+		string displayPrefix,
+		ToolContext context)
+	{
+		await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"{displayPrefix}: {taskSummary}", WorkerSession.CancellationToken);
+
+		string fullInstructions = $"{taskSummary}\n\n{instructions}";
+
+		string? configId = context.SubAgentLlmConfigId;
+
+		if (configId == null)
+		{
+			return $"{displayPrefix} failed: no LLM config ID specified for sub-agent";
+		}
+
+		ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, configId, null);
+
+		// Check for a prior conversation from a crashed run. If found, reconstitute it.
+		ILlmConversation conversation;
+		string? toolCallId = ToolContext.ActiveToolCallId;
+
+		ConversationData? existing = toolCallId != null
+			? await WorkerSession.ApiClient.GetConversationAsync(WorkerSession.TicketHolder.Ticket.Id, toolCallId, WorkerSession.CancellationToken)
+			: null;
+
+		if (existing != null)
+		{
+			conversation = LlmConversationFactory.Reconstitute(existing, role, subContext);
+			Console.WriteLine($"[{displayPrefix}] Reconstituted conversation {toolCallId}");
+		}
+		else
+		{
+			conversation = LlmConversationFactory.Create(role, subContext, fullInstructions, $"{displayPrefix}: {taskSummary}", toolCallId);
+		}
+
+		LlmResult llmResult = await WorkerSession.LlmProxy.RunToCompletionAsync(conversation, configId, null, "Continue working. Call agent_task_complete with your result when done.", 0, true, WorkerSession.CancellationToken);
+
+		string content;
+
+		if (llmResult.ExitReason == LlmExitReason.CostExceeded)
+		{
+			content = $"{displayPrefix} stopped: cost budget exceeded";
+		}
+		else if (!llmResult.Success)
+		{
+			content = $"{displayPrefix} failed: {llmResult.ErrorMessage}";
+		}
+		else
+		{
+			content = llmResult.Content;
+		}
+
+		string? handoffSummary = await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+		if (handoffSummary != null)
+		{
+			content = handoffSummary;
+		}
+
+		return content;
 	}
 }

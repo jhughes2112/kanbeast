@@ -21,6 +21,10 @@ public class ToolContext
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
 	public string? SubAgentLlmConfigId { get; }
+
+	// Set by LlmProxy.ContinueAsync so compaction and sub-conversations know which LLM to use.
+	public string? LlmConfigId { get; internal set; }
+
 	public ShellState? Shell { get; internal set; }
 
 	// AsyncLocal-backed tool call ID so concurrent tool invocations each see their own value.
@@ -36,11 +40,13 @@ public class ToolContext
 	public ToolContext(
 		string? currentTaskId,
 		string? currentSubtaskId,
+		string? llmConfigId,
 		string? subAgentLlmConfigId)
 	{
 		ReadFiles = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 		CurrentTaskId = currentTaskId;
 		CurrentSubtaskId = currentSubtaskId;
+		LlmConfigId = llmConfigId;
 		SubAgentLlmConfigId = subAgentLlmConfigId;
 		Shell = null;
 	}
