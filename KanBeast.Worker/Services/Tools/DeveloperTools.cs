@@ -46,115 +46,71 @@ public static class DeveloperTools
 		{
 			try
 			{
-				await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(
-					WorkerSession.TicketHolder.Ticket.Id, taskId, subtaskId,
-					SubtaskStatus.InProgress, WorkerSession.CancellationToken);
+				await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(WorkerSession.TicketHolder.Ticket.Id, taskId, subtaskId, SubtaskStatus.InProgress, WorkerSession.CancellationToken);
+				await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Started subtask: {subtaskName}", WorkerSession.CancellationToken);
 
-				await WorkerSession.ApiClient.AddActivityLogAsync(
-						WorkerSession.TicketHolder.Ticket.Id,
-						$"Started subtask: {subtaskName}",
-						WorkerSession.CancellationToken);
+				string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
-					string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
-
-					string? resolvedSubAgentId = string.IsNullOrWhiteSpace(subAgentLlmConfigId) ? null : subAgentLlmConfigId;
-					ToolContext devContext = new ToolContext(taskId, subtaskId, llmConfigId, resolvedSubAgentId);
-
-					string ticketId = WorkerSession.TicketHolder.Ticket.Id;
-
-					// Check for a prior conversation from a crashed run.
-					ILlmConversation conversation;
-					string? toolCallId = ToolContext.ActiveToolCallId;
-
-					ConversationData? existing = toolCallId != null
-						? await WorkerSession.ApiClient.GetConversationAsync(ticketId, toolCallId, WorkerSession.CancellationToken)
-						: null;
-
-					if (existing != null)
-					{
-						conversation = LlmConversationFactory.Reconstitute(existing, LlmRole.Developer, devContext);
-						Console.WriteLine($"[Developer] Reconstituted conversation {toolCallId}");
-					}
-					else
-					{
-						conversation = LlmConversationFactory.Create(
-							LlmRole.Developer,
-							devContext,
-							initialPrompt,
-							$"Developer - {subtaskName}",
-							toolCallId);
-					}
-
-				string content = string.Empty;
-				bool subtaskComplete = false;
-
-				for (int contextResetCount = 0; ; )
+				LlmService? service = WorkerSession.LlmProxy.GetService(llmConfigId);
+				if (service == null)
 				{
-					LlmResult llmResult = await WorkerSession.LlmProxy.RunToCompletionAsync(
-						conversation, llmConfigId, null,
-						"Continue working or call end_subtask tool when done.",
-						7, false, WorkerSession.CancellationToken);
-
-					if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
-					{
-						content = llmResult.Content;
-
-						Ticket? subtaskUpdate = await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(
-							ticketId, taskId, subtaskId,
-							SubtaskStatus.Complete, WorkerSession.CancellationToken);
-
-						if (subtaskUpdate != null)
-						{
-							WorkerSession.TicketHolder.Update(subtaskUpdate);
-						}
-
-						await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, $"Subtask completed: {content}", WorkerSession.CancellationToken);
-						subtaskComplete = true;
-						break;
-					}
-					else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
-					{
-						contextResetCount++;
-
-						if (contextResetCount >= 2)
-						{
-							await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Developer exceeded max context resets, giving up on subtask", WorkerSession.CancellationToken);
-							content = "Developer exceeded max context resets and could not complete the subtask.";
-							break;
-						}
-
-						await conversation.FinalizeAsync(WorkerSession.CancellationToken);
-
-						string continuePrompt = $"You were working on subtask '{subtaskName}' but got stuck. Look at the local changes and decide if you should continue or take a fresh approach.\nDescription: {subtaskDescription}\nCall end_subtask tool when complete.";
-
-						ToolContext continueContext = new ToolContext(taskId, subtaskId, llmConfigId, devContext.SubAgentLlmConfigId);
-						conversation = LlmConversationFactory.Create(LlmRole.Developer, continueContext, continuePrompt, $"Developer - {subtaskName} (retry)", null);
-					}
-					else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
-					{
-						content = "Developer stopped: cost budget exceeded.";
-						break;
-					}
-					else
-					{
-						content = $"Developer failed: {llmResult.ErrorMessage}";
-						break;
-					}
+					result = new ToolResult($"Error: LLM config '{llmConfigId}' not found", false, false);
+					return result;
 				}
 
-				string? handoffSummary = await conversation.FinalizeAsync(WorkerSession.CancellationToken);
-				if (handoffSummary != null)
+				LlmService? subAgentService = WorkerSession.LlmProxy.GetService(subAgentLlmConfigId);
+				if (subAgentService == null)
 				{
-					content = handoffSummary;
+					result = new ToolResult($"Error: Sub-agent LLM config '{subAgentLlmConfigId}' not found", false, false);
+					return result;
+				}
+
+				ToolContext devContext = new ToolContext(taskId, subtaskId, service, subAgentService);
+
+				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
+
+				// Check for a prior conversation from a crashed run.
+				ILlmConversation conversation;
+				string? toolCallId = ToolContext.ActiveToolCallId;
+
+				ConversationData? existing = toolCallId != null
+					? await WorkerSession.ApiClient.GetConversationAsync(ticketId, toolCallId, WorkerSession.CancellationToken)
+					: null;
+
+				if (existing != null)
+				{
+					conversation = new CompactingConversation(existing, LlmRole.Developer, devContext, null, null, null);
+					Console.WriteLine($"[Developer] Reconstituted conversation {toolCallId}");
+				}
+				else
+				{
+					conversation = new CompactingConversation(null, LlmRole.Developer, devContext, initialPrompt, $"Developer - {subtaskName}", toolCallId);
+				}
+
+				bool subtaskComplete = false;
+
+				LlmResult llmResult = await service.RunToCompletionAsync(conversation, "Continue working or call end_subtask tool when done.", false, context.CancellationToken);
+
+				if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
+				{
+					Ticket? subtaskUpdate = await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(ticketId, taskId, subtaskId, SubtaskStatus.Complete, WorkerSession.CancellationToken);
+
+					if (subtaskUpdate != null)
+					{
+						WorkerSession.TicketHolder.Update(subtaskUpdate);
+					}
+
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, $"Subtask completed: {llmResult.Content}", WorkerSession.CancellationToken);
+					subtaskComplete = true;
 				}
 
 				if (subtaskComplete)
 				{
-					result = new ToolResult($"Developer completed subtask '{subtaskName}': {content}", false, false);
+					result = new ToolResult($"Developer completed subtask '{subtaskName}': {llmResult.Content}", false, false);
 				}
 				else
 				{
-					result = new ToolResult($"Developer could not complete subtask '{subtaskName}': {content}", false, false);
+					result = new ToolResult($"Developer could not complete subtask '{subtaskName}': {llmResult.Content}", false, false);
 				}
 			}
 			catch (OperationCanceledException)

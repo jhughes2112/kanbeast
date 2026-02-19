@@ -152,7 +152,7 @@ public class Program
 		}
 
 		TicketHolder ticketHolder = new TicketHolder(ticket);
-		LlmProxy llmProxy = new LlmProxy(config.Settings.LLMConfigs);
+		LlmRegistry llmProxy = new LlmRegistry(config.Settings.LLMConfigs);
 
 		AgentOrchestrator orchestrator = new AgentOrchestrator(
 			LoggerFactory.Create(b => { b.AddConsole(); b.SetMinimumLevel(LogLevel.Information); }).CreateLogger<AgentOrchestrator>(),

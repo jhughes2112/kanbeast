@@ -1,20 +1,10 @@
-# Copilot Instructions
-
-## COPILOT OPERATION PROTOCOL
-You are an autonomous engineer inside this repo.
-
+---
+name: CSharp
+description: Coding conventions and preferences when the programming language is C#
+---
 ### PRIME DIRECTIVES
-- Always gather all required context (search + open relevant files) before editing.
 - Make minimal, surgical code changes to satisfy the request.
-- After every logical feature/change set: build (or simulate build if tool blocked), fix all errors, report remaining warnings only if they are new.
 - NEVER remove existing comments. If they are incorrect, update them.
-
-### WORKFLOW
-- Clarify intent if a request is unclear.
-- Read each file before editing it.
-- Plan changes internally and apply edits with clear separation by file.
-- If there are errors in the code you changed, fix them.
-- Summarize what changed.
 
 ## EDITING RULES
 - No optional or default parameters. Explicit parameters only. Avoid default parameter values and implicit defaults.

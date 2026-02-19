@@ -1,5 +1,5 @@
 ---
-name: Finish Branch
+name: Git
 description: This is how we finish branches. Rebasing squashed branches as fast-forward merges only. Linear history. No PRs or reviews.
 dependencies: git
 ---
@@ -60,4 +60,4 @@ Once tests pass on a rebased branch, the agent performs the final merge.
 
 ### Implementation Note
 
-To make this truly "OneFlow," ensure Git configuration has `pull.rebase true` to avoid accidental merge commits during the `git pull` phase.
+If there are merge commits on main, you did this wrong.  Ensure Git configuration has `pull.rebase true` to avoid accidental merge commits during the `git pull` phase.

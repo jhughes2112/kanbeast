@@ -12,7 +12,7 @@ namespace KanBeast.Worker.Services;
 //   [2] User instructions - The task goal; compaction may refine this
 //   [3+] Conversation messages - Regular assistant/user/tool exchanges
 //
-// When context exceeds a threshold (percentage of smallest LLM context window):
+// When context exceeds a threshold (percentage of current LLM context window):
 //   - Messages 0-2 are preserved (system, summaries, instructions)
 //   - Messages 3 to ~80% are summarized via a side-conversation into message[1]
 //   - The most recent ~20% are kept intact
@@ -117,11 +117,6 @@ public class CompactingConversation : ILlmConversation
 	public void IncrementIteration()
 	{
 		Iteration++;
-	}
-
-	public void ResetIteration()
-	{
-		Iteration = 0;
 	}
 
 	private static string ResolveSystemPrompt(LlmRole role)
@@ -261,7 +256,7 @@ public class CompactingConversation : ILlmConversation
 		await WorkerSession.HubClient.ResetConversationAsync(Id);
 	}
 
-	public async Task<string?> FinalizeAsync(CancellationToken cancellationToken)
+	public async Task<string> FinalizeAsync(LlmResult llmResult, CancellationToken cancellationToken)
 	{
 		string? handoffSummary = null;
 
@@ -277,7 +272,18 @@ public class CompactingConversation : ILlmConversation
 		await ForceFlushAsync();
 		await WorkerSession.HubClient.FinishConversationAsync(Id);
 
-		return handoffSummary;
+		if (handoffSummary != null)
+		{
+			return handoffSummary;
+		}
+		else if (llmResult.Success)
+		{
+			return llmResult.Content;
+		}
+		else
+		{
+			return llmResult.ErrorMessage;
+		}
 	}
 
 	public async Task ForceFlushAsync()
@@ -296,9 +302,9 @@ public class CompactingConversation : ILlmConversation
 	// Runs a compaction LLM conversation over messages[startIndex..endIndex) and returns the summary, or null on failure.
 	private async Task<string?> RunCompactionSummaryAsync(int startIndex, int endIndex, string logPrefix, CancellationToken cancellationToken)
 	{
-		string? llmConfigId = ToolContext.LlmConfigId;
+		LlmService? service = ToolContext.LlmService;
 
-		if (!CompactionEnabled || endIndex <= startIndex || llmConfigId == null)
+		if (!CompactionEnabled || endIndex <= startIndex || service == null)
 		{
 			return null;
 		}
@@ -311,7 +317,7 @@ public class CompactingConversation : ILlmConversation
 			{originalTask}
 			""";
 
-		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, llmConfigId, null);
+		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, service, null);
 
 		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, compactionContext, compactionUserPrompt, logPrefix, null);
 
@@ -323,10 +329,7 @@ public class CompactingConversation : ILlmConversation
 			Read {WorkerSession.WorkDir}/MEMORY.md (create it if missing), update it with any critical project details from this history, then call summarize_history with a factual summary.
 			""", cancellationToken);
 
-		LlmResult result = await WorkerSession.LlmProxy.RunToCompletionAsync(
-			summaryConversation, llmConfigId, null,
-			"Call summarize_history with the chapter summary.",
-			3, false, cancellationToken);
+		LlmResult result = await service.RunToCompletionAsync(summaryConversation, "Call summarize_history with the chapter summary.", false, cancellationToken);
 
 		string? summary = null;
 
@@ -351,8 +354,9 @@ public class CompactingConversation : ILlmConversation
 			return;
 		}
 
+		LlmService? currentService = ToolContext.LlmService;
 		double contextSizePercent = WorkerSession.Compaction.ContextSizePercent;
-		int contextLength = WorkerSession.LlmProxy.GetSmallestContextLength();
+		int contextLength = currentService != null ? currentService.ContextLength : 0;
 		int effectiveThreshold;
 
 		if (contextLength > 0 && contextSizePercent > 0)
@@ -370,7 +374,7 @@ public class CompactingConversation : ILlmConversation
 			return;
 		}
 
-		Console.WriteLine($"[Compaction] ~{estimatedTokens} tokens exceeds {effectiveThreshold} threshold ({contextSizePercent:P0} of {contextLength} smallest context), compacting...");
+		Console.WriteLine($"[Compaction] ~{estimatedTokens} tokens exceeds {effectiveThreshold} threshold ({contextSizePercent:P0} of {contextLength} context), compacting...");
 
 		int totalCompressible = Messages.Count - FirstCompressibleIndex;
 		if (totalCompressible < 2)

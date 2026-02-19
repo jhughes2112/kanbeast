@@ -20,10 +20,15 @@ public class ToolContext
 	public ConcurrentDictionary<string, byte> ReadFiles { get; }
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
-	public string? SubAgentLlmConfigId { get; }
+	public LlmService? LlmService { get; }
+	public LlmService? SubAgentService { get; }
 
-	// Set by LlmProxy.ContinueAsync so compaction and sub-conversations know which LLM to use.
-	public string? LlmConfigId { get; internal set; }
+	// Derived from the LlmService for code that needs the config ID string.
+	public string? LlmConfigId => LlmService?.Config.Id;
+
+	// Conversation-scoped token set by LlmService.RunToCompletionAsync.
+	// Tools should pass this to child RunToCompletionAsync calls for interrupt cascade.
+	public CancellationToken CancellationToken { get; internal set; }
 
 	public ShellState? Shell { get; internal set; }
 
@@ -40,14 +45,14 @@ public class ToolContext
 	public ToolContext(
 		string? currentTaskId,
 		string? currentSubtaskId,
-		string? llmConfigId,
-		string? subAgentLlmConfigId)
+		LlmService? llmService,
+		LlmService? subAgentService)
 	{
 		ReadFiles = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 		CurrentTaskId = currentTaskId;
 		CurrentSubtaskId = currentSubtaskId;
-		LlmConfigId = llmConfigId;
-		SubAgentLlmConfigId = subAgentLlmConfigId;
+		LlmService = llmService;
+		SubAgentService = subAgentService;
 		Shell = null;
 	}
 

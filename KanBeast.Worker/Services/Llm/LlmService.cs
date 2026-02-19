@@ -123,17 +123,27 @@ public enum LlmExitReason
 	LlmCallFailed,         // Network error, API error, or invalid response
 	MaxIterationsReached,  // Hit iteration limit without completion
 	CostExceeded,          // Accumulated cost exceeded the budget
-	RateLimited            // Rate limited, RetryAfter indicates when to retry
+	RateLimited,           // Rate limited, RetryAfter indicates when to retry
+	Interrupted            // User interrupted the conversation via the hub
 }
 
 public class LlmResult
 {
-	public LlmExitReason ExitReason { get; set; } = LlmExitReason.Completed;
+	public LlmExitReason ExitReason { get; }
 	public bool Success => ExitReason == LlmExitReason.Completed || ExitReason == LlmExitReason.ToolRequestedExit;
-	public string Content { get; set; } = string.Empty;
-	public string ErrorMessage { get; set; } = string.Empty;
-	public string? FinalToolCalled { get; set; }
-	public DateTimeOffset? RetryAfter { get; set; }
+	public string Content { get; }
+	public string ErrorMessage { get; }
+	public string? FinalToolCalled { get; }
+	public DateTimeOffset? RetryAfter { get; }
+
+	public LlmResult(LlmExitReason exitReason, string content, string errorMessage, string? finalToolCalled, DateTimeOffset? retryAfter)
+	{
+		ExitReason = exitReason;
+		Content = content;
+		ErrorMessage = errorMessage;
+		FinalToolCalled = finalToolCalled;
+		RetryAfter = retryAfter;
+	}
 }
 
 // Direct OpenAI-compatible chat completion client with tool calling.
@@ -146,6 +156,8 @@ public class LlmService
 	};
 
 	private static readonly TimeSpan DownCooldown = TimeSpan.FromMinutes(5);
+
+	private const int ShortWaitThresholdSeconds = 20;
 
 	private readonly Random SeedRandom = new();
 
@@ -178,232 +190,198 @@ public class LlmService
 		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
 	}
 
-	public async Task<(LlmResult result, decimal cost)> RunAsync(ILlmConversation conversation, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
+	// Runs the conversation in a loop until idle, tool-exit, or fatal error.
+	// Handles availability, rate-limit waits, budget, and per-conversation interrupt CTS.
+	public async Task<LlmResult> RunToCompletionAsync(ILlmConversation conversation, string? continueMessage, bool continueOnToolExit, CancellationToken cancellationToken)
 	{
-		List<Tool> tools = ToolsFactory.GetTools(conversation.Role);
-		List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;
-		foreach (Tool tool in tools)
+		LlmResult result;
+
+		if (!_isPermanentlyDown && (IsAvailable || (_availableAt - DateTimeOffset.UtcNow).TotalSeconds <= ShortWaitThresholdSeconds))
 		{
-			toolDefs?.Add(tool.Definition);
+			if (!IsAvailable)
+			{
+				TimeSpan waitTime = _availableAt - DateTimeOffset.UtcNow;
+				if (waitTime > TimeSpan.Zero)
+				{
+					Console.WriteLine($"LLM {_config.Model} rate limited, waiting {waitTime.TotalSeconds:F0}s...");
+					await Task.Delay(waitTime, cancellationToken);
+				}
+			}
+
+			result = await ExecuteConversationAsync(conversation, continueMessage, continueOnToolExit, cancellationToken);
+		}
+		else if (_isPermanentlyDown)
+		{
+			result = new LlmResult(LlmExitReason.LlmCallFailed, string.Empty, $"LLM {_config.Model} is permanently down", null, null);
+		}
+		else
+		{
+			result = new LlmResult(LlmExitReason.RateLimited, string.Empty, $"LLM {_config.Model} rate limited for {(_availableAt - DateTimeOffset.UtcNow).TotalSeconds:F0}s", null, _availableAt);
 		}
 
+		return result;
+	}
+
+	private async Task<LlmResult> ExecuteConversationAsync(ILlmConversation conversation, string? continueMessage, bool continueOnToolExit, CancellationToken cancellationToken)
+	{
+		CancellationToken conversationToken = WorkerSession.HubClient.RegisterConversation(conversation.Id, cancellationToken);
+		conversation.ToolContext.CancellationToken = conversationToken;
+
 		decimal accumulatedCost = 0m;
-		int transientRetries = 0;
-		int maxTransientRetries = _hasSucceeded ? 3 : 1;
+		LlmResult finalResult = new LlmResult(LlmExitReason.Completed, string.Empty, string.Empty, null, null);
 
-		for (; ; )
+		try
 		{
-			if (conversation.HasReachedMaxIterations)
+			List<Tool> tools = ToolsFactory.GetTools(conversation.Role);
+			List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;
+			foreach (Tool tool in tools)
 			{
-				return (new LlmResult { ExitReason = LlmExitReason.MaxIterationsReached }, accumulatedCost);
+				toolDefs?.Add(tool.Definition);
 			}
 
-			if (remainingBudget > 0 && accumulatedCost >= remainingBudget)
-			{
-				return (new LlmResult { ExitReason = LlmExitReason.CostExceeded }, accumulatedCost);
-			}
+			int transientRetries = 0;
+			int maxTransientRetries = _hasSucceeded ? 3 : 1;
 
-			cancellationToken.ThrowIfCancellationRequested();
-
-			// Inject any pending user messages from the chat hub.
-			ConcurrentQueue<string> chatQueue = WorkerSession.GetChatQueue(conversation.Id);
-			while (chatQueue.TryDequeue(out string? chatMsg))
+			for (; ; )
 			{
-				await conversation.AddUserMessageAsync(chatMsg, cancellationToken);
-			}
-
-			// Some providers (e.g. Anthropic) reject conversations that don't end with a user or tool message.
-			// Build the message list for the request, appending a kickoff if the last message is not user/tool.
-			List<ConversationMessage> requestMessages = conversation.Messages;
-			if (requestMessages.Count > 0)
-			{
-				string lastRole = requestMessages[requestMessages.Count - 1].Role;
-				if (lastRole != "user" && lastRole != "tool")
+				if (conversation.HasReachedMaxIterations)
 				{
-					requestMessages = new List<ConversationMessage>(requestMessages);
-					requestMessages.Add(new ConversationMessage { Role = "user", Content = "Continue." });
-				}
-			}
-
-			ChatCompletionRequest request = new ChatCompletionRequest
-			{
-				Model = _config.Model,
-				Messages = requestMessages,
-				Tools = toolDefs,
-				ParallelToolCalls = toolDefs != null && _parallelToolCallsSupported ? true : null,
-				Temperature = _config.Temperature,
-				TopP = 1.0,
-				FrequencyPenalty = 0.1,
-				Seed = SeedRandom.Next(),
-				MaxCompletionTokens = maxCompletionTokens,
-				MaxTokens = maxCompletionTokens
-			};
-
-			string requestJson = JsonSerializer.Serialize(request, JsonOptions);
-			string fullUrl = $"{_config.Endpoint!.TrimEnd('/')}/chat/completions";
-
-			try
-			{
-				StringContent content = new StringContent(requestJson, System.Text.Encoding.UTF8, "application/json");
-				HttpResponseMessage httpResponse = await _httpClient.PostAsync(fullUrl, content, cancellationToken);
-				string responseBody = await httpResponse.Content.ReadAsStringAsync(cancellationToken);
-
-				if (!httpResponse.IsSuccessStatusCode)
-				{
-					Console.WriteLine($"[LLM ERROR] {_config.Model} returned {(int)httpResponse.StatusCode} {httpResponse.StatusCode}");
-					Console.WriteLine($"[LLM ERROR] Response body: {responseBody}");
+					finalResult = new LlmResult(LlmExitReason.MaxIterationsReached, string.Empty, "Max iterations reached", null, null);
+					break;
 				}
 
-				if (httpResponse.IsSuccessStatusCode)
+				decimal remainingBudget = conversation.GetRemainingBudget();
+				if (remainingBudget > 0 && accumulatedCost >= remainingBudget)
 				{
-					_hasSucceeded = true;
-					transientRetries = 0;
+					finalResult = new LlmResult(LlmExitReason.CostExceeded, string.Empty, "Cost budget exceeded", null, null);
+					break;
+				}
 
-					ChatCompletionResponse? response = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions);
-					if (response != null && response.Choices.Count > 0 && response.Error == null)
+				conversationToken.ThrowIfCancellationRequested();
+
+				// Inject any pending user messages from the chat hub.
+				ConcurrentQueue<string> chatQueue = WorkerSession.GetChatQueue(conversation.Id);
+				while (chatQueue.TryDequeue(out string? chatMsg))
+				{
+					await conversation.AddUserMessageAsync(chatMsg, conversationToken);
+				}
+
+				// Some providers (e.g. Anthropic) reject conversations that don't end with a user or tool message.
+				// Build the message list for the request, appending a kickoff if the last message is not user/tool.
+				List<ConversationMessage> requestMessages = conversation.Messages;
+				if (requestMessages.Count > 0)
+				{
+					string lastRole = requestMessages[requestMessages.Count - 1].Role;
+					if (lastRole != "user" && lastRole != "tool")
 					{
-						conversation.IncrementIteration();
+						requestMessages = new List<ConversationMessage>(requestMessages);
+						requestMessages.Add(new ConversationMessage { Role = "user", Content = continueMessage ?? "Continue." });
+					}
+				}
 
-						if (response.Usage != null)
+				ChatCompletionRequest request = new ChatCompletionRequest
+				{
+					Model = _config.Model,
+					Messages = requestMessages,
+					Tools = toolDefs,
+					ParallelToolCalls = toolDefs != null && _parallelToolCallsSupported ? true : null,
+					Temperature = _config.Temperature,
+					TopP = 1.0,
+					FrequencyPenalty = 0.1,
+					Seed = SeedRandom.Next(),
+					MaxCompletionTokens = null,
+					MaxTokens = null
+				};
+
+				string requestJson = JsonSerializer.Serialize(request, JsonOptions);
+				string fullUrl = $"{_config.Endpoint!.TrimEnd('/')}/chat/completions";
+
+				try
+				{
+					StringContent content = new StringContent(requestJson, System.Text.Encoding.UTF8, "application/json");
+					HttpResponseMessage httpResponse = await _httpClient.PostAsync(fullUrl, content, conversationToken);
+					string responseBody = await httpResponse.Content.ReadAsStringAsync(conversationToken);
+
+					if (!httpResponse.IsSuccessStatusCode)
+					{
+						Console.WriteLine($"[LLM ERROR] {_config.Model} returned {(int)httpResponse.StatusCode} {httpResponse.StatusCode}");
+						Console.WriteLine($"[LLM ERROR] Response body: {responseBody}");
+					}
+
+					if (httpResponse.IsSuccessStatusCode)
+					{
+						_hasSucceeded = true;
+						transientRetries = 0;
+
+						ChatCompletionResponse? response = JsonSerializer.Deserialize<ChatCompletionResponse>(responseBody, JsonOptions);
+						if (response != null && response.Choices.Count > 0 && response.Error == null)
 						{
-							if (response.Usage.Cost.HasValue)
+							conversation.IncrementIteration();
+
+							if (response.Usage != null)
 							{
-								accumulatedCost += response.Usage.Cost.Value;
-							}
-							else
-							{
-								accumulatedCost += (response.Usage.PromptTokens / 1_000_000m) * _config.InputTokenPrice;
-								accumulatedCost += (response.Usage.CompletionTokens / 1_000_000m) * _config.OutputTokenPrice;
-							}
-						}
-
-						ConversationMessage assistantMessage = response.Choices[0].Message;
-
-						// Trim whitespace from function names and argument keys that some models produce.
-						if (assistantMessage.ToolCalls != null && assistantMessage.ToolCalls.Count > 0)
-						{
-							NormalizeToolCalls(assistantMessage.ToolCalls);
-						}
-
-						// If no native tool calls, try parsing XML-style tool calls from content.
-						if ((assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0) && !string.IsNullOrEmpty(assistantMessage.Content))
-						{
-							List<ConversationToolCall>? xmlToolCalls = TryParseXmlToolCalls(assistantMessage.Content, tools);
-							if (xmlToolCalls != null)
-							{
-								NormalizeToolCalls(xmlToolCalls);
-								assistantMessage.ToolCalls = xmlToolCalls;
-								Console.WriteLine($"Parsed {xmlToolCalls.Count} XML-style tool call(s) from {_config.Model} response");
-							}
-						}
-
-						await conversation.AddAssistantMessageAsync(assistantMessage, _config.Model, cancellationToken);
-
-						if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
-						{
-							return (new LlmResult
-							{
-								ExitReason = LlmExitReason.Completed,
-								Content = assistantMessage.Content ?? string.Empty
-							}, accumulatedCost);
-						}
-
-						// Concurrent tool execution. All tool calls from the same assistant
-						// message run as parallel Tasks. Results are collected in order.
-						List<ConversationToolCall> toolCalls = assistantMessage.ToolCalls;
-						(string toolName, ToolResult result)[] completedTools = new (string, ToolResult)[toolCalls.Count];
-
-						Task[] tasks = new Task[toolCalls.Count];
-						for (int i = 0; i < toolCalls.Count; i++)
-						{
-							int index = i;
-							ConversationToolCall toolCall = toolCalls[index];
-							tasks[index] = Task.Run(async () =>
-							{
-								ToolResult toolResult = await ExecuteTool(toolCall, tools, conversation.ToolContext);
-								completedTools[index] = (toolCall.Function.Name, toolResult);
-							}, cancellationToken);
-						}
-
-						await Task.WhenAll(tasks);
-
-						// Add tool messages in order and check for exit/message-handled.
-						for (int i = 0; i < completedTools.Length; i++)
-						{
-							(string toolName, ToolResult toolResult) = completedTools[i];
-
-							if (!toolResult.MessageHandled)
-							{
-								await conversation.AddToolMessageAsync(toolCalls[i].Id, toolResult.Response, cancellationToken);
-							}
-
-							if (toolResult.ExitLoop)
-							{
-								return (new LlmResult
+								if (response.Usage.Cost.HasValue)
 								{
-									ExitReason = LlmExitReason.ToolRequestedExit,
-									Content = toolResult.Response,
-									FinalToolCalled = toolName
-								}, accumulatedCost);
+									accumulatedCost += response.Usage.Cost.Value;
+								}
+								else
+								{
+									accumulatedCost += (response.Usage.PromptTokens / 1_000_000m) * _config.InputTokenPrice;
+									accumulatedCost += (response.Usage.CompletionTokens / 1_000_000m) * _config.OutputTokenPrice;
+								}
 							}
 
-							if (toolResult.MessageHandled)
+							ConversationMessage assistantMessage = response.Choices[0].Message;
+
+							LlmResult? responseResult = await ProcessAssistantResponseAsync(assistantMessage, tools, conversation, continueMessage, continueOnToolExit, conversationToken);
+							if (responseResult != null)
 							{
+								finalResult = responseResult;
 								break;
 							}
 						}
+						else
+						{
+							// 200 but body indicates an error or unexpected format.
+							transientRetries++;
+							if (transientRetries >= maxTransientRetries)
+							{
+								MarkDown();
+								finalResult = new LlmResult(LlmExitReason.LlmCallFailed, string.Empty, response?.Error?.Message ?? "Empty response from API", null, null);
+								break;
+							}
+
+							int waitSeconds = Math.Min(transientRetries * 3, 15);
+							Console.WriteLine($"Invalid response from {_config.Model}, retrying in {waitSeconds}s ({transientRetries}/{maxTransientRetries})");
+							await Task.Delay(TimeSpan.FromSeconds(waitSeconds), conversationToken);
+						}
 					}
-					else
+					else if (TryAdaptToError(httpResponse, responseBody))
 					{
-						// 200 but body indicates an error or unexpected format.
+						// Configuration adapted, retry immediately.
+					}
+					else if (IsRateLimited(httpResponse, responseBody))
+					{
+						_availableAt = ComputeRetryAfterTime(httpResponse, responseBody);
+						Console.WriteLine($"Rate limited by {_config.Model}, available at {_availableAt:HH:mm:ss}, body: {responseBody}");
+						finalResult = new LlmResult(LlmExitReason.RateLimited, string.Empty, string.Empty, null, _availableAt);
+						break;
+					}
+					else if ((int)httpResponse.StatusCode >= 500)
+					{
 						transientRetries++;
 						if (transientRetries >= maxTransientRetries)
 						{
 							MarkDown();
-							return (new LlmResult
-							{
-								ExitReason = LlmExitReason.LlmCallFailed,
-								ErrorMessage = response?.Error?.Message ?? "Empty response from API"
-							}, accumulatedCost);
+							finalResult = new LlmResult(LlmExitReason.LlmCallFailed, string.Empty, $"Server error {httpResponse.StatusCode} after {transientRetries} retries", null, null);
+							break;
 						}
 
 						int waitSeconds = Math.Min(transientRetries * 3, 15);
-						Console.WriteLine($"Invalid response from {_config.Model}, retrying in {waitSeconds}s ({transientRetries}/{maxTransientRetries})");
-						await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
+						Console.WriteLine($"Server error {httpResponse.StatusCode} from {_config.Model}, retrying in {waitSeconds}s ({transientRetries}/{maxTransientRetries})");
+						await Task.Delay(TimeSpan.FromSeconds(waitSeconds), conversationToken);
 					}
-				}
-				else if (TryAdaptToError(httpResponse, responseBody))
-				{
-					// Configuration adapted, retry immediately.
-				}
-				else if (IsRateLimited(httpResponse, responseBody))
-					{
-						_availableAt = ComputeRetryAfterTime(httpResponse, responseBody);
-						Console.WriteLine($"Rate limited by {_config.Model}, available at {_availableAt:HH:mm:ss}, body: {responseBody}");
-						return (new LlmResult
-					{
-						ExitReason = LlmExitReason.RateLimited,
-						RetryAfter = _availableAt
-					}, accumulatedCost);
-				}
-				else if ((int)httpResponse.StatusCode >= 500)
-				{
-					transientRetries++;
-					if (transientRetries >= maxTransientRetries)
-					{
-						MarkDown();
-						return (new LlmResult
-						{
-							ExitReason = LlmExitReason.LlmCallFailed,
-							ErrorMessage = $"Server error {httpResponse.StatusCode} after {transientRetries} retries"
-						}, accumulatedCost);
-					}
-
-					int waitSeconds = Math.Min(transientRetries * 3, 15);
-					Console.WriteLine($"Server error {httpResponse.StatusCode} from {_config.Model}, retrying in {waitSeconds}s ({transientRetries}/{maxTransientRetries})");
-					await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
-				}
-				else
+					else
 					{
 						int statusCode = (int)httpResponse.StatusCode;
 
@@ -411,48 +389,58 @@ public class LlmService
 						if (statusCode == 401 || statusCode == 403)
 						{
 							MarkPermanentlyDown();
-							return (new LlmResult
-							{
-								ExitReason = LlmExitReason.LlmCallFailed,
-								ErrorMessage = $"Auth error {statusCode}: {responseBody}"
-							}, accumulatedCost);
+							finalResult = new LlmResult(LlmExitReason.LlmCallFailed, string.Empty, $"Auth error {statusCode}: {responseBody}", null, null);
+							break;
 						}
 
 						// Other 4xx errors (400 bad request, 422 unprocessable, etc.) are request-specific, not permanent.
-						return (new LlmResult
-						{
-							ExitReason = LlmExitReason.LlmCallFailed,
-							ErrorMessage = $"API error {statusCode}: {responseBody}"
-						}, accumulatedCost);
+						finalResult = new LlmResult(LlmExitReason.LlmCallFailed, string.Empty, $"API error {statusCode}: {responseBody}", null, null);
+						break;
 					}
-			}
-			catch (OperationCanceledException)
-			{
-				throw;
-			}
-			catch (Exception ex)
-			{
-				transientRetries++;
-				if (transientRetries >= maxTransientRetries)
-				{
-					MarkDown();
-					return (new LlmResult
-					{
-						ExitReason = LlmExitReason.LlmCallFailed,
-						ErrorMessage = $"Failed after {transientRetries} attempts: {ex.Message}"
-					}, accumulatedCost);
 				}
+				catch (OperationCanceledException)
+				{
+					throw;
+				}
+				catch (Exception ex)
+				{
+					transientRetries++;
+					if (transientRetries >= maxTransientRetries)
+					{
+						MarkDown();
+						finalResult = new LlmResult(LlmExitReason.LlmCallFailed, string.Empty, $"Failed after {transientRetries} attempts: {ex.Message}", null, null);
+						break;
+					}
 
-				int waitSeconds = Math.Min(transientRetries * 3, 15);
-				Console.WriteLine($"Error from {_config.Model} (attempt {transientRetries}/{maxTransientRetries}): {ex.Message}. Retrying in {waitSeconds}s...");
-				await Task.Delay(TimeSpan.FromSeconds(waitSeconds), cancellationToken);
+					int waitSeconds = Math.Min(transientRetries * 3, 15);
+					Console.WriteLine($"Error from {_config.Model} (attempt {transientRetries}/{maxTransientRetries}): {ex.Message}. Retrying in {waitSeconds}s...");
+					await Task.Delay(TimeSpan.FromSeconds(waitSeconds), conversationToken);
+				}
 			}
 		}
+		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+		{
+			await conversation.AddUserMessageAsync(
+				"[System: The user interrupted the current operation. Stop what you are doing and respond to the user.]",
+				CancellationToken.None);
+			finalResult = new LlmResult(LlmExitReason.Interrupted, string.Empty, "Interrupted", null, null);
+		}
+		finally
+		{
+			await conversation.RecordCostAsync(accumulatedCost, CancellationToken.None);
+			WorkerSession.HubClient.UnregisterConversation(conversation.Id);
+		}
+
+		string finalContent = await conversation.FinalizeAsync(finalResult, cancellationToken);
+		finalResult = new LlmResult(finalResult.ExitReason, finalContent, finalResult.ErrorMessage, finalResult.FinalToolCalled, finalResult.RetryAfter);
+
+		return finalResult;
 	}
 
 	private async Task<ToolResult> ExecuteTool(ConversationToolCall toolCall, List<Tool> tools, ToolContext context)
 	{
 		ToolContext.ActiveToolCallId = toolCall.Id;
+		ToolResult result = new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false, false);
 
 		foreach (Tool tool in tools)
 		{
@@ -470,16 +458,111 @@ public class LlmService
 
 				try
 				{
-					return await tool.Handler(args, context);
+					result = await tool.Handler(args, context);
 				}
 				catch (Exception ex)
 				{
-					return new ToolResult($"Error: {ex.Message}", false, false);
+					result = new ToolResult($"Error: {ex.Message}", false, false);
+				}
+
+				break;
+			}
+		}
+
+		return result;
+	}
+
+	// Processes the assistant's response: normalizes tool calls, executes them, and determines next action.
+	// Returns null to continue the loop, or an LlmResult to break out.
+	private async Task<LlmResult?> ProcessAssistantResponseAsync(ConversationMessage assistantMessage, List<Tool> tools, ILlmConversation conversation, string? continueMessage, bool continueOnToolExit, CancellationToken conversationToken)
+	{
+		LlmResult? result = null;
+
+		// Trim whitespace from function names and argument keys that some models produce.
+		if (assistantMessage.ToolCalls != null && assistantMessage.ToolCalls.Count > 0)
+		{
+			NormalizeToolCalls(assistantMessage.ToolCalls);
+		}
+
+		// If no native tool calls, try parsing XML-style tool calls from content.
+		if ((assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0) && !string.IsNullOrEmpty(assistantMessage.Content))
+		{
+			List<ConversationToolCall>? xmlToolCalls = TryParseXmlToolCalls(assistantMessage.Content, tools);
+			if (xmlToolCalls != null)
+			{
+				NormalizeToolCalls(xmlToolCalls);
+				assistantMessage.ToolCalls = xmlToolCalls;
+				Console.WriteLine($"Parsed {xmlToolCalls.Count} XML-style tool call(s) from {_config.Model} response");
+			}
+		}
+
+		await conversation.AddAssistantMessageAsync(assistantMessage, _config.Model, conversationToken);
+
+		if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
+		{
+			if (continueMessage == null)
+			{
+				result = new LlmResult(LlmExitReason.Completed, assistantMessage.Content ?? string.Empty, string.Empty, null, null);
+			}
+			else
+			{
+				ConcurrentQueue<string> continueQueue = WorkerSession.GetChatQueue(conversation.Id);
+				if (continueQueue.IsEmpty)
+				{
+					await conversation.AddUserMessageAsync(continueMessage, conversationToken);
+				}
+			}
+		}
+		else
+		{
+			// Concurrent tool execution. All tool calls from the same assistant
+			// message run as parallel Tasks. Results are collected in order.
+			List<ConversationToolCall> toolCalls = assistantMessage.ToolCalls;
+			(string toolName, ToolResult toolResult)[] completedTools = new (string, ToolResult)[toolCalls.Count];
+
+			Task[] tasks = new Task[toolCalls.Count];
+			for (int i = 0; i < toolCalls.Count; i++)
+			{
+				int index = i;
+				ConversationToolCall toolCall = toolCalls[index];
+				tasks[index] = Task.Run(async () =>
+				{
+					ToolResult toolResult = await ExecuteTool(toolCall, tools, conversation.ToolContext);
+					completedTools[index] = (toolCall.Function.Name, toolResult);
+				}, conversationToken);
+			}
+
+			await Task.WhenAll(tasks);
+
+			// Add tool messages in order and check for exit/message-handled.
+			for (int i = 0; i < completedTools.Length; i++)
+			{
+				(string toolName, ToolResult toolResult) = completedTools[i];
+
+				if (!toolResult.MessageHandled)
+				{
+					await conversation.AddToolMessageAsync(toolCalls[i].Id, toolResult.Response, conversationToken);
+				}
+
+				if (toolResult.ExitLoop)
+				{
+					if (!continueOnToolExit)
+					{
+						result = new LlmResult(LlmExitReason.ToolRequestedExit, toolResult.Response, string.Empty, toolName, null);
+						break;
+					}
+
+					await conversation.ForceFlushAsync();
+				}
+
+				if (toolResult.MessageHandled)
+				{
+					break;
 				}
 			}
 		}
 
-		return new ToolResult($"Error: Unknown tool '{toolCall.Function.Name}'", false, false);
+		return result;
 	}
 
 	// Checks whether a 4xx error is a known configuration mismatch and adapts settings for retry.

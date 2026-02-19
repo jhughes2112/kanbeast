@@ -15,7 +15,7 @@ public class WorkerHubClient : IAsyncDisposable
 	private readonly ConcurrentQueue<string> _pendingClearRequests = new();
 	private readonly ConcurrentQueue<List<LLMConfig>> _pendingSettingsUpdates = new();
 	private readonly ConcurrentQueue<Ticket> _pendingTicketUpdates = new();
-	private readonly ConcurrentQueue<string> _pendingInterruptRequests = new();
+	private readonly ConcurrentDictionary<string, CancellationTokenSource> _conversationInterruptSources = new();
 	private readonly SemaphoreSlim _ticketChangedSignal = new SemaphoreSlim(0);
 	private readonly object _activeWorkLock = new object();
 
@@ -110,11 +110,15 @@ public class WorkerHubClient : IAsyncDisposable
 		});
 
 		// Listen for interrupt requests from the browser.
+		// Cancels the per-conversation CTS so the LlmService loop catches OperationCanceledException.
 		_connection.On<string, string>("InterruptConversation", (fromTicketId, conversationId) =>
 		{
 			if (fromTicketId == _ticketId)
 			{
-				_pendingInterruptRequests.Enqueue(conversationId);
+				if (_conversationInterruptSources.TryGetValue(conversationId, out CancellationTokenSource? cts))
+				{
+					cts.Cancel();
+				}
 			}
 		});
 
@@ -179,9 +183,22 @@ public class WorkerHubClient : IAsyncDisposable
 		return _pendingTicketUpdates;
 	}
 
-	public ConcurrentQueue<string> GetInterruptQueue()
+	// Registers a per-conversation CancellationTokenSource linked to the parent token.
+	// Cancelling the returned token cascades to all child conversations linked to it.
+	public CancellationToken RegisterConversation(string conversationId, CancellationToken parentToken)
 	{
-		return _pendingInterruptRequests;
+		CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(parentToken);
+		_conversationInterruptSources[conversationId] = cts;
+		return cts.Token;
+	}
+
+	// Removes and disposes the per-conversation CTS.
+	public void UnregisterConversation(string conversationId)
+	{
+		if (_conversationInterruptSources.TryRemove(conversationId, out CancellationTokenSource? cts))
+		{
+			cts.Dispose();
+		}
 	}
 
 	public async Task SetConversationBusyAsync(string conversationId, bool isBusy)

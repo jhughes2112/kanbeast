@@ -135,14 +135,13 @@ public static class SubAgentTools
 
 		string fullInstructions = $"{taskSummary}\n\n{instructions}";
 
-		string? configId = context.SubAgentLlmConfigId;
-
-		if (configId == null)
+		LlmService? service = context.SubAgentService;
+		if (service == null)
 		{
-			return $"{displayPrefix} failed: no LLM config ID specified for sub-agent";
+			return $"{displayPrefix} failed: no LLM service specified for sub-agent";
 		}
 
-		ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, configId, null);
+		ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, service, null);
 
 		// Check for a prior conversation from a crashed run. If found, reconstitute it.
 		ILlmConversation conversation;
@@ -154,37 +153,21 @@ public static class SubAgentTools
 
 		if (existing != null)
 		{
-			conversation = LlmConversationFactory.Reconstitute(existing, role, subContext);
+			conversation = new CompactingConversation(existing, role, subContext, null, null, null);
 			Console.WriteLine($"[{displayPrefix}] Reconstituted conversation {toolCallId}");
 		}
 		else
 		{
-			conversation = LlmConversationFactory.Create(role, subContext, fullInstructions, $"{displayPrefix}: {taskSummary}", toolCallId);
+			conversation = new CompactingConversation(null, role, subContext, fullInstructions, $"{displayPrefix}: {taskSummary}", toolCallId);
 		}
 
-		LlmResult llmResult = await WorkerSession.LlmProxy.RunToCompletionAsync(conversation, configId, null, "Continue working. Call agent_task_complete with your result when done.", 0, true, WorkerSession.CancellationToken);
+		LlmResult llmResult = await service.RunToCompletionAsync(conversation, null, false, context.CancellationToken);
 
-		string content;
-
-		if (llmResult.ExitReason == LlmExitReason.CostExceeded)
+		if (!llmResult.Success)
 		{
-			content = $"{displayPrefix} stopped: cost budget exceeded";
-		}
-		else if (!llmResult.Success)
-		{
-			content = $"{displayPrefix} failed: {llmResult.ErrorMessage}";
-		}
-		else
-		{
-			content = llmResult.Content;
+			return $"{displayPrefix} failed: {llmResult.Content}";
 		}
 
-		string? handoffSummary = await conversation.FinalizeAsync(WorkerSession.CancellationToken);
-		if (handoffSummary != null)
-		{
-			content = handoffSummary;
-		}
-
-		return content;
+		return llmResult.Content;
 	}
 }

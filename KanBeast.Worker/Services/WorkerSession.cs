@@ -9,7 +9,7 @@ namespace KanBeast.Worker.Services;
 public static class WorkerSession
 {
 	public static IKanbanApiClient ApiClient { get; private set; } = null!;
-	public static LlmProxy LlmProxy { get; private set; } = null!;
+	public static LlmRegistry LlmProxy { get; private set; } = null!;
 	public static Dictionary<string, string> Prompts { get; private set; } = null!;
 	public static TicketHolder TicketHolder { get; private set; } = null!;
 	public static string WorkDir { get; private set; } = string.Empty;
@@ -25,7 +25,7 @@ public static class WorkerSession
 
 	public static void Start(
 		IKanbanApiClient apiClient,
-		LlmProxy llmProxy,
+		LlmRegistry llmProxy,
 		Dictionary<string, string> prompts,
 		TicketHolder ticketHolder,
 		string workDir,

@@ -16,7 +16,6 @@ public interface ILlmConversation
 
     bool HasReachedMaxIterations { get; }
     void IncrementIteration();
-    void ResetIteration();
 
     Task AddUserMessageAsync(string content, CancellationToken cancellationToken);
     Task AddAssistantMessageAsync(ConversationMessage message, string modelName, CancellationToken cancellationToken);
@@ -28,23 +27,9 @@ public interface ILlmConversation
     Task ResetAsync();
 
     // Marks the conversation finished, runs handoff compaction if available, and flushes.
-    // Returns the compacted summary for the parent, or null if compaction was unavailable/failed.
-    Task<string?> FinalizeAsync(CancellationToken cancellationToken);
+    // Returns the compacted summary, or falls back to the LlmResult content/error.
+    Task<string> FinalizeAsync(LlmResult llmResult, CancellationToken cancellationToken);
 
     Task ForceFlushAsync();
 }
 
-// Creates conversation instances.
-public static class LlmConversationFactory
-{
-    public static ILlmConversation Create(LlmRole role, ToolContext toolContext, string userPrompt, string displayName, string? id)
-    {
-        return new CompactingConversation(null, role, toolContext, userPrompt, displayName, id);
-    }
-
-    // Reconstitutes a conversation from server data.
-    public static ILlmConversation Reconstitute(ConversationData data, LlmRole role, ToolContext toolContext)
-    {
-        return new CompactingConversation(data, role, toolContext, null, null, null);
-    }
-}
