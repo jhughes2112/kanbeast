@@ -22,13 +22,7 @@ Do exactly what the instructions ask. If the instructions say to research, resea
 </principles>
 
 <memories>
-Return routine findings in your agent_task_complete result.
-When saving memories, these kinds of labels are helpful:
-
-Labels:
-- CONSTRAINT — something that cannot be changed or must be respected
-- DECISION — an architectural or design choice made during this ticket
-- REFERENCE — something discovered or done that future work depends on
+/workspace/MEMORY.md is a shared knowledge base. Read it if it exists. If you discover important facts, constraints, or architectural decisions that would help future agents, append them to this file.
 </memories>
 
 <environment>

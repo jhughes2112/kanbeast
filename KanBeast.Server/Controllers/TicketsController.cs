@@ -98,6 +98,13 @@ public class TicketsController : ControllerBase
         return Ok(data);
     }
 
+    [HttpGet("{id}/conversations/nonfinalized")]
+    public ActionResult<List<ConversationData>> GetNonFinalizedConversations(string id)
+    {
+        List<ConversationData> conversations = _conversationStore.GetNonFinalized(id);
+        return Ok(conversations);
+    }
+
     [HttpPost]
     public async Task<ActionResult<Ticket>> CreateTicket([FromBody] Ticket ticket)
     {

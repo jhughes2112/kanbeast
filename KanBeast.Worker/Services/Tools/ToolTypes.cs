@@ -1,6 +1,5 @@
+using System.Collections.Concurrent;
 using System.Text.Json.Nodes;
-using KanBeast.Shared;
-using KanBeast.Worker.Services;
 
 namespace KanBeast.Worker.Services.Tools;
 
@@ -8,36 +7,42 @@ namespace KanBeast.Worker.Services.Tools;
 public enum LlmRole
 {
 	Planning,
+	PlanningActive,
 	Developer,
-	Compaction,
-	SubAgent
+	PlanningSubagent,
+	DeveloperSubagent,
+	Compaction
 }
 
 // Per-conversation state for tool calls.
 public class ToolContext
 {
-	public HashSet<string> ReadFiles { get; }
+	public ConcurrentDictionary<string, byte> ReadFiles { get; }
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
 	public string? SubAgentLlmConfigId { get; }
 	public ShellState? Shell { get; internal set; }
-	public ConversationMemories Memories { get; }
-	public Action? OnMemoriesChanged { get; set; }
+
+	// AsyncLocal-backed tool call ID so concurrent tool invocations each see their own value.
+	// Set by LlmService before each tool handler runs.
+	private static readonly AsyncLocal<string?> _activeToolCallId = new AsyncLocal<string?>();
+
+	public static string? ActiveToolCallId
+	{
+		get => _activeToolCallId.Value;
+		set => _activeToolCallId.Value = value;
+	}
 
 	public ToolContext(
 		string? currentTaskId,
 		string? currentSubtaskId,
-		ConversationMemories memories,
-		string? subAgentLlmConfigId,
-		Action? onMemoriesChanged)
+		string? subAgentLlmConfigId)
 	{
-		ReadFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		ReadFiles = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 		CurrentTaskId = currentTaskId;
 		CurrentSubtaskId = currentSubtaskId;
-		Memories = memories;
 		SubAgentLlmConfigId = subAgentLlmConfigId;
 		Shell = null;
-		OnMemoriesChanged = onMemoriesChanged;
 	}
 
 	// Disposes and removes the persistent shell if one exists.

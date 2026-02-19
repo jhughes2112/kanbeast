@@ -18,6 +18,8 @@ public interface IKanbanApiClient
     Task<Ticket?> SetBranchNameAsync(string ticketId, string branchName, CancellationToken cancellationToken);
     Task<Ticket?> AddLlmCostAsync(string ticketId, decimal cost, CancellationToken cancellationToken);
     Task<ConversationData?> GetPlanningConversationAsync(string ticketId, CancellationToken cancellationToken);
+    Task<ConversationData?> GetConversationAsync(string ticketId, string conversationId, CancellationToken cancellationToken);
+    Task<List<ConversationData>> GetNonFinalizedConversationsAsync(string ticketId, CancellationToken cancellationToken);
     Task UpdateLlmNotesAsync(string llmConfigId, string strengths, string weaknesses, CancellationToken cancellationToken);
 }
 
@@ -176,6 +178,32 @@ public class KanbanApiClient : IKanbanApiClient
         catch (HttpRequestException)
         {
             return null;
+        }
+    }
+
+    public async Task<ConversationData?> GetConversationAsync(string ticketId, string conversationId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            string encodedId = Uri.EscapeDataString(conversationId);
+            return await _httpClient.GetFromJsonAsync<ConversationData>($"/api/tickets/{ticketId}/conversations/{encodedId}", _jsonOptions, cancellationToken);
+        }
+        catch (HttpRequestException)
+        {
+            return null;
+        }
+    }
+
+    public async Task<List<ConversationData>> GetNonFinalizedConversationsAsync(string ticketId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            List<ConversationData>? result = await _httpClient.GetFromJsonAsync<List<ConversationData>>($"/api/tickets/{ticketId}/conversations/nonfinalized", _jsonOptions, cancellationToken);
+            return result ?? new List<ConversationData>();
+        }
+        catch (HttpRequestException)
+        {
+            return new List<ConversationData>();
         }
     }
 

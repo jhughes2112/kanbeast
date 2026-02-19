@@ -97,7 +97,7 @@ public static class FileTools
                         using FileStream fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
                         using StreamReader sr = new StreamReader(fs);
 
-                        context.ReadFiles.Add(fullPath);
+                        context.ReadFiles.TryAdd(fullPath, 0);
 
                         // Offset is 1-based; 0 is treated as 1.
                         if (offsetValue <= 0)
@@ -217,7 +217,7 @@ public static class FileTools
         {
             string fullPath = Path.GetFullPath(filePath);
 
-            if (File.Exists(fullPath) && !context.ReadFiles.Contains(fullPath))
+            if (File.Exists(fullPath) && !context.ReadFiles.ContainsKey(fullPath))
             {
                 result = new ToolResult($"Error: You must use read_file on {filePath} before overwriting it.", false, false);
             }
@@ -235,7 +235,7 @@ public static class FileTools
                     cts.CancelAfter(DefaultTimeout);
                     await File.WriteAllTextAsync(fullPath, content ?? string.Empty, cts.Token);
 
-                    context.ReadFiles.Add(fullPath);
+                    context.ReadFiles.TryAdd(fullPath, 0);
 
                     result = new ToolResult($"File written: {filePath}", false, false);
                 }
@@ -280,7 +280,7 @@ public static class FileTools
 		{
 			string fullPath = Path.GetFullPath(filePath);
 
-			if (!context.ReadFiles.Contains(fullPath))
+			if (!context.ReadFiles.ContainsKey(fullPath))
 			{
 				result = new ToolResult($"Error: You must use read_file on {filePath} before editing it.", false, false);
 			}
@@ -364,7 +364,7 @@ public static class FileTools
 		{
 			string fullPath = Path.GetFullPath(filePath);
 
-			if (!context.ReadFiles.Contains(fullPath))
+			if (!context.ReadFiles.ContainsKey(fullPath))
 			{
 				result = new ToolResult($"Error: You must use read_file on {filePath} before editing it.", false, false);
 			}

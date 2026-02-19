@@ -180,7 +180,7 @@ public class LlmService
 
 	public async Task<(LlmResult result, decimal cost)> RunAsync(ILlmConversation conversation, decimal remainingBudget, int? maxCompletionTokens, CancellationToken cancellationToken)
 	{
-		List<Tool> tools = ToolsFactory.GetTools(conversation);
+		List<Tool> tools = ToolsFactory.GetTools(conversation.Role);
 		List<ToolDefinition>? toolDefs = tools.Count > 0 ? new List<ToolDefinition>() : null;
 		foreach (Tool tool in tools)
 		{
@@ -301,53 +301,57 @@ public class LlmService
 
 						if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
 						{
-							// Let the conversation strategy handle text responses first (e.g., SFCM nudges).
-							bool handled = await conversation.HandleTextResponseAsync(assistantMessage.Content ?? string.Empty, cancellationToken);
-							if (!handled)
+							return (new LlmResult
 							{
-								return (new LlmResult
-								{
-									ExitReason = LlmExitReason.Completed,
-									Content = assistantMessage.Content ?? string.Empty
-								}, accumulatedCost);
-							}
-
-							// Conversation injected a continuation; loop back to LLM.
-							continue;
+								ExitReason = LlmExitReason.Completed,
+								Content = assistantMessage.Content ?? string.Empty
+							}, accumulatedCost);
 						}
 
-						// Sequential tool execution.
-						List<(string toolName, ToolResult result)> completedTools = new List<(string, ToolResult)>();
+						// Concurrent tool execution. All tool calls from the same assistant
+						// message run as parallel Tasks. Results are collected in order.
+						List<ConversationToolCall> toolCalls = assistantMessage.ToolCalls;
+						(string toolName, ToolResult result)[] completedTools = new (string, ToolResult)[toolCalls.Count];
 
-						foreach (ConversationToolCall toolCall in assistantMessage.ToolCalls)
+						Task[] tasks = new Task[toolCalls.Count];
+						for (int i = 0; i < toolCalls.Count; i++)
 						{
-							ToolResult toolResult = await ExecuteTool(toolCall, tools, conversation.ToolContext);
-							completedTools.Add((toolCall.Function.Name, toolResult));
+							int index = i;
+							ConversationToolCall toolCall = toolCalls[index];
+							tasks[index] = Task.Run(async () =>
+							{
+								ToolResult toolResult = await ExecuteTool(toolCall, tools, conversation.ToolContext);
+								completedTools[index] = (toolCall.Function.Name, toolResult);
+							}, cancellationToken);
+						}
+
+						await Task.WhenAll(tasks);
+
+						// Add tool messages in order and check for exit/message-handled.
+						for (int i = 0; i < completedTools.Length; i++)
+						{
+							(string toolName, ToolResult toolResult) = completedTools[i];
 
 							if (!toolResult.MessageHandled)
 							{
-								await conversation.AddToolMessageAsync(toolCall.Id, toolResult.Response, cancellationToken);
+								await conversation.AddToolMessageAsync(toolCalls[i].Id, toolResult.Response, cancellationToken);
 							}
 
-							if (toolResult.ExitLoop || toolResult.MessageHandled)
+							if (toolResult.ExitLoop)
+							{
+								return (new LlmResult
+								{
+									ExitReason = LlmExitReason.ToolRequestedExit,
+									Content = toolResult.Response,
+									FinalToolCalled = toolName
+								}, accumulatedCost);
+							}
+
+							if (toolResult.MessageHandled)
 							{
 								break;
 							}
 						}
-
-						// Check for exit after all messages are added.
-						foreach ((string toolName, ToolResult result) in completedTools)
-							{
-								if (result.ExitLoop)
-								{
-									return (new LlmResult
-									{
-										ExitReason = LlmExitReason.ToolRequestedExit,
-										Content = result.Response,
-										FinalToolCalled = toolName
-									}, accumulatedCost);
-								}
-							}
 					}
 					else
 					{
@@ -448,6 +452,8 @@ public class LlmService
 
 	private async Task<ToolResult> ExecuteTool(ConversationToolCall toolCall, List<Tool> tools, ToolContext context)
 	{
+		ToolContext.ActiveToolCallId = toolCall.Id;
+
 		foreach (Tool tool in tools)
 		{
 			if (tool.Definition.Function.Name == toolCall.Function.Name)

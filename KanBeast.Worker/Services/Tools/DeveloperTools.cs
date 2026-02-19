@@ -57,21 +57,33 @@ public static class DeveloperTools
 
 					string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
-				string systemPrompt = WorkerSession.Prompts["developer"];
-					ConversationMemories memories = new ConversationMemories(context.Memories);
-
 					string? resolvedSubAgentId = string.IsNullOrWhiteSpace(subAgentLlmConfigId) ? null : subAgentLlmConfigId;
-					ToolContext devContext = new ToolContext(taskId, subtaskId, memories, resolvedSubAgentId, null);
+					ToolContext devContext = new ToolContext(taskId, subtaskId, resolvedSubAgentId);
 
 					string ticketId = WorkerSession.TicketHolder.Ticket.Id;
-					ILlmConversation conversation = LlmConversationFactory.Create(
-						WorkerSession.ConversationType,
-						systemPrompt,
-						initialPrompt,
-						memories,
-						LlmRole.Developer,
-						devContext,
-						$"Developer - {subtaskName}");
+
+					// Check for a prior conversation from a crashed run.
+					ILlmConversation conversation;
+					string? toolCallId = ToolContext.ActiveToolCallId;
+
+					ConversationData? existing = toolCallId != null
+						? await WorkerSession.ApiClient.GetConversationAsync(ticketId, toolCallId, WorkerSession.CancellationToken)
+						: null;
+
+					if (existing != null)
+					{
+						conversation = LlmConversationFactory.Reconstitute(existing, LlmRole.Developer, devContext);
+						Console.WriteLine($"[Developer] Reconstituted conversation {toolCallId}");
+					}
+					else
+					{
+						conversation = LlmConversationFactory.Create(
+							LlmRole.Developer,
+							devContext,
+							initialPrompt,
+							$"Developer - {subtaskName}",
+							toolCallId);
+					}
 
 				string content = string.Empty;
 				int iterationCount = 0;
@@ -121,8 +133,8 @@ public static class DeveloperTools
 
 							string continuePrompt = $"You were working on subtask '{subtaskName}' but got stuck. Look at the local changes and decide if you should continue or take a fresh approach.\nDescription: {subtaskDescription}\nCall end_subtask tool when complete.";
 
-							ToolContext continueContext = new ToolContext(taskId, subtaskId, memories, devContext.SubAgentLlmConfigId, null);
-								conversation = LlmConversationFactory.Create(WorkerSession.ConversationType, systemPrompt, continuePrompt, memories, LlmRole.Developer, continueContext, $"Developer - {subtaskName} (retry)");
+							ToolContext continueContext = new ToolContext(taskId, subtaskId, devContext.SubAgentLlmConfigId);
+								conversation = LlmConversationFactory.Create(LlmRole.Developer, continueContext, continuePrompt, $"Developer - {subtaskName} (retry)", null);
 							iterationCount = 0;
 						}
 						else if (iterationCount == 3)

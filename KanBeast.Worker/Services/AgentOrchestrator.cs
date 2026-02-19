@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using KanBeast.Shared;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services.Tools;
@@ -6,9 +7,8 @@ using Microsoft.Extensions.Logging;
 namespace KanBeast.Worker.Services;
 
 // Coordinates the persistent planning conversation that drives all work on a ticket.
-// The planning agent creates tasks/subtasks, then uses start_developer to spawn developer
-// conversations for each subtask. The planning conversation lives for the entire lifetime
-// of the worker process and is never finalized, so the user can always chat with it.
+// On startup, rebuilds all non-finalized conversations from the server. If the planning
+// conversation has pending tool calls (from a crash), replays them so work resumes.
 public class AgentOrchestrator
 {
 	private readonly ILogger<AgentOrchestrator> _logger;
@@ -24,8 +24,9 @@ public class AgentOrchestrator
 		_llmConfigs = llmConfigs;
 	}
 
-	// Ensures the planning conversation exists, either by reconstituting from the server
-	// or creating a fresh one. Called once before the first Active cycle.
+	// Rebuilds all non-finalized conversations from the server and identifies the
+	// planning conversation. If the planning conversation has pending tool calls,
+	// replays them. If no planning conversation exists, creates a new one.
 	public async Task EnsurePlanningConversationAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
 		if (_planningConversation != null)
@@ -33,64 +34,112 @@ public class AgentOrchestrator
 			return;
 		}
 
-		// Try to reconstitute from server.
-		ConversationData? existing = await WorkerSession.ApiClient.GetPlanningConversationAsync(ticketHolder.Ticket.Id, cancellationToken);
+		string ticketId = ticketHolder.Ticket.Id;
 
-		if (existing != null)
+		// Fetch all non-finalized conversations so child agents can be found by ID during tool replay.
+		List<ConversationData> nonFinalized = await WorkerSession.ApiClient.GetNonFinalizedConversationsAsync(ticketId, cancellationToken);
+		_logger.LogInformation("Found {Count} non-finalized conversation(s) on server", nonFinalized.Count);
+
+		// Find the planning conversation among them.
+		ConversationData? planningData = null;
+		foreach (ConversationData data in nonFinalized)
 		{
-			_logger.LogInformation("Reconstituting planning conversation from server: {Id}", existing.Id);
-			await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Reconstituted conversation from server", cancellationToken);
+			if (data.DisplayName == "Planning")
+			{
+				planningData = data;
+				break;
+			}
+		}
 
-			ConversationMemories memories = new ConversationMemories(existing.Memories);
-				ToolContext context = new ToolContext(null, null, memories, null, null);
-				_planningConversation = LlmConversationFactory.Reconstitute(existing, LlmRole.Planning, context);
+		if (planningData != null)
+		{
+			_logger.LogInformation("Reconstituting planning conversation: {Id}", planningData.Id);
+			await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Reconstituted conversation from server", cancellationToken);
 
-			// Force a sync so clients get a ConversationsUpdated notification.
-			await WorkerSession.HubClient.SyncConversationAsync(existing);
+			ToolContext context = new ToolContext(null, null, null);
+			_planningConversation = LlmConversationFactory.Reconstitute(planningData, LlmRole.Planning, context);
+
+			await WorkerSession.HubClient.SyncConversationAsync(planningData);
 		}
 		else
 		{
 			_logger.LogInformation("Creating new planning conversation");
-			await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Creating new conversation", cancellationToken);
-
-			ConversationMemories memories = new ConversationMemories();
+			await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Creating new conversation", cancellationToken);
 
 			string userPrompt = $"""
 				Ticket: {ticketHolder.Ticket.Title}
 				Description: {ticketHolder.Ticket.Description}
 				""";
 
-			ToolContext context = new ToolContext(null, null, memories, null, null);
-				_planningConversation = LlmConversationFactory.Create(
-						WorkerSession.ConversationType,
-					WorkerSession.Prompts["planning"],
-					userPrompt,
-					memories,
-					LlmRole.Planning,
-					context,
-					"Planning");
+			ToolContext context = new ToolContext(null, null, null);
+			_planningConversation = LlmConversationFactory.Create(
+				LlmRole.Planning,
+				context,
+				userPrompt,
+				"Planning",
+				null);
 		}
 
-		// Sync immediately so the client can see the conversation in the dropdown.
-		_logger.LogInformation("Syncing planning conversation to server: {Id}", _planningConversation.Id);
+		// Sync the role to match current ticket status.
+		if (ticketHolder.Ticket.Status == TicketStatus.Active)
+		{
+			_planningConversation.Role = LlmRole.PlanningActive;
+		}
+
 		await _planningConversation.ForceFlushAsync();
-		_logger.LogInformation("Planning conversation synced successfully");
+		_logger.LogInformation("Planning conversation ready: {Id}", _planningConversation.Id);
 	}
 
 	// Reactive loop: waits for chat messages from the client, appends them to the
 	// planning conversation, calls the LLM, and syncs results back. Runs for the
 	// lifetime of the worker process.
+	//
+	// On first entry, if the planning conversation has pending tool calls from a
+	// prior crash, replays them before waiting for user input.
 	public async Task RunReactiveLoopAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
 		_logger.LogInformation("Planning agent ready, waiting for messages");
 		await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Ready, waiting for messages", cancellationToken);
 
-		System.Collections.Concurrent.ConcurrentQueue<string> chatQueue = WorkerSession.HubClient.GetChatQueue(_planningConversation!.Id);
+		ConcurrentQueue<string> chatQueue = WorkerSession.HubClient.GetChatQueue(_planningConversation!.Id);
 		Console.WriteLine($"Orchestrator: Listening for chat on conversation {_planningConversation!.Id}");
-		System.Collections.Concurrent.ConcurrentQueue<string> clearQueue = WorkerSession.HubClient.GetClearQueue();
-		System.Collections.Concurrent.ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
-		System.Collections.Concurrent.ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
+		ConcurrentQueue<string> clearQueue = WorkerSession.HubClient.GetClearQueue();
+		ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
+		ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
 		DateTimeOffset lastHeartbeat = DateTimeOffset.UtcNow;
+
+		// If the conversation has unanswered tool calls from a crash, replay them immediately.
+		if (HasPendingToolCalls(_planningConversation))
+		{
+			_logger.LogInformation("Planning: Replaying pending tool calls from prior session");
+			await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Replaying pending tool calls", cancellationToken);
+
+			bool isActive = ticketHolder.Ticket.Status == TicketStatus.Active;
+			if (isActive)
+			{
+				CancellationToken activeToken = WorkerSession.HubClient.BeginActiveWork(cancellationToken);
+				WorkerSession.UpdateCancellationToken(activeToken);
+				try
+				{
+					await RunLlmUntilIdleAsync(ticketHolder, activeToken);
+				}
+				catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+				{
+					_logger.LogInformation("Planning: Replay cancelled (ticket left Active)");
+				}
+				finally
+				{
+					WorkerSession.HubClient.EndActiveWork();
+					WorkerSession.UpdateCancellationToken(cancellationToken);
+				}
+			}
+			else
+			{
+				await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
+			}
+
+			await _planningConversation.ForceFlushAsync();
+		}
 
 		for (; ; )
 		{
@@ -101,7 +150,6 @@ public class AgentOrchestrator
 			{
 				cancellationToken.ThrowIfCancellationRequested();
 
-				// Send periodic heartbeat so the server knows the worker is alive.
 				DateTimeOffset now = DateTimeOffset.UtcNow;
 				if ((now - lastHeartbeat).TotalSeconds >= 30)
 				{
@@ -109,7 +157,6 @@ public class AgentOrchestrator
 					await WorkerSession.HubClient.SendHeartbeatAsync();
 				}
 
-				// Drain any pending clear requests while idle.
 				while (clearQueue.TryDequeue(out string? clearConversationId))
 				{
 					if (clearConversationId == _planningConversation!.Id)
@@ -119,7 +166,6 @@ public class AgentOrchestrator
 					}
 				}
 
-				// Apply any pending LLM config updates (keep only the latest).
 				List<LLMConfig>? latestConfigs = null;
 				while (settingsQueue.TryDequeue(out List<LLMConfig>? configs))
 				{
@@ -132,7 +178,6 @@ public class AgentOrchestrator
 					_llmConfigs = latestConfigs;
 				}
 
-				// Apply any pending ticket updates (keep only the latest).
 				Ticket? latestTicket = null;
 				while (ticketQueue.TryDequeue(out Ticket? updated))
 				{
@@ -143,10 +188,17 @@ public class AgentOrchestrator
 					TicketStatus previousStatus = ticketHolder.Ticket.Status;
 					ticketHolder.Update(latestTicket);
 
-					// When the ticket transitions to Active, inject a message so the planning agent starts the execution loop.
-					if (previousStatus != TicketStatus.Active && latestTicket.Status == TicketStatus.Active)
+					if (previousStatus != latestTicket.Status && _planningConversation != null)
 					{
-						chatQueue.Enqueue("Beast Mode Activated.  Call get_next_work_item and start the developer.");
+						if (latestTicket.Status == TicketStatus.Active)
+						{
+							_planningConversation.Role = LlmRole.PlanningActive;
+							chatQueue.Enqueue("Beast Mode Activated.  Call get_next_work_item and start the developer.");
+						}
+						else
+						{
+							_planningConversation.Role = LlmRole.Planning;
+						}
 					}
 				}
 
@@ -158,9 +210,9 @@ public class AgentOrchestrator
 
 			await _planningConversation!.AddUserMessageAsync(message, cancellationToken);
 
-			bool isActive = ticketHolder.Ticket.Status == TicketStatus.Active;
+			bool isActiveNow = ticketHolder.Ticket.Status == TicketStatus.Active;
 
-			if (isActive)
+			if (isActiveNow)
 			{
 				CancellationToken activeToken = WorkerSession.HubClient.BeginActiveWork(cancellationToken);
 				WorkerSession.UpdateCancellationToken(activeToken);
@@ -188,27 +240,42 @@ public class AgentOrchestrator
 		}
 	}
 
+	// Returns true if the last assistant message has tool calls with no corresponding tool result messages after it.
+	private static bool HasPendingToolCalls(ILlmConversation conversation)
+	{
+		List<ConversationMessage> messages = conversation.Messages;
+		if (messages.Count == 0)
+		{
+			return false;
+		}
+
+		ConversationMessage last = messages[messages.Count - 1];
+		if (last.Role == "assistant" && last.ToolCalls != null && last.ToolCalls.Count > 0)
+		{
+			return true;
+		}
+
+		return false;
+	}
+
 	// Calls the LLM in a loop until it responds with text (idle), is interrupted,
-	// or hits a fatal/cost error. Tool calls execute inline. Between iterations,
-	// drains chat, interrupt, ticket, and settings queues so the agent stays responsive.
-	// Sets conversation busy state for the duration so the client shows the stop button.
+	// or hits a fatal/cost error. Tool calls execute concurrently as Tasks.
+	// Between iterations, drains chat, interrupt, ticket, and settings queues.
 	private async Task RunLlmUntilIdleAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
 		int retryCount = 0;
-		System.Collections.Concurrent.ConcurrentQueue<string> interruptQueue = WorkerSession.HubClient.GetInterruptQueue();
-		System.Collections.Concurrent.ConcurrentQueue<string> chatQueue = WorkerSession.HubClient.GetChatQueue(_planningConversation!.Id);
-		System.Collections.Concurrent.ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
-		System.Collections.Concurrent.ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
+		ConcurrentQueue<string> interruptQueue = WorkerSession.HubClient.GetInterruptQueue();
+		ConcurrentQueue<string> chatQueue = WorkerSession.HubClient.GetChatQueue(_planningConversation!.Id);
+		ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
+		ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
 
 		await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, true);
 		try
 		{
-
 			for (; ; )
 			{
 				cancellationToken.ThrowIfCancellationRequested();
 
-				// Check for interrupt requests between LLM calls.
 				bool interrupted = false;
 				while (interruptQueue.TryDequeue(out string? interruptConvId))
 				{
@@ -224,14 +291,12 @@ public class AgentOrchestrator
 					return;
 				}
 
-				// Append any user messages that arrived while the LLM was working.
 				while (chatQueue.TryDequeue(out string? userMessage))
 				{
 					_logger.LogInformation("Planning: Appending user message received mid-loop");
 					await _planningConversation!.AddUserMessageAsync(userMessage, cancellationToken);
 				}
 
-				// Apply any pending ticket updates so plannerLlmId and status stay current.
 				Ticket? latestTicket = null;
 				while (ticketQueue.TryDequeue(out Ticket? updated))
 				{
@@ -242,7 +307,6 @@ public class AgentOrchestrator
 					ticketHolder.Update(latestTicket);
 				}
 
-				// Apply any pending LLM config updates.
 				List<LLMConfig>? latestConfigs = null;
 				while (settingsQueue.TryDequeue(out List<LLMConfig>? configs))
 				{
@@ -263,12 +327,10 @@ public class AgentOrchestrator
 
 				if (llmResult.ExitReason == LlmExitReason.Completed)
 				{
-					// LLM responded with text and no tool calls. Idle until next user message.
 					return;
 				}
 				else if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
 				{
-					// A tool signalled exit. Sync and continue.
 					await _planningConversation!.ForceFlushAsync();
 					retryCount = 0;
 				}

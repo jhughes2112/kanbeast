@@ -61,17 +61,11 @@ public class ConversationData
 	[JsonPropertyName("messages")]
 	public List<ConversationMessage> Messages { get; set; } = new();
 
-	[JsonPropertyName("memories")]
-	public Dictionary<string, List<string>> Memories { get; set; } = new();
-
 	[JsonPropertyName("chapterSummaries")]
 	public List<string> ChapterSummaries { get; set; } = new();
 
 	[JsonPropertyName("isFinished")]
 	public bool IsFinished { get; set; }
-
-	[JsonPropertyName("conversationType")]
-	public string ConversationType { get; set; } = "compacting";
 
 	[JsonPropertyName("activeModel")]
 	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]

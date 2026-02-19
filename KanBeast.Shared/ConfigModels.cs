@@ -51,5 +51,4 @@ public class SettingsFile
 	public GitConfig GitConfig { get; set; } = new();
 	public CompactionSettings Compaction { get; set; } = new();
 	public WebSearchConfig WebSearch { get; set; } = new();
-	public string ConversationType { get; set; } = "sfcm";
 }

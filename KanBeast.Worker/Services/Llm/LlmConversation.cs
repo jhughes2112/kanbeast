@@ -1,4 +1,3 @@
-using System.ComponentModel;
 using System.Text;
 using KanBeast.Shared;
 using KanBeast.Worker.Services.Tools;
@@ -9,37 +8,23 @@ namespace KanBeast.Worker.Services;
 //
 // CONVERSATION STRUCTURE:
 //   [0] System prompt - Static instructions for the LLM role
-//   [1] Initial instructions - The first user message with task details
-//   [2] Memories - A dynamically updated message containing accumulated discoveries
-//   [3] Chapter summaries - Accumulated summaries from previous compactions
-//   [4+] Conversation messages - Regular assistant/user/tool exchanges
+//   [1] Chapter summaries - Single assistant message rewritten each compaction
+//   [2] User instructions - The task goal; compaction may refine this
+//   [3+] Conversation messages - Regular assistant/user/tool exchanges
 //
 // When context exceeds a threshold (percentage of smallest LLM context window):
-//   - Messages 0-3 are preserved (system, instructions, memories, summaries)
-//   - Messages 4 to ~80% are summarized via a side-conversation and added to chapter summaries
+//   - Messages 0-2 are preserved (system, summaries, instructions)
+//   - Messages 3 to ~80% are summarized via a side-conversation into message[1]
 //   - The most recent ~20% are kept intact
-//   - The compaction LLM can hoist important discoveries into the memories list
 //
 public class CompactingConversation : ILlmConversation
 {
-	private const long SyncDelayTicks = TimeSpan.TicksPerSecond * 5;
-	private const int FirstCompressibleIndex = 4;
+	private const int FirstCompressibleIndex = 3;
 	private const int MaxChapterSummaries = 10;
 	private const int MinimumCompactionThreshold = 3072;
 	private const int CharsPerToken = 4;
 
-	private static readonly HashSet<string> ValidLabels = new HashSet<string>
-	{
-		"INVARIANT",
-		"CONSTRAINT",
-		"DECISION",
-		"REFERENCE",
-		"OPEN_ITEM"
-	};
-
-	private readonly ConversationMemories _memories;
-	private readonly string? _compactionPrompt;
-	private readonly double _contextSizePercent;
+	private const long SyncDelayTicks = TimeSpan.TicksPerSecond * 1;
 	private long _dirtyTimestamp;
 
 	private ConversationData Data { get; }
@@ -48,7 +33,22 @@ public class CompactingConversation : ILlmConversation
 	private string DisplayName => Data.DisplayName;
 	public List<ConversationMessage> Messages => Data.Messages;
 
-	public LlmRole Role { get; }
+	private LlmRole _role;
+
+	public LlmRole Role
+	{
+		get => _role;
+		set
+		{
+			_role = value;
+
+			if (Messages.Count > 0)
+			{
+				Messages[0] = new ConversationMessage { Role = "system", Content = ResolveSystemPrompt(value) };
+				MarkDirty();
+			}
+		}
+	}
 
 	public ToolContext ToolContext { get; }
 
@@ -58,50 +58,59 @@ public class CompactingConversation : ILlmConversation
 
 	public bool HasReachedMaxIterations => Iteration >= MaxIterations;
 
-	private bool CompactionEnabled => !string.IsNullOrEmpty(_compactionPrompt);
+	private bool CompactionEnabled => WorkerSession.Prompts.ContainsKey("compaction");
 
-	// Creates a new conversation. Pass a non-empty compactionPrompt to enable compaction; pass null to disable.
-	public CompactingConversation(string systemPrompt, string userPrompt, ConversationMemories memories, LlmRole role, ToolContext toolContext, string? compactionPrompt, double contextSizePercent, string displayName)
+	// Creates a new conversation or reconstitutes from server data.
+	// existingData: null to create new, non-null to reconstitute.
+	// userPrompt: if non-null, overwrites message[2]; if null, preserves existing.
+	// displayName: if non-null, sets the display name; if null, preserves existing.
+	// id: explicit conversation ID for new conversations (used for crash recovery). Ignored when reconstituting.
+	public CompactingConversation(ConversationData? existingData, LlmRole role, ToolContext toolContext, string? userPrompt, string? displayName, string? id)
 	{
-		Data = new ConversationData
+		if (existingData != null)
 		{
-			Id = Guid.NewGuid().ToString(),
-			DisplayName = displayName,
-			StartedAt = DateTime.UtcNow.ToString("O"),
-			Memories = memories.Backing
-		};
-
-		Role = role;
-		ToolContext = toolContext;
-		_memories = memories;
-		_compactionPrompt = compactionPrompt;
-		_contextSizePercent = contextSizePercent;
-		_dirtyTimestamp = DateTime.UtcNow.Ticks;
-		toolContext.OnMemoriesChanged = RefreshMemoriesMessage;
-
-		Messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
-		Messages.Add(new ConversationMessage { Role = "user", Content = userPrompt });
-		Messages.Add(new ConversationMessage { Role = "assistant", Content = _memories.Format() });
-		Messages.Add(new ConversationMessage { Role = "assistant", Content = "[Chapter summaries: None yet]" });
-	}
-
-	// Restores from server data. Pass a non-empty compactionPrompt to enable compaction; pass null to disable.
-	public CompactingConversation(ConversationData data, LlmRole role, ToolContext toolContext, string? compactionPrompt, double contextSizePercent)
-	{
-		Data = data;
-		_memories = new ConversationMemories(data.Memories);
-		Role = role;
-		ToolContext = toolContext;
-		_compactionPrompt = compactionPrompt;
-		_contextSizePercent = contextSizePercent;
-		_dirtyTimestamp = 0;
-		toolContext.OnMemoriesChanged = RefreshMemoriesMessage;
-
-		// Refresh system prompt to latest version so prompt edits take effect.
-		string promptKey = role == LlmRole.Planning ? "planning" : "developer";
-		if (Data.Messages.Count > 0)
+			Data = existingData;
+		}
+		else
 		{
-			Data.Messages[0] = new ConversationMessage { Role = "system", Content = WorkerSession.Prompts[promptKey] };
+			Data = new ConversationData
+			{
+				Id = id ?? Guid.NewGuid().ToString(),
+				StartedAt = DateTime.UtcNow.ToString("O")
+			};
+		}
+
+		_role = role;
+		ToolContext = toolContext;
+		_dirtyTimestamp = existingData == null ? DateTime.UtcNow.Ticks : 0;
+
+		if (displayName != null)
+		{
+			Data.DisplayName = displayName;
+		}
+
+		// Build or rebuild the fixed message slots.
+		string systemPrompt = ResolveSystemPrompt(role);
+
+		if (Messages.Count == 0)
+		{
+			if (string.IsNullOrWhiteSpace(userPrompt))
+			{
+				throw new ArgumentException("userPrompt is required when creating a new conversation", nameof(userPrompt));
+			}
+
+			Messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
+			Messages.Add(new ConversationMessage { Role = "assistant", Content = "[Chapter summaries: None yet]" });
+			Messages.Add(new ConversationMessage { Role = "user", Content = userPrompt });
+		}
+		else
+		{
+			Messages[0] = new ConversationMessage { Role = "system", Content = systemPrompt };
+
+			if (userPrompt != null)
+			{
+				Messages[2] = new ConversationMessage { Role = "user", Content = userPrompt };
+			}
 		}
 	}
 
@@ -115,21 +124,19 @@ public class CompactingConversation : ILlmConversation
 		Iteration = 0;
 	}
 
-	private void AddMemory(string label, string memory)
+	private static string ResolveSystemPrompt(LlmRole role)
 	{
-		_memories.Add(label, memory);
-		UpdateMemoriesMessage();
-	}
-
-	private bool RemoveMemory(string label, string memoryToRemove)
-	{
-		bool removed = _memories.Remove(label, memoryToRemove);
-		if (removed)
+		string promptKey = role switch
 		{
-			UpdateMemoriesMessage();
-		}
+			LlmRole.Planning => "planning",
+			LlmRole.PlanningActive => "planning-active",
+			LlmRole.PlanningSubagent => "subagent-planning",
+			LlmRole.DeveloperSubagent => "subagent-dev",
+			LlmRole.Compaction => "compaction",
+			_ => "developer"
+		};
 
-		return removed;
+		return WorkerSession.Prompts[promptKey];
 	}
 
 	private void AddChapterSummary(string summary)
@@ -148,25 +155,9 @@ public class CompactingConversation : ILlmConversation
 		UpdateSummariesMessage();
 	}
 
-	private void RefreshMemoriesMessage()
-	{
-		UpdateMemoriesMessage();
-	}
-
-	private void UpdateMemoriesMessage()
-	{
-		if (Messages.Count < 4)
-		{
-			return;
-		}
-
-		Messages[2] = new ConversationMessage { Role = "assistant", Content = _memories.Format() };
-		MarkDirty();
-	}
-
 	private void UpdateSummariesMessage()
 	{
-		if (Messages.Count < 4)
+		if (Messages.Count < FirstCompressibleIndex)
 		{
 			return;
 		}
@@ -190,7 +181,7 @@ public class CompactingConversation : ILlmConversation
 			summariesContent = sb.ToString();
 		}
 
-		Messages[3] = new ConversationMessage { Role = "assistant", Content = summariesContent };
+		Messages[1] = new ConversationMessage { Role = "assistant", Content = summariesContent };
 		MarkDirty();
 	}
 
@@ -262,25 +253,20 @@ public class CompactingConversation : ILlmConversation
 
 	public async Task ResetAsync()
 	{
-		string userPrompt = Messages.Count > 1 ? Messages[1].Content ?? "" : "";
+		string userPrompt = Messages.Count > 2 ? Messages[2].Content ?? "" : "";
 
-		if (Role == LlmRole.Planning)
+		if (Role == LlmRole.Planning || Role == LlmRole.PlanningActive)
 		{
 			userPrompt = WorkerSession.TicketHolder.Ticket.FormatPlanningGoal();
 		}
 
 		Messages.Clear();
-		_memories.Clear();
 		Data.ChapterSummaries.Clear();
-		Data.Memories.Clear();
 
-		string promptKey = Role == LlmRole.Planning ? "planning" : "developer";
-		string systemPrompt = WorkerSession.Prompts[promptKey];
+		string systemPrompt = ResolveSystemPrompt(Role);
 		Messages.Add(new ConversationMessage { Role = "system", Content = systemPrompt });
-
-		Messages.Add(new ConversationMessage { Role = "user", Content = userPrompt });
-		Messages.Add(new ConversationMessage { Role = "assistant", Content = _memories.Format() });
 		Messages.Add(new ConversationMessage { Role = "assistant", Content = "[Chapter summaries: None yet]" });
+		Messages.Add(new ConversationMessage { Role = "user", Content = userPrompt });
 
 		Data.CompletedAt = null;
 		Data.IsFinished = false;
@@ -310,18 +296,6 @@ public class CompactingConversation : ILlmConversation
 		_dirtyTimestamp = 0;
 	}
 
-	private static readonly List<Tool> AdditionalTools = BuildAdditionalTools();
-
-	public IReadOnlyList<Tool> GetAdditionalTools()
-	{
-		return AdditionalTools;
-	}
-
-	public Task<bool> HandleTextResponseAsync(string text, CancellationToken cancellationToken)
-	{
-		return Task.FromResult(false);
-	}
-
 	// ── Compaction ──────────────────────────────────────────────────────────
 
 	private Task CompactIfNeededAsync(CancellationToken cancellationToken)
@@ -331,12 +305,13 @@ public class CompactingConversation : ILlmConversation
 			return Task.CompletedTask;
 		}
 
+		double contextSizePercent = WorkerSession.Compaction.ContextSizePercent;
 		int contextLength = WorkerSession.LlmProxy.GetSmallestContextLength();
 		int effectiveThreshold;
 
-		if (contextLength > 0 && _contextSizePercent > 0)
+		if (contextLength > 0 && contextSizePercent > 0)
 		{
-			effectiveThreshold = Math.Max(MinimumCompactionThreshold, (int)(contextLength * _contextSizePercent));
+			effectiveThreshold = Math.Max(MinimumCompactionThreshold, (int)(contextLength * contextSizePercent));
 		}
 		else
 		{
@@ -349,7 +324,7 @@ public class CompactingConversation : ILlmConversation
 			return Task.CompletedTask;
 		}
 
-		Console.WriteLine($"[Compaction] ~{estimatedTokens} tokens exceeds {effectiveThreshold} threshold ({_contextSizePercent:P0} of {contextLength} smallest context), compacting...");
+		Console.WriteLine($"[Compaction] ~{estimatedTokens} tokens exceeds {effectiveThreshold} threshold ({contextSizePercent:P0} of {contextLength} smallest context), compacting...");
 		return PerformCompactionAsync(cancellationToken);
 	}
 
@@ -368,29 +343,25 @@ public class CompactingConversation : ILlmConversation
 			return;
 		}
 
-		string originalTask = Messages.Count > 1 ? Messages[1].Content ?? "" : "";
+		string originalTask = Messages.Count > 2 ? Messages[2].Content ?? "" : "";
 		string historyBlock = BuildHistoryBlock(Messages, FirstCompressibleIndex, endIndex);
 
-		string userPrompt = $"""
+		string compactionUserPrompt = $"""
 			[Original task]
 			{originalTask}
 			""";
 
-		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, ToolContext.Memories, null, null);
+		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, null);
 		string compactLogPrefix = !string.IsNullOrWhiteSpace(DisplayName) ? $"{DisplayName} (Compaction)" : "Compaction";
 
-		CompactingConversation summaryConversation = new CompactingConversation(_compactionPrompt!, userPrompt, _memories, LlmRole.Compaction, compactionContext, null, 0, compactLogPrefix);
-
-		// Memory changes from the compaction conversation should refresh the parent.
-		compactionContext.OnMemoriesChanged = RefreshMemoriesMessage;
+		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, compactionContext, compactionUserPrompt, compactLogPrefix, null);
 
 		await summaryConversation.AddUserMessageAsync($"""
 			<history>
 			{historyBlock}
 			</history>
 
-			First, use add_memory and remove_memory to update the memories with important discoveries, decisions, or state changes from this history.
-			Finally, call summarize_history with a concise chapter summary as described in the instructions, which completes the compaction process.
+			Call summarize_history with a concise chapter summary as described in the instructions, which completes the compaction process.
 			""", cancellationToken);
 
 		for (int attempt = 0; attempt < 3; attempt++)
@@ -424,7 +395,7 @@ public class CompactingConversation : ILlmConversation
 		Console.WriteLine("[Compaction] LLM did not call summarize_history after 3 attempts, skipping compaction");
 	}
 
-	// Deletes messages from startIndex to endIndex (exclusive), preserving the first 4 messages.
+	// Deletes messages from startIndex to endIndex (exclusive), preserving the fixed header messages.
 	private void DeleteRange(int startIndex, int endIndex)
 	{
 		startIndex = Math.Max(startIndex, FirstCompressibleIndex);
@@ -530,94 +501,6 @@ public class CompactingConversation : ILlmConversation
 
 		int toolDefinitionOverhead = 2000;
 		return (chars / CharsPerToken) + toolDefinitionOverhead;
-	}
-
-	// ── Memory and compaction tool methods ────────────────────────────────
-
-	private static List<Tool> BuildAdditionalTools()
-	{
-		List<Tool> tools = new List<Tool>();
-		ToolHelper.AddTools(tools, typeof(CompactingConversation), nameof(AddMemoryAsync), nameof(RemoveMemoryAsync), nameof(SummarizeHistoryAsync));
-		return tools;
-	}
-
-	[Description("Add a labeled memory to the persistent memories list. Memories survive compaction and are visible to the agent across the entire conversation.")]
-	public static Task<ToolResult> AddMemoryAsync(
-		[Description("Label: INVARIANT (what is), CONSTRAINT (what cannot be), DECISION (what was chosen), REFERENCE (what was done), or OPEN_ITEM (what is unresolved)")] string label,
-		[Description("Terse, self-contained memory entry")] string content,
-		ToolContext context)
-	{
-		ToolResult result;
-
-		if (string.IsNullOrWhiteSpace(content))
-		{
-			result = new ToolResult("Error: Content cannot be empty", false, false);
-		}
-		else
-		{
-			string trimmedLabel = label.Trim().ToUpperInvariant();
-
-			if (!ValidLabels.Contains(trimmedLabel))
-			{
-				result = new ToolResult("Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM", false, false);
-			}
-			else
-			{
-				context.Memories.Add(trimmedLabel, content.Trim());
-				context.OnMemoriesChanged?.Invoke();
-				result = new ToolResult($"Added [{trimmedLabel}]: {content.Trim()}", false, false);
-			}
-		}
-
-		return Task.FromResult(result);
-	}
-
-	[Description("Remove a memory that is no longer true, relevant, or has been superseded.")]
-	public static Task<ToolResult> RemoveMemoryAsync(
-		[Description("Label: INVARIANT, CONSTRAINT, DECISION, REFERENCE, or OPEN_ITEM")] string label,
-		[Description("Text to match against existing memories (beginning of the memory entry)")] string memoryToRemove,
-		ToolContext context)
-	{
-		ToolResult result;
-
-		if (string.IsNullOrWhiteSpace(memoryToRemove))
-		{
-			result = new ToolResult("Error: Memory text cannot be empty", false, false);
-		}
-		else
-		{
-			string trimmedLabel = label.Trim().ToUpperInvariant();
-
-			if (!ValidLabels.Contains(trimmedLabel))
-			{
-				result = new ToolResult("Error: Label must be one of: INVARIANT, CONSTRAINT, DECISION, REFERENCE, OPEN_ITEM", false, false);
-			}
-			else
-			{
-				bool removed = context.Memories.Remove(trimmedLabel, memoryToRemove);
-
-				if (removed)
-				{
-					context.OnMemoriesChanged?.Invoke();
-					result = new ToolResult($"Removed [{trimmedLabel}] memory matching: {memoryToRemove}", false, false);
-				}
-				else
-				{
-					result = new ToolResult($"No matching memory found in [{trimmedLabel}] (need >5 character match at start)", false, false);
-				}
-			}
-		}
-
-		return Task.FromResult(result);
-	}
-
-	[Description("Provide the final summary of the history block and complete the compaction process.")]
-	public static Task<ToolResult> SummarizeHistoryAsync(
-		[Description("Concise summary of the work done, as it pertains to solving the original task")] string summary,
-		ToolContext context)
-	{
-		ToolResult result = new ToolResult(summary.Trim(), true, false);
-		return Task.FromResult(result);
 	}
 
 	private async Task LazySyncIfDueAsync()

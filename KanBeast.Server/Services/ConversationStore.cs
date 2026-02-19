@@ -58,6 +58,25 @@ public class ConversationStore
         return null;
     }
 
+    // Returns all non-finalized conversations for a ticket.
+    public List<ConversationData> GetNonFinalized(string ticketId)
+    {
+        List<ConversationData> result = new List<ConversationData>();
+
+        if (_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
+        {
+            foreach ((string id, ConversationData data) in convos)
+            {
+                if (!data.IsFinished)
+                {
+                    result.Add(data);
+                }
+            }
+        }
+
+        return result;
+    }
+
     public List<ConversationInfo> GetInfoList(string ticketId)
     {
         List<ConversationInfo> result = new List<ConversationInfo>();

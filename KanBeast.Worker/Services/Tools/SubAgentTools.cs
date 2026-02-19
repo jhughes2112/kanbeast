@@ -52,19 +52,30 @@ public static class SubAgentTools
 
 				string fullInstructions = $"{taskSummary}\n\n{instructions}";
 
-				string systemPrompt = WorkerSession.Prompts["subagent"];
+				ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, null);
 
-				ConversationMemories memories = new ConversationMemories(context.Memories);
-					ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, memories, null, null);
+				// Check for a prior conversation from a crashed run. If found, reconstitute it.
+				ILlmConversation conversation;
+				string? toolCallId = ToolContext.ActiveToolCallId;
 
-					ILlmConversation conversation = LlmConversationFactory.Create(
-						WorkerSession.ConversationType,
-						systemPrompt,
-						fullInstructions,
-						memories,
-						LlmRole.SubAgent,
+				ConversationData? existing = toolCallId != null
+					? await WorkerSession.ApiClient.GetConversationAsync(WorkerSession.TicketHolder.Ticket.Id, toolCallId, WorkerSession.CancellationToken)
+					: null;
+
+				if (existing != null)
+				{
+					conversation = LlmConversationFactory.Reconstitute(existing, LlmRole.DeveloperSubagent, subContext);
+					Console.WriteLine($"[Sub-agent] Reconstituted conversation {toolCallId}");
+				}
+				else
+				{
+					conversation = LlmConversationFactory.Create(
+						LlmRole.DeveloperSubagent,
 						subContext,
-						$"Sub-agent: {taskSummary}");
+						fullInstructions,
+						$"Sub-agent: {taskSummary}",
+						toolCallId);
+				}
 
 				string content = string.Empty;
 
@@ -137,5 +148,123 @@ public static class SubAgentTools
 		}
 
 		return Task.FromResult(toolResult);
+	}
+
+	[Description("""
+		Launch a read-only inspection agent to investigate the repository and answer questions.
+		The agent can read files, run shell commands, search code, and browse the web, but cannot modify any files.
+
+		When to use:
+		- To understand the current state of the codebase before creating tasks
+		- To investigate how something is implemented or where specific code lives
+		- To research technical approaches or validate assumptions
+		- To read documentation, summarize code structure, or answer architectural questions
+
+		Usage notes:
+		1. Provide a clear question or investigation goal in the instructions.
+		2. The agent works autonomously and returns its findings. You cannot send follow-up messages.
+		3. Launch multiple inspection agents concurrently for different questions by issuing multiple tool calls in one message.
+		""")]
+	public static async Task<ToolResult> StartInspectionAgentAsync(
+		[Description("Brief summary of what to investigate (logged to activity feed).")] string taskSummary,
+		[Description("Detailed question or investigation instructions. Be specific about what information to return.")] string instructions,
+		ToolContext context)
+	{
+		ToolResult result;
+
+		if (string.IsNullOrWhiteSpace(taskSummary))
+		{
+			result = new ToolResult("Error: taskSummary cannot be empty", false, false);
+		}
+		else if (string.IsNullOrWhiteSpace(instructions))
+		{
+			result = new ToolResult("Error: instructions cannot be empty", false, false);
+		}
+		else
+		{
+			try
+			{
+				await WorkerSession.ApiClient.AddActivityLogAsync(
+					WorkerSession.TicketHolder.Ticket.Id, $"Inspection: {taskSummary}", WorkerSession.CancellationToken);
+
+				string fullInstructions = $"{taskSummary}\n\n{instructions}";
+
+				ToolContext inspectionContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, null);
+
+				// Check for a prior conversation from a crashed run.
+				ILlmConversation conversation;
+				string? toolCallId = ToolContext.ActiveToolCallId;
+
+				ConversationData? existing = toolCallId != null
+					? await WorkerSession.ApiClient.GetConversationAsync(WorkerSession.TicketHolder.Ticket.Id, toolCallId, WorkerSession.CancellationToken)
+					: null;
+
+				if (existing != null)
+				{
+					conversation = LlmConversationFactory.Reconstitute(existing, LlmRole.PlanningSubagent, inspectionContext);
+					Console.WriteLine($"[Inspection] Reconstituted conversation {toolCallId}");
+				}
+				else
+				{
+					conversation = LlmConversationFactory.Create(
+						LlmRole.PlanningSubagent,
+						inspectionContext,
+						fullInstructions,
+						$"Inspection: {taskSummary}",
+						toolCallId);
+				}
+
+				string content = string.Empty;
+
+				string? subAgentConfigId = context.SubAgentLlmConfigId;
+
+				for (; ; )
+				{
+					LlmResult llmResult = !string.IsNullOrWhiteSpace(subAgentConfigId)
+						? await WorkerSession.LlmProxy.ContinueWithConfigIdAsync(subAgentConfigId, conversation, null, WorkerSession.CancellationToken)
+						: await WorkerSession.LlmProxy.ContinueAsync(conversation, null, WorkerSession.CancellationToken);
+
+					if (llmResult.ExitReason == LlmExitReason.Completed)
+					{
+						content = llmResult.Content;
+						break;
+					}
+					else if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit)
+					{
+						content = llmResult.Content;
+						break;
+					}
+					else if (llmResult.ExitReason == LlmExitReason.MaxIterationsReached)
+					{
+						conversation.ResetIteration();
+						await conversation.AddUserMessageAsync("Continue working. Call agent_task_complete with your result when done.", WorkerSession.CancellationToken);
+					}
+					else if (llmResult.ExitReason == LlmExitReason.CostExceeded)
+					{
+						content = "Inspection agent stopped: cost budget exceeded";
+						break;
+					}
+					else
+					{
+						content = $"Inspection agent failed: {llmResult.ErrorMessage}";
+						break;
+					}
+				}
+
+				await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+
+				result = new ToolResult(content, false, false);
+			}
+			catch (OperationCanceledException)
+			{
+				throw;
+			}
+			catch (Exception ex)
+			{
+				result = new ToolResult($"Error: Inspection agent failed: {ex.Message}", false, false);
+			}
+		}
+
+		return result;
 	}
 }
