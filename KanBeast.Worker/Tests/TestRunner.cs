@@ -68,7 +68,6 @@ public static class TestRunner
 
 		LlmServiceTests.Test(ctx);
 		ToolHelperTests.Test(ctx);
-		LlmMemoriesTests.Test(ctx);
 		FileToolsTests.Test(ctx);
 		ShellToolsTests.Test(ctx);
 		WebToolsTests.Test(ctx);

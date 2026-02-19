@@ -158,7 +158,11 @@ public static class DeveloperTools
 					}
 				}
 
-				await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+				string? handoffSummary = await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+				if (handoffSummary != null)
+				{
+					content = handoffSummary;
+				}
 
 				if (subtaskComplete)
 				{

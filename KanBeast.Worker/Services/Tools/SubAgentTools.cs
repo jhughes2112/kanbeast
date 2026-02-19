@@ -114,7 +114,11 @@ public static class SubAgentTools
 					}
 				}
 
-				await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+				string? handoffSummary = await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+				if (handoffSummary != null)
+				{
+					content = handoffSummary;
+				}
 
 				result = new ToolResult(content, false, false);
 			}
@@ -246,22 +250,26 @@ public static class SubAgentTools
 					}
 					else
 					{
-						content = $"Inspection agent failed: {llmResult.ErrorMessage}";
-						break;
-					}
-				}
+								content = $"Inspection agent failed: {llmResult.ErrorMessage}";
+								break;
+							}
+							}
 
-				await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+							string? handoffSummary = await conversation.FinalizeAsync(WorkerSession.CancellationToken);
+							if (handoffSummary != null)
+							{
+								content = handoffSummary;
+							}
 
-				result = new ToolResult(content, false, false);
-			}
-			catch (OperationCanceledException)
-			{
-				throw;
-			}
-			catch (Exception ex)
-			{
-				result = new ToolResult($"Error: Inspection agent failed: {ex.Message}", false, false);
+							result = new ToolResult(content, false, false);
+						}
+						catch (OperationCanceledException)
+						{
+							throw;
+						}
+						catch (Exception ex)
+						{
+							result = new ToolResult($"Error: Inspection agent failed: {ex.Message}", false, false);
 			}
 		}
 

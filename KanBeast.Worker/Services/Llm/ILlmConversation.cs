@@ -26,7 +26,11 @@ public interface ILlmConversation
     decimal GetRemainingBudget();
 
     Task ResetAsync();
-    Task FinalizeAsync(CancellationToken cancellationToken);
+
+    // Marks the conversation finished, runs handoff compaction if available, and flushes.
+    // Returns the compacted summary for the parent, or null if compaction was unavailable/failed.
+    Task<string?> FinalizeAsync(CancellationToken cancellationToken);
+
     Task ForceFlushAsync();
 }
 

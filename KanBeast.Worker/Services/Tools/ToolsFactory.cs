@@ -20,40 +20,47 @@ public static class ToolsFactory
 
 	private static Dictionary<LlmRole, List<Tool>> BuildAllToolSets()
 	{
-		// Read-only tools shared by developer, inspection agent, and sub-agents.
-		List<Tool> readOnlyTools = new List<Tool>();
-		ToolHelper.AddTools(readOnlyTools, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
-		ToolHelper.AddTools(readOnlyTools, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
-		ToolHelper.AddTools(readOnlyTools, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
-		ToolHelper.AddTools(readOnlyTools, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
+        // Tools are added explicitly to each role below. Do not use a shared readOnlyTools list.
 
 		// Planning (Backlog, Done, Failed): task creation + inspection sub-agents. No direct file/shell access.
 		List<Tool> planning = new List<Tool>();
 		ToolHelper.AddTools(planning, typeof(TicketTools), nameof(TicketTools.CreateTaskAsync), nameof(TicketTools.CreateSubtaskAsync), nameof(TicketTools.DeleteAllTasksAsync), nameof(TicketTools.LogMessageAsync));
 		ToolHelper.AddTools(planning, typeof(SubAgentTools), nameof(SubAgentTools.StartInspectionAgentAsync));
 
-		// Planning + Active:
+		// Planning + Active: dispatches developers, verifies results, manages LLM notes.
 		List<Tool> planningActive = new List<Tool>();
 		ToolHelper.AddTools(planningActive, typeof(DeveloperTools), nameof(DeveloperTools.StartDeveloperAsync));
+		ToolHelper.AddTools(planningActive, typeof(SubAgentTools), nameof(SubAgentTools.StartInspectionAgentAsync));
 		ToolHelper.AddTools(planningActive, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.UpdateLlmNotesAsync), nameof(TicketTools.SetTicketStatusAsync), nameof(TicketTools.LogMessageAsync));
 
-		// Developer:
-		List<Tool> developer = new List<Tool>(readOnlyTools);
+		// Developer: reads files and searches to understand context, delegates all edits/commands to sub-agents.
+		List<Tool> developer = new List<Tool>();
+		ToolHelper.AddTools(developer, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
+		ToolHelper.AddTools(developer, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
+		ToolHelper.AddTools(developer, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(developer, typeof(TicketTools), nameof(TicketTools.LogMessageAsync), nameof(TicketTools.EndSubtaskAsync));
 		ToolHelper.AddTools(developer, typeof(SubAgentTools), nameof(SubAgentTools.StartSubAgentAsync));
 
-		// Developer sub-agent
-		List<Tool> devSubagent = new List<Tool>(readOnlyTools);
+        // Developer sub-agent: has explicit read/search/web tools plus shell and edit capabilities.
+		List<Tool> devSubagent = new List<Tool>();
+		ToolHelper.AddTools(devSubagent, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
+		ToolHelper.AddTools(devSubagent, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync), nameof(FileTools.WriteFileAsync), nameof(FileTools.EditFileAsync), nameof(FileTools.MultiEditFileAsync));
+		ToolHelper.AddTools(devSubagent, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
+		ToolHelper.AddTools(devSubagent, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(devSubagent, typeof(PersistentShellTools), nameof(PersistentShellTools.StartShellAsync), nameof(PersistentShellTools.SendShellAsync), nameof(PersistentShellTools.KillShellAsync));
-		ToolHelper.AddTools(devSubagent, typeof(FileTools), nameof(FileTools.WriteFileAsync), nameof(FileTools.EditFileAsync), nameof(FileTools.MultiEditFileAsync));
 		ToolHelper.AddTools(devSubagent, typeof(SubAgentTools), nameof(SubAgentTools.AgentTaskCompleteAsync));
 
-		// Planning sub-agent (inspection): read-only, reports findings back.
-		List<Tool> planSubagent = new List<Tool>(readOnlyTools);
+        // Planning sub-agent (inspection): explicit read/search/web and shell, reports findings back.
+		List<Tool> planSubagent = new List<Tool>();
+		ToolHelper.AddTools(planSubagent, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
+		ToolHelper.AddTools(planSubagent, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
+		ToolHelper.AddTools(planSubagent, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
+		ToolHelper.AddTools(planSubagent, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(planSubagent, typeof(SubAgentTools), nameof(SubAgentTools.AgentTaskCompleteAsync));
 
-		// Compaction: only needs summarize_history to complete.
+		// Compaction: file access to read/update MEMORY.md, plus summarize_history to complete.
 		List<Tool> compaction = new List<Tool>();
+		ToolHelper.AddTools(compaction, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.WriteFileAsync));
 		ToolHelper.AddTools(compaction, typeof(MemoryTools), nameof(MemoryTools.SummarizeHistoryAsync));
 
 		return new Dictionary<LlmRole, List<Tool>>
