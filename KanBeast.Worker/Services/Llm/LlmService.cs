@@ -772,11 +772,12 @@ public class LlmService
 		return delta > 0 ? (int)delta : 0;
 	}
 
-	// Trims whitespace from function names and argument keys that some models produce.
+	// Normalizes tool calls: assigns clean GUIDs as IDs, trims function names and argument keys.
 	private static void NormalizeToolCalls(List<ConversationToolCall> toolCalls)
 	{
 		foreach (ConversationToolCall tc in toolCalls)
 		{
+			tc.Id = Guid.NewGuid().ToString();
 			tc.Function.Name = tc.Function.Name.Trim();
 
 			try
