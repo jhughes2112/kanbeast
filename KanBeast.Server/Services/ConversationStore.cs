@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KanBeast.Server.Models;
@@ -7,6 +6,8 @@ using KanBeast.Shared;
 namespace KanBeast.Server.Services;
 
 // Stores full conversation data separately from tickets to keep ticket payloads small.
+// Reads and writes directly to disk with no in-memory cache, so edits to the JSON
+// files are immediately visible without restarting the server.
 public class ConversationStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
@@ -16,7 +17,12 @@ public class ConversationStore
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    private readonly ConcurrentDictionary<string, ConcurrentDictionary<string, ConversationData>> _store = new();
+    private static readonly JsonSerializerOptions ReadOptions = new JsonSerializerOptions
+    {
+        PropertyNameCaseInsensitive = true,
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
+
     private readonly string _directory;
     private readonly ILogger<ConversationStore> _logger;
 
@@ -25,27 +31,19 @@ public class ConversationStore
         _logger = logger;
         _directory = Path.Combine(Environment.CurrentDirectory, "conversations");
         Directory.CreateDirectory(_directory);
-        LoadFromDisk();
     }
 
     public ConversationData? Get(string ticketId, string conversationId)
     {
-        if (_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
-        {
-            convos.TryGetValue(conversationId, out ConversationData? data);
-            return data;
-        }
-
-        return null;
+        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
+        convos.TryGetValue(conversationId, out ConversationData? data);
+        return data;
     }
 
     // Finds the active (unfinished) planning conversation for a ticket, if any.
     public ConversationData? GetActivePlanning(string ticketId)
     {
-        if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
-        {
-            return null;
-        }
+        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
         foreach ((string id, ConversationData data) in convos)
         {
@@ -62,15 +60,13 @@ public class ConversationStore
     public List<ConversationData> GetNonFinalized(string ticketId)
     {
         List<ConversationData> result = new List<ConversationData>();
+        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
-        if (_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
+        foreach ((string id, ConversationData data) in convos)
         {
-            foreach ((string id, ConversationData data) in convos)
+            if (!data.IsFinished)
             {
-                if (!data.IsFinished)
-                {
-                    result.Add(data);
-                }
+                result.Add(data);
             }
         }
 
@@ -80,21 +76,19 @@ public class ConversationStore
     public List<ConversationInfo> GetInfoList(string ticketId)
     {
         List<ConversationInfo> result = new List<ConversationInfo>();
+        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
-        if (_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
+        foreach ((string id, ConversationData data) in convos)
         {
-            foreach ((string id, ConversationData data) in convos)
+            result.Add(new ConversationInfo
             {
-                result.Add(new ConversationInfo
-                {
-                    Id = data.Id,
-                    DisplayName = data.DisplayName,
-                    MessageCount = data.Messages.Count,
-                    IsFinished = data.IsFinished,
-                    StartedAt = data.StartedAt,
-                    ActiveModel = data.ActiveModel
-                });
-            }
+                Id = data.Id,
+                DisplayName = data.DisplayName,
+                MessageCount = data.Messages.Count,
+                IsFinished = data.IsFinished,
+                StartedAt = data.StartedAt,
+                ActiveModel = data.ActiveModel
+            });
         }
 
         return result;
@@ -102,17 +96,14 @@ public class ConversationStore
 
     public async Task UpsertAsync(string ticketId, ConversationData data)
     {
-        ConcurrentDictionary<string, ConversationData> convos = _store.GetOrAdd(ticketId, _ => new ConcurrentDictionary<string, ConversationData>());
+        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
         convos[data.Id] = data;
-        await SaveToDiskAsync(ticketId);
+        await SaveFileAsync(ticketId, convos);
     }
 
     public async Task FinishAsync(string ticketId, string conversationId)
     {
-        if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
-        {
-            return;
-        }
+        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
         if (!convos.TryGetValue(conversationId, out ConversationData? data))
         {
@@ -120,29 +111,25 @@ public class ConversationStore
         }
 
         data.IsFinished = true;
-        await SaveToDiskAsync(ticketId);
+        await SaveFileAsync(ticketId, convos);
     }
 
     public async Task<bool> DeleteAsync(string ticketId, string conversationId)
     {
-        if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
+        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
+
+        if (!convos.Remove(conversationId))
         {
             return false;
         }
 
-        if (!convos.TryRemove(conversationId, out _))
-        {
-            return false;
-        }
-
-        await SaveToDiskAsync(ticketId);
+        await SaveFileAsync(ticketId, convos);
         return true;
     }
 
     public void DeleteForTicket(string ticketId)
     {
-        _store.TryRemove(ticketId, out _);
-        string path = Path.Combine(_directory, $"convos-{ticketId}.json");
+        string path = GetPath(ticketId);
 
         if (File.Exists(path))
         {
@@ -150,46 +137,37 @@ public class ConversationStore
         }
     }
 
-    private async Task SaveToDiskAsync(string ticketId)
+    private string GetPath(string ticketId)
     {
-        if (!_store.TryGetValue(ticketId, out ConcurrentDictionary<string, ConversationData>? convos))
-        {
-            return;
-        }
-
-        string path = Path.Combine(_directory, $"convos-{ticketId}.json");
-        Dictionary<string, ConversationData> snapshot = new Dictionary<string, ConversationData>(convos);
-        string json = JsonSerializer.Serialize(snapshot, JsonOptions);
-        await File.WriteAllTextAsync(path, json);
+        return Path.Combine(_directory, $"convos-{ticketId}.json");
     }
 
-    private void LoadFromDisk()
+    private Dictionary<string, ConversationData> LoadFile(string ticketId)
     {
-        int count = 0;
+        string path = GetPath(ticketId);
 
-        foreach (string filePath in Directory.EnumerateFiles(_directory, "convos-*.json"))
+        if (!File.Exists(path))
         {
-            try
-            {
-                string fileName = Path.GetFileNameWithoutExtension(filePath);
-                string ticketId = fileName.Substring("convos-".Length);
-
-                string json = File.ReadAllText(filePath);
-                Dictionary<string, ConversationData>? data = JsonSerializer.Deserialize<Dictionary<string, ConversationData>>(json, JsonOptions);
-
-                if (data != null)
-                {
-                    ConcurrentDictionary<string, ConversationData> convos = new ConcurrentDictionary<string, ConversationData>(data);
-                    _store[ticketId] = convos;
-                    count += convos.Count;
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning("Failed to load conversations from {Path}: {Error}", filePath, ex.Message);
-            }
+            return new Dictionary<string, ConversationData>();
         }
 
-        _logger.LogInformation("Loaded {Count} conversations from disk", count);
+        try
+        {
+            string json = File.ReadAllText(path);
+            Dictionary<string, ConversationData>? data = JsonSerializer.Deserialize<Dictionary<string, ConversationData>>(json, ReadOptions);
+            return data ?? new Dictionary<string, ConversationData>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning("Failed to load conversations from {Path}: {Error}", path, ex.Message);
+            return new Dictionary<string, ConversationData>();
+        }
+    }
+
+    private async Task SaveFileAsync(string ticketId, Dictionary<string, ConversationData> convos)
+    {
+        string path = GetPath(ticketId);
+        string json = JsonSerializer.Serialize(convos, JsonOptions);
+        await File.WriteAllTextAsync(path, json);
     }
 }
