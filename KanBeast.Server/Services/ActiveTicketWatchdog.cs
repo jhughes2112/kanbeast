@@ -6,6 +6,8 @@ namespace KanBeast.Server.Services;
 
 // Periodically checks Active tickets for stale workers and moves them to Failed.
 // A ticket is considered stale if its worker has not sent a heartbeat in 5 minutes.
+// Workers send heartbeats every LLM iteration, so a 5-minute gap means the worker
+// is genuinely dead (crash, OOM, network partition), not just busy.
 public class ActiveTicketWatchdog : BackgroundService
 {
 	private static readonly TimeSpan CheckInterval = TimeSpan.FromMinutes(1);

@@ -249,6 +249,12 @@ public class LlmService
 
 			for (; ; )
 			{
+				// Heartbeat every iteration so the server watchdog knows this worker is alive.
+				// This covers all agent types (planning, developer, subagents) since they all
+				// run through this loop. Without this, long LLM calls starve the orchestrator's
+				// idle-loop heartbeat and the watchdog kills the worker.
+				await WorkerSession.HubClient.SendHeartbeatAsync();
+
 				if (conversation.HasReachedMaxIterations)
 				{
 					finalResult = new LlmResult(LlmExitReason.MaxIterationsReached, string.Empty, "Max iterations reached", null, null);
