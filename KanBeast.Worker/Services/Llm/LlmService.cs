@@ -192,7 +192,7 @@ public class LlmService
 
 	// Runs the conversation in a loop until idle, tool-exit, or fatal error.
 	// Handles availability, rate-limit waits, budget, and per-conversation interrupt CTS.
-	public async Task<LlmResult> RunToCompletionAsync(ILlmConversation conversation, string? continueMessage, bool continueOnToolExit, CancellationToken cancellationToken)
+	public async Task<LlmResult> RunToCompletionAsync(ILlmConversation conversation, string? continueMessage, bool continueOnToolExit, bool finalizeOnExit, CancellationToken cancellationToken)
 	{
 		LlmResult result;
 
@@ -208,7 +208,7 @@ public class LlmService
 				}
 			}
 
-			result = await ExecuteConversationAsync(conversation, continueMessage, continueOnToolExit, cancellationToken);
+			result = await ExecuteConversationAsync(conversation, continueMessage, continueOnToolExit, finalizeOnExit, cancellationToken);
 		}
 		else if (_isPermanentlyDown)
 		{
@@ -222,10 +222,15 @@ public class LlmService
 		return result;
 	}
 
-	private async Task<LlmResult> ExecuteConversationAsync(ILlmConversation conversation, string? continueMessage, bool continueOnToolExit, CancellationToken cancellationToken)
+	private async Task<LlmResult> ExecuteConversationAsync(ILlmConversation conversation, string? continueMessage, bool continueOnToolExit, bool finalizeOnExit, CancellationToken cancellationToken)
 	{
 		CancellationToken conversationToken = WorkerSession.HubClient.RegisterConversation(conversation.Id, cancellationToken);
-		conversation.ToolContext.CancellationToken = conversationToken;
+
+		// Separate CTS for tools, linked to the conversation token. When this conversation is
+		// interrupted (directly or via parent), we cancel toolCts first so running tools and
+		// sub-agents see the cancellation before this conversation exits.
+		using CancellationTokenSource toolCts = CancellationTokenSource.CreateLinkedTokenSource(conversationToken);
+		conversation.ToolContext.CancellationToken = toolCts.Token;
 
 		decimal accumulatedCost = 0m;
 		LlmResult finalResult = new LlmResult(LlmExitReason.Completed, string.Empty, string.Empty, null, null);
@@ -283,8 +288,9 @@ public class LlmService
 					string lastRole = requestMessages[requestMessages.Count - 1].Role;
 					if (lastRole != "user" && lastRole != "tool")
 					{
+						string kickoff = BuildContinueMessageWithWarning(continueMessage ?? "Continue.", conversation.Iteration, conversation.MaxIterations);
 						requestMessages = new List<ConversationMessage>(requestMessages);
-						requestMessages.Add(new ConversationMessage { Role = "user", Content = continueMessage ?? "Continue." });
+						requestMessages.Add(new ConversationMessage { Role = "user", Content = kickoff });
 					}
 				}
 
@@ -429,20 +435,39 @@ public class LlmService
 				}
 			}
 		}
-		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+		catch (OperationCanceledException)
 		{
-			conversation.AddUserMessage(
-				"[System: The user interrupted the current operation. Stop what you are doing and respond to the user.]");
-			finalResult = new LlmResult(LlmExitReason.Interrupted, string.Empty, "Interrupted", null, null);
+			// Cancel tool CTS so any running tools/sub-agents see it and add their own notes.
+			toolCts.Cancel();
+			conversation.AddNote("Interrupted by user.");
+
+			if (!cancellationToken.IsCancellationRequested)
+			{
+				// Direct interrupt: this conversation's CTS was cancelled, parent still alive.
+				finalResult = new LlmResult(LlmExitReason.Interrupted, string.Empty, "Interrupted", null, null);
+			}
+			else
+			{
+				// Indirect interrupt: parent cancelled (e.g., planning interrupted while sub-agent running).
+				throw;
+			}
 		}
 		finally
 		{
 			await conversation.RecordCostAsync(accumulatedCost, CancellationToken.None);
+			await conversation.ForceFlushAsync();
 			WorkerSession.HubClient.UnregisterConversation(conversation.Id);
 		}
 
-		string finalContent = await conversation.FinalizeAsync(finalResult, cancellationToken);
-		finalResult = new LlmResult(finalResult.ExitReason, finalContent, finalResult.ErrorMessage, finalResult.FinalToolCalled, finalResult.RetryAfter);
+		if (finalizeOnExit)
+		{
+			string finalContent = await conversation.FinalizeAsync(finalResult, cancellationToken);
+			finalResult = new LlmResult(finalResult.ExitReason, finalContent, finalResult.ErrorMessage, finalResult.FinalToolCalled, finalResult.RetryAfter);
+		}
+		else
+		{
+			await conversation.ForceFlushAsync();
+		}
 
 		return finalResult;
 	}
@@ -519,7 +544,8 @@ public class LlmService
 				ConcurrentQueue<string> continueQueue = WorkerSession.GetChatQueue(conversation.Id);
 				if (continueQueue.IsEmpty)
 				{
-					conversation.AddUserMessage(continueMessage);
+					string effective = BuildContinueMessageWithWarning(continueMessage!, conversation.Iteration, conversation.MaxIterations);
+					conversation.AddUserMessage(effective);
 				}
 			}
 		}
@@ -621,6 +647,25 @@ public class LlmService
 	{
 		_isPermanentlyDown = true;
 		Console.WriteLine($"LLM {_config.Model} permanently disabled due to non-recoverable error");
+	}
+
+	// Substitutes {messagesRemaining} into the continue message and appends iteration warnings.
+	// Every 50 iterations: informational note. Last 5 iterations: urgent warning each turn.
+	private static string BuildContinueMessageWithWarning(string message, int iteration, int maxIterations)
+	{
+		int messagesRemaining = maxIterations - iteration;
+		string effective = message.Replace("{messagesRemaining}", messagesRemaining.ToString());
+
+		if (messagesRemaining <= 5)
+		{
+			effective += $"\n\n⚠️ URGENT: Only {messagesRemaining} messages remaining before this conversation is terminated. Call your completion function NOW or all work from this session will be lost.";
+		}
+		else if (iteration > 0 && iteration % 50 == 0)
+		{
+			effective += $"\n\nNote: {iteration} of {maxIterations} messages used ({messagesRemaining} remaining).";
+		}
+
+		return effective;
 	}
 
 	private DateTimeOffset ComputeRetryAfterTime(HttpResponseMessage response, string responseBody)

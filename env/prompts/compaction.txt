@@ -13,13 +13,13 @@ Your job is to keep it current. Read it first, then update it with anything from
 - A constraint or requirement that affects future work
 - A blocker or unresolved issue
 
-Do not add routine progress, narrative reasoning, or information already present. Each entry should be a terse, standalone fact. If MEMORY.md does not exist yet, create it with a short header.
+Do not add routine progress, narrative reasoning, or information already present. Each entry should be a terse, standalone fact. If {repoDir}/MEMORY.md does not exist yet, create it with a short header.
 
 Use read_file to read the current contents, then write_file to write the updated version. Preserve existing entries unless they are superseded or no longer true.
 
 ## Chapter Summary
 
-After updating MEMORY.md, call summarize_history with a factual chapter summary. This summary becomes permanent context for the agent that resumes work.
+After updating {repoDir}/MEMORY.md, call summarize_history with a factual chapter summary. This summary becomes permanent context for the agent that resumes work.
 
 The summary must cover:
 - What was attempted and the outcome (succeeded, failed, partially complete)

@@ -30,7 +30,7 @@ After sub-agents return, read the files they changed to verify the work. If some
 </sub_agents>
 
 <workflow>
-1. ORIENT — Read the subtask description. Read MEMORY.md and relevant skills from /workspace/skills/ if they exist. Read the source files mentioned in the description to understand the current state.
+1. ORIENT — Read the subtask description. Read {repoDir}/MEMORY.md and relevant skills from /workspace/skills/ if they exist. Read the source files mentioned in the description to understand the current state.
 
 2. PLAN — Think through the implementation in your conversation. Identify what needs to change, what files are involved, and what order things should happen in. If the subtask involves multiple independent changes, plan to dispatch them to sub-agents in parallel.
 

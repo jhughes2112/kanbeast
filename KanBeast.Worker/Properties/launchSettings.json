@@ -2,7 +2,7 @@
   "profiles": {
     "KanBeast.Worker": {
       "commandName": "Project",
-      "commandLineArgs": "--ticket-id 3\r\n--server-url http://localhost:8080/\r\n--repo repo",
+      "commandLineArgs": "--ticket-id 2\r\n--server-url http://localhost:8080/\r\n--repo repo",
       "workingDirectory": "D:\\Github\\kanbeast\\env"
     },
     "Worker-Test": {

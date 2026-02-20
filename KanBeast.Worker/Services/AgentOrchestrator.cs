@@ -40,16 +40,24 @@ public class AgentOrchestrator
 		ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
 		ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
 		DateTimeOffset lastHeartbeat = DateTimeOffset.UtcNow;
+		bool interrupted = false;
 
 		for (; ; )
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
-			// The LlmService drains the chat queue, handles clear requests, and manages
-			// interruptions internally. We just detect that work is pending and kick it off.
-			if (NeedsLlmAttention(_planningConversation!) || WorkerSession.HubClient.HasPendingWork(_planningConversation!.Id))
+			// After an interrupt, ignore stale conversation state (NeedsLlmAttention) and only
+			// re-enter when the hub has new user input. This prevents the loop from immediately
+			// restarting the LLM after the user clicked stop.
+			bool hasPendingWork = WorkerSession.HubClient.HasPendingWork(_planningConversation!.Id);
+			if (hasPendingWork || (!interrupted && NeedsLlmAttention(_planningConversation!)))
 			{
-				await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
+				interrupted = false;
+				LlmExitReason exitReason = await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
+				if (exitReason == LlmExitReason.Interrupted)
+				{
+					interrupted = true;
+				}
 			}
 
 			// Housekeeping while idle.
@@ -192,7 +200,7 @@ public class AgentOrchestrator
 
 	// Runs the planning LLM to completion. When active, wraps with BeginActiveWork/EndActiveWork
 	// so the hub can cancel work if the ticket leaves Active status.
-	private async Task RunLlmUntilIdleAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
+	private async Task<LlmExitReason> RunLlmUntilIdleAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
 		LlmService service = _planningConversation!.ToolContext.LlmService!;
 
@@ -205,10 +213,13 @@ public class AgentOrchestrator
 			WorkerSession.UpdateCancellationToken(effectiveToken);
 		}
 
+		LlmExitReason exitReason = LlmExitReason.Completed;
+
 		await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, true);
 		try
 		{
-			LlmResult result = await service.RunToCompletionAsync(_planningConversation!, null, true, effectiveToken);
+			LlmResult result = await service.RunToCompletionAsync(_planningConversation!, null, true, false, effectiveToken);
+			exitReason = result.ExitReason;
 
 			if (result.ExitReason == LlmExitReason.CostExceeded)
 			{
@@ -230,5 +241,7 @@ public class AgentOrchestrator
 				WorkerSession.UpdateCancellationToken(cancellationToken);
 			}
 		}
+
+		return exitReason;
 	}
 }

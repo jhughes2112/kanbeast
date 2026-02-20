@@ -161,7 +161,16 @@ public static class SubAgentTools
 			conversation = new CompactingConversation(null, role, subContext, fullInstructions, $"{displayPrefix}: {taskSummary}", toolCallId);
 		}
 
-		LlmResult llmResult = await service.RunToCompletionAsync(conversation, null, false, context.CancellationToken);
+		LlmResult llmResult;
+		await WorkerSession.HubClient.SetConversationBusyAsync(conversation.Id, true);
+		try
+		{
+			llmResult = await service.RunToCompletionAsync(conversation, null, false, true, context.CancellationToken);
+		}
+		finally
+		{
+			await WorkerSession.HubClient.SetConversationBusyAsync(conversation.Id, false);
+		}
 
 		if (!llmResult.Success)
 		{

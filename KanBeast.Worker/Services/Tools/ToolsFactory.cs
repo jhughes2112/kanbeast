@@ -22,13 +22,15 @@ public static class ToolsFactory
 	{
         // Tools are added explicitly to each role below. Do not use a shared readOnlyTools list.
 
-		// Planning (Backlog, Done, Failed): task creation + inspection sub-agents. No direct file/shell access.
+		// Planning (Backlog, Done, Failed): task creation + inspection sub-agents + read_file for MEMORY.md.
 		List<Tool> planning = new List<Tool>();
+		ToolHelper.AddTools(planning, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
 		ToolHelper.AddTools(planning, typeof(TicketTools), nameof(TicketTools.CreateTaskAsync), nameof(TicketTools.CreateSubtaskAsync), nameof(TicketTools.DeleteAllTasksAsync), nameof(TicketTools.LogMessageAsync));
 		ToolHelper.AddTools(planning, typeof(SubAgentTools), nameof(SubAgentTools.StartInspectionAgentAsync));
 
-		// Planning + Active: dispatches developers, verifies results, manages LLM notes.
+		// Planning + Active: dispatches developers, verifies results, manages LLM notes + read_file for MEMORY.md.
 		List<Tool> planningActive = new List<Tool>();
+		ToolHelper.AddTools(planningActive, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
 		ToolHelper.AddTools(planningActive, typeof(DeveloperTools), nameof(DeveloperTools.StartDeveloperAsync));
 		ToolHelper.AddTools(planningActive, typeof(SubAgentTools), nameof(SubAgentTools.StartInspectionAgentAsync));
 		ToolHelper.AddTools(planningActive, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.UpdateLlmNotesAsync), nameof(TicketTools.SetTicketStatusAsync), nameof(TicketTools.LogMessageAsync));
@@ -50,10 +52,10 @@ public static class ToolsFactory
 		ToolHelper.AddTools(devSubagent, typeof(PersistentShellTools), nameof(PersistentShellTools.StartShellAsync), nameof(PersistentShellTools.SendShellAsync), nameof(PersistentShellTools.KillShellAsync));
 		ToolHelper.AddTools(devSubagent, typeof(SubAgentTools), nameof(SubAgentTools.AgentTaskCompleteAsync));
 
-        // Planning sub-agent (inspection): explicit read/search/web and shell, reports findings back.
+		// Planning sub-agent (inspection): explicit read/search/web and shell, plus write_file for MEMORY.md.
 		List<Tool> planSubagent = new List<Tool>();
 		ToolHelper.AddTools(planSubagent, typeof(ShellTools), nameof(ShellTools.RunCommandAsync));
-		ToolHelper.AddTools(planSubagent, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
+		ToolHelper.AddTools(planSubagent, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync), nameof(FileTools.WriteFileAsync));
 		ToolHelper.AddTools(planSubagent, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
 		ToolHelper.AddTools(planSubagent, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
 		ToolHelper.AddTools(planSubagent, typeof(SubAgentTools), nameof(SubAgentTools.AgentTaskCompleteAsync));

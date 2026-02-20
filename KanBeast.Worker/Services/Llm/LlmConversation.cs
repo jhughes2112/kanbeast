@@ -53,9 +53,9 @@ public class CompactingConversation : ILlmConversation
 
 	public ToolContext ToolContext { get; }
 
-	private int Iteration { get; set; }
+	public int Iteration { get; private set; }
 
-	private int MaxIterations { get; set; } = 25;
+	public int MaxIterations { get; private set; } = 250;
 
 	public bool HasReachedMaxIterations => Iteration >= MaxIterations;
 
@@ -215,6 +215,13 @@ public class CompactingConversation : ILlmConversation
 		MarkDirty();
 	}
 
+	public void AddNote(string content)
+	{
+		Messages.Add(new ConversationMessage { Role = "system", Content = content });
+		Console.WriteLine($"[{DisplayName}] Note: {content}");
+		MarkDirty();
+	}
+
 	public async Task RecordCostAsync(decimal cost, CancellationToken cancellationToken)
 	{
 		if (cost > 0)
@@ -275,7 +282,6 @@ public class CompactingConversation : ILlmConversation
 
 		if (_role != LlmRole.Compaction)
 		{
-			MarkDirty();
 			await ForceFlushAsync();
 			await WorkerSession.HubClient.FinishConversationAsync(Id);
 		}
@@ -333,7 +339,7 @@ public class CompactingConversation : ILlmConversation
 			Content = $"Read {WorkerSession.WorkDir}/MEMORY.md (create it if missing), update it with any critical project details from this history, then call summarize_history with a factual summary."
 		});
 
-		LlmResult result = await service.RunToCompletionAsync(summaryConversation, "Call summarize_history with the chapter summary.", false, cancellationToken);
+		LlmResult result = await service.RunToCompletionAsync(summaryConversation, "Call summarize_history with the chapter summary ({messagesRemaining} turns remaining).", false, true, cancellationToken);
 
 		string? summary = null;
 

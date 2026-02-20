@@ -14,12 +14,15 @@ public interface ILlmConversation
     LlmRole Role { get; set; }
     ToolContext ToolContext { get; }
 
+    int Iteration { get; }
+    int MaxIterations { get; }
     bool HasReachedMaxIterations { get; }
     void IncrementIteration();
 
     void AddUserMessage(string content);
     void AddAssistantMessage(ConversationMessage message, string modelName);
     void AddToolMessage(string toolCallId, string toolResult);
+    void AddNote(string content);
 
     Task RecordCostAsync(decimal cost, CancellationToken cancellationToken);
     decimal GetRemainingBudget();

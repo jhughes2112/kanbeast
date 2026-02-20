@@ -89,7 +89,16 @@ public static class DeveloperTools
 
 				bool subtaskComplete = false;
 
-				LlmResult llmResult = await service.RunToCompletionAsync(conversation, "Continue working or call end_subtask tool when done.", false, context.CancellationToken);
+				LlmResult llmResult;
+				await WorkerSession.HubClient.SetConversationBusyAsync(conversation.Id, true);
+				try
+				{
+					llmResult = await service.RunToCompletionAsync(conversation, "Continue working. Call end_subtask when done ({messagesRemaining} turns remaining).", false, true, context.CancellationToken);
+				}
+				finally
+				{
+					await WorkerSession.HubClient.SetConversationBusyAsync(conversation.Id, false);
+				}
 
 				if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
 				{

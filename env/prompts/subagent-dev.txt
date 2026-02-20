@@ -24,7 +24,7 @@ You have full access to the repository:
 ## ORIENTATION
 
 Before starting:
-- Read /workspace/MEMORY.md if it exists — extract anything relevant to your task
+- Read {repoDir}/MEMORY.md if it exists — extract anything relevant to your task
 - Read skills in /workspace/skills/ that apply to your work
 - Read the files the task describes before editing them
 
