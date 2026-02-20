@@ -2108,6 +2108,13 @@ function showSettings() {
     // Populate LLM configs
     renderLLMConfigs();
 
+    // Populate web search settings
+    if (settings && settings.webSearch) {
+        document.getElementById('webSearchApiKey').value = settings.webSearch.apiKey || '';
+        document.getElementById('webSearchModel').value = settings.webSearch.model || 'openai/gpt-4.1-nano';
+        document.getElementById('webSearchEngine').value = settings.webSearch.engine || 'auto';
+    }
+
     // Setup accordion handlers
     setupAccordions();
 
@@ -2291,6 +2298,11 @@ async function saveSettings() {
             compaction: {
                 type: document.getElementById('compactionType').value,
                 contextSizePercent: parseInt(document.getElementById('contextPercent').value, 10) / 100
+            },
+            webSearch: {
+                apiKey: document.getElementById('webSearchApiKey').value || null,
+                model: document.getElementById('webSearchModel').value || 'openai/gpt-4.1-nano',
+                engine: document.getElementById('webSearchEngine').value || 'auto'
             }
         }
     };

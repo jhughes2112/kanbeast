@@ -10,6 +10,7 @@ namespace KanBeast.Worker.Services.Tools;
 public static class WebTools
 {
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan SearchTimeout = TimeSpan.FromSeconds(60);
     private static readonly HttpClient SharedHttpClient = new HttpClient();  // inherently thread safe and intended for reuse
 
 	[Description("Fetch the contents of a web page at the specified URL. Returns the text content with HTML tags stripped.")]
@@ -77,22 +78,26 @@ public static class WebTools
         return result;
     }
 
-    [Description("Search the web for information. Uses the configured search provider (DuckDuckGo or Google). Returns a list of search results with titles, URLs, and snippets.")]
+    [Description("Search the web for information via OpenRouter's web search plugin. Returns a list of search results with titles, URLs, and snippets.")]
     public static async Task<ToolResult> SearchWebAsync(
         [Description("The search query to use.")] string query,
-        [Description("Maximum number of results to return (1-20). Pass empty string for default of 10.")] string maxResults,
+        [Description("Maximum number of results to return (1-20). Pass empty string for default of 5.")] string maxResults,
         ToolContext context)
     {
         CancellationToken cancellationToken = WorkerSession.CancellationToken;
         ToolResult result;
 
-        if (string.IsNullOrWhiteSpace(query))
+        if (string.IsNullOrWhiteSpace(WorkerSession.WebSearch.ApiKey))
+        {
+            result = new ToolResult("Error: Web search is not configured. Set an OpenRouter API key in Settings → Web Search.", false, false);
+        }
+        else if (string.IsNullOrWhiteSpace(query))
         {
             result = new ToolResult("Error: Search query cannot be empty.", false, false);
         }
         else
         {
-            int limit = 10;
+            int limit = 5;
             if (!string.IsNullOrWhiteSpace(maxResults))
             {
                 int.TryParse(maxResults, out limit);
@@ -100,7 +105,7 @@ public static class WebTools
 
             if (limit <= 0)
             {
-                limit = 10;
+                limit = 5;
             }
 
             if (limit > 20)
@@ -110,18 +115,7 @@ public static class WebTools
 
             try
             {
-                string provider = WorkerSession.WebSearch.Provider;
-
-                if (string.Equals(provider, "google", StringComparison.OrdinalIgnoreCase)
-                    && !string.IsNullOrWhiteSpace(WorkerSession.WebSearch.GoogleApiKey)
-                    && !string.IsNullOrWhiteSpace(WorkerSession.WebSearch.GoogleSearchEngineId))
-                {
-                    result = new ToolResult(await SearchGoogleAsync(query, limit, cancellationToken), false, false);
-                }
-                else
-                {
-                    result = new ToolResult(await SearchDuckDuckGoAsync(query, limit, cancellationToken), false, false);
-                }
+                result = new ToolResult(await SearchViaOpenRouterAsync(query, limit, cancellationToken), false, false);
             }
             catch (OperationCanceledException)
             {
@@ -140,171 +134,137 @@ public static class WebTools
         return result;
     }
 
-    private static async Task<string> SearchDuckDuckGoAsync(string query, int maxResults, CancellationToken cancellationToken)
+    private static async Task<string> SearchViaOpenRouterAsync(string query, int maxResults, CancellationToken cancellationToken)
     {
-        string encodedQuery = WebUtility.UrlEncode(query);
-        string url = $"https://html.duckduckgo.com/html/?q={encodedQuery}";
+        string apiKey = WorkerSession.WebSearch.ApiKey!;
+        string model = WorkerSession.WebSearch.Model;
+        string engine = WorkerSession.WebSearch.Engine;
 
-        HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36");
+        // Build the plugin block. "auto" means omit engine so OpenRouter picks native-or-exa.
+        string pluginJson;
+        if (string.Equals(engine, "auto", StringComparison.OrdinalIgnoreCase) || string.IsNullOrWhiteSpace(engine))
+        {
+            pluginJson = $"{{\"id\":\"web\",\"max_results\":{maxResults}}}";
+        }
+        else
+        {
+            pluginJson = $"{{\"id\":\"web\",\"engine\":\"{engine}\",\"max_results\":{maxResults}}}";
+        }
+
+        string requestJson = $"{{\"model\":\"{model}\",\"messages\":[{{\"role\":\"user\",\"content\":{JsonSerializer.Serialize(query)}}}],\"plugins\":[{pluginJson}],\"temperature\":0,\"max_tokens\":1024}}";
+
+        HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions");
+        request.Headers.Add("Authorization", $"Bearer {apiKey}");
+        request.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
 
         using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(DefaultTimeout);
+        cts.CancelAfter(SearchTimeout);
         HttpResponseMessage response = await SharedHttpClient.SendAsync(request, cts.Token);
+        string responseBody = await response.Content.ReadAsStringAsync(cts.Token);
 
         if (!response.IsSuccessStatusCode)
         {
-            return $"Error: DuckDuckGo returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
+            return $"Error: OpenRouter returned HTTP {(int)response.StatusCode}: {responseBody}";
         }
 
-        string html = await response.Content.ReadAsStringAsync(cts.Token);
-        List<SearchResult> results = ParseDuckDuckGoResults(html, maxResults);
-
-        if (results.Count == 0)
-        {
-            return $"No search results found for: {query}";
-        }
-
-        return FormatSearchResults(results);
+        return ParseOpenRouterSearchResponse(responseBody);
     }
 
-    private static async Task<string> SearchGoogleAsync(string query, int maxResults, CancellationToken cancellationToken)
+    private static string ParseOpenRouterSearchResponse(string json)
     {
-        string apiKey = WorkerSession.WebSearch.GoogleApiKey!;
-        string cx = WorkerSession.WebSearch.GoogleSearchEngineId!;
-        string encodedQuery = WebUtility.UrlEncode(query);
-        string url = $"https://www.googleapis.com/customsearch/v1?key={apiKey}&cx={cx}&q={encodedQuery}&num={Math.Min(maxResults, 10)}";
+        JsonDocument doc = JsonDocument.Parse(json);
+        JsonElement root = doc.RootElement;
 
-        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        cts.CancelAfter(DefaultTimeout);
-        HttpResponseMessage response = await SharedHttpClient.GetAsync(url, cts.Token);
-
-        if (!response.IsSuccessStatusCode)
+        // Check for API-level error.
+        if (root.TryGetProperty("error", out JsonElement errorEl))
         {
-            return $"Error: Google Custom Search returned HTTP {(int)response.StatusCode} {response.ReasonPhrase}";
+            string errorMsg = errorEl.TryGetProperty("message", out JsonElement msgEl) ? msgEl.GetString() ?? "Unknown error" : "Unknown error";
+            return $"Error: OpenRouter search failed: {errorMsg}";
         }
 
-        string json = await response.Content.ReadAsStringAsync(cts.Token);
-        List<SearchResult> results = ParseGoogleResults(json, maxResults);
-
-        if (results.Count == 0)
+        // Extract assistant content.
+        string content = "";
+        if (root.TryGetProperty("choices", out JsonElement choices))
         {
-            return $"No search results found for: {query}";
-        }
-
-        return FormatSearchResults(results);
-    }
-
-    private static List<SearchResult> ParseGoogleResults(string json, int maxResults)
-    {
-        List<SearchResult> results = new List<SearchResult>();
-
-        try
-        {
-            JsonDocument doc = JsonDocument.Parse(json);
-
-            if (!doc.RootElement.TryGetProperty("items", out JsonElement items))
+            foreach (JsonElement choice in choices.EnumerateArray())
             {
-                return results;
-            }
-
-            foreach (JsonElement item in items.EnumerateArray())
-            {
-                if (results.Count >= maxResults)
+                if (choice.TryGetProperty("message", out JsonElement message))
                 {
-                    break;
-                }
-
-                string title = item.TryGetProperty("title", out JsonElement titleEl) ? titleEl.GetString() ?? "" : "";
-                string link = item.TryGetProperty("link", out JsonElement linkEl) ? linkEl.GetString() ?? "" : "";
-                string snippet = item.TryGetProperty("snippet", out JsonElement snippetEl) ? snippetEl.GetString() ?? "" : "";
-
-                if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(link))
-                {
-                    results.Add(new SearchResult
+                    if (message.TryGetProperty("content", out JsonElement contentEl))
                     {
-                        Title = title,
-                        Url = link,
-                        Snippet = snippet
-                    });
+                        content = contentEl.GetString() ?? "";
+                    }
                 }
-            }
-        }
-        catch (JsonException)
-        {
-        }
 
-        return results;
-    }
-
-    private static List<SearchResult> ParseDuckDuckGoResults(string html, int maxResults)
-    {
-        List<SearchResult> results = new List<SearchResult>();
-
-        Regex resultRegex = new Regex(
-            @"<a[^>]+class=""result__a""[^>]+href=""([^""]+)""[^>]*>([^<]+)</a>.*?<a[^>]+class=""result__snippet""[^>]*>([^<]*)</a>",
-            RegexOptions.Singleline | RegexOptions.IgnoreCase);
-
-        MatchCollection matches = resultRegex.Matches(html);
-
-        foreach (Match match in matches)
-        {
-            if (results.Count >= maxResults)
-            {
                 break;
             }
+        }
 
-            string rawUrl = match.Groups[1].Value;
-            string title = WebUtility.HtmlDecode(match.Groups[2].Value.Trim());
-            string snippet = WebUtility.HtmlDecode(match.Groups[3].Value.Trim());
-
-            string actualUrl = rawUrl;
-            if (rawUrl.Contains("uddg="))
+        // Extract annotations (url_citation) for structured results.
+        List<string> citations = new List<string>();
+        if (root.TryGetProperty("choices", out JsonElement choices2))
+        {
+            foreach (JsonElement choice in choices2.EnumerateArray())
             {
-                Match urlMatch = Regex.Match(rawUrl, @"uddg=([^&]+)");
-                if (urlMatch.Success)
+                if (choice.TryGetProperty("message", out JsonElement message) && message.TryGetProperty("annotations", out JsonElement annotations))
                 {
-                    actualUrl = WebUtility.UrlDecode(urlMatch.Groups[1].Value);
+                    int index = 1;
+                    foreach (JsonElement annotation in annotations.EnumerateArray())
+                    {
+                        if (annotation.TryGetProperty("url_citation", out JsonElement citation))
+                        {
+                            string title = citation.TryGetProperty("title", out JsonElement titleEl) ? titleEl.GetString() ?? "" : "";
+                            string url = citation.TryGetProperty("url", out JsonElement urlEl) ? urlEl.GetString() ?? "" : "";
+                            string snippet = citation.TryGetProperty("content", out JsonElement snippetEl) ? snippetEl.GetString() ?? "" : "";
+
+                            StringBuilder entry = new StringBuilder();
+                            entry.AppendLine($"{index}. {title}");
+                            entry.AppendLine($"   URL: {url}");
+                            if (!string.IsNullOrEmpty(snippet))
+                            {
+                                if (snippet.Length > 300)
+                                {
+                                    snippet = snippet.Substring(0, 300) + "...";
+                                }
+
+                                entry.AppendLine($"   {snippet}");
+                            }
+
+                            citations.Add(entry.ToString().TrimEnd());
+                            index++;
+                        }
+                    }
                 }
-            }
 
-            if (!string.IsNullOrEmpty(title) && !string.IsNullOrEmpty(actualUrl))
-            {
-                results.Add(new SearchResult
-                {
-                    Title = title,
-                    Url = actualUrl,
-                    Snippet = snippet
-                });
+                break;
             }
         }
 
-        return results;
-    }
-
-    private static string FormatSearchResults(List<SearchResult> results)
-    {
-        if (results.Count == 0)
+        // Return citations if available, otherwise fall back to the LLM summary.
+        if (citations.Count > 0)
         {
-            return "No search results found.";
-        }
-
-        StringBuilder sb = new StringBuilder();
-        int index = 1;
-
-        foreach (SearchResult result in results)
-        {
-            sb.AppendLine($"{index}. {result.Title}");
-            sb.AppendLine($"   URL: {result.Url}");
-            if (!string.IsNullOrEmpty(result.Snippet))
+            StringBuilder sb = new StringBuilder();
+            foreach (string c in citations)
             {
-                sb.AppendLine($"   {result.Snippet}");
+                sb.AppendLine(c);
+                sb.AppendLine();
             }
-            sb.AppendLine();
-            index++;
+
+            if (!string.IsNullOrWhiteSpace(content))
+            {
+                sb.AppendLine("---");
+                sb.AppendLine(content);
+            }
+
+            return sb.ToString().TrimEnd();
         }
 
-        return sb.ToString().TrimEnd();
+        if (!string.IsNullOrWhiteSpace(content))
+        {
+            return content;
+        }
+
+        return "No search results found.";
     }
 
     private static string StripHtmlTags(string html)
@@ -317,12 +277,5 @@ public static class WebTools
         html = Regex.Replace(html, @"(\r?\n\s*){3,}", "\n\n");
 
         return html.Trim();
-    }
-
-    private class SearchResult
-    {
-        public string Title { get; set; } = string.Empty;
-        public string Url { get; set; } = string.Empty;
-        public string Snippet { get; set; } = string.Empty;
     }
 }

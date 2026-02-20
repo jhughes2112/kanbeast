@@ -63,6 +63,11 @@ public class SettingsService : ISettingsService
             settingsFile.Compaction = incomingSettings.File.Compaction;
         }
 
+        if (!string.IsNullOrEmpty(incomingSettings.File.WebSearch.Engine))
+        {
+            settingsFile.WebSearch = incomingSettings.File.WebSearch;
+        }
+
         if (incomingSettings.SystemPrompts.Count > 0)
         {
             incomingSettings.SystemPrompts = UpdatePromptFiles(incomingSettings.SystemPrompts);
@@ -241,9 +246,9 @@ public class SettingsService : ISettingsService
             errors.Add("Compaction.ContextSizePercent must be between 0 and 1");
         }
 
-        if (string.IsNullOrEmpty(settings.WebSearch.Provider))
+        if (string.IsNullOrEmpty(settings.WebSearch.Engine))
         {
-            errors.Add("WebSearch.Provider is required");
+            errors.Add("WebSearch.Engine is required");
         }
 
         if (errors.Count > 0)

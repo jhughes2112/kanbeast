@@ -36,12 +36,13 @@ public class CompactionSettings
 	public double ContextSizePercent { get; set; } = 0.9;
 }
 
-// Configures web search provider for agents.
+// Configures web search via OpenRouter's web plugin.
+// Engine selects how results are fetched: "auto" (default), "native", or "exa".
 public class WebSearchConfig
 {
-	public string Provider { get; set; } = "duckduckgo";
-	public string? GoogleApiKey { get; set; }
-	public string? GoogleSearchEngineId { get; set; }
+	public string? ApiKey { get; set; }
+	public string Model { get; set; } = "openai/gpt-4.1-nano";
+	public string Engine { get; set; } = "auto";
 }
 
 // Defines settings persisted in settings.json. Shared by server and worker.
