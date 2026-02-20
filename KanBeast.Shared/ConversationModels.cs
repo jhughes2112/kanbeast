@@ -67,6 +67,10 @@ public class ConversationData
 	[JsonPropertyName("isFinished")]
 	public bool IsFinished { get; set; }
 
+	[JsonPropertyName("role")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public string? Role { get; set; }
+
 	[JsonPropertyName("activeModel")]
 	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
 	public string? ActiveModel { get; set; }

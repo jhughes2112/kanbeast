@@ -17,14 +17,17 @@ public interface ILlmConversation
     bool HasReachedMaxIterations { get; }
     void IncrementIteration();
 
-    Task AddUserMessageAsync(string content, CancellationToken cancellationToken);
-    Task AddAssistantMessageAsync(ConversationMessage message, string modelName, CancellationToken cancellationToken);
-    Task AddToolMessageAsync(string toolCallId, string toolResult, CancellationToken cancellationToken);
+    void AddUserMessage(string content);
+    void AddAssistantMessage(ConversationMessage message, string modelName);
+    void AddToolMessage(string toolCallId, string toolResult);
 
     Task RecordCostAsync(decimal cost, CancellationToken cancellationToken);
     decimal GetRemainingBudget();
 
     Task ResetAsync();
+
+    // Runs periodic maintenance: compaction if context exceeds threshold, and lazy sync if due.
+    Task MaintenanceAsync(CancellationToken cancellationToken);
 
     // Marks the conversation finished, runs handoff compaction if available, and flushes.
     // Returns the compacted summary, or falls back to the LlmResult content/error.

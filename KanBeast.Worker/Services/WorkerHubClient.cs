@@ -12,7 +12,7 @@ public class WorkerHubClient : IAsyncDisposable
 	private readonly HubConnection _connection;
 	private readonly string _ticketId;
 	private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _pendingChatMessages = new();
-	private readonly ConcurrentQueue<string> _pendingClearRequests = new();
+	private readonly ConcurrentDictionary<string, bool> _pendingClearRequests = new();
 	private readonly ConcurrentQueue<List<LLMConfig>> _pendingSettingsUpdates = new();
 	private readonly ConcurrentQueue<Ticket> _pendingTicketUpdates = new();
 	private readonly ConcurrentDictionary<string, CancellationTokenSource> _conversationInterruptSources = new();
@@ -105,7 +105,7 @@ public class WorkerHubClient : IAsyncDisposable
 			Console.WriteLine($"Worker: ClearConversation received for ticket {fromTicketId}, conversation {conversationId}");
 			if (fromTicketId == _ticketId)
 			{
-				_pendingClearRequests.Enqueue(conversationId);
+				_pendingClearRequests[conversationId] = true;
 			}
 		});
 
@@ -168,9 +168,26 @@ public class WorkerHubClient : IAsyncDisposable
 		return _pendingChatMessages.GetOrAdd(conversationId, _ => new ConcurrentQueue<string>());
 	}
 
-	public ConcurrentQueue<string> GetClearQueue()
+	// Atomically checks and consumes a pending clear request for a conversation.
+	public bool TryConsumeClearRequest(string conversationId)
 	{
-		return _pendingClearRequests;
+		return _pendingClearRequests.TryRemove(conversationId, out _);
+	}
+
+	// Returns true if there are pending chat messages or a clear request for the conversation.
+	public bool HasPendingWork(string conversationId)
+	{
+		if (_pendingClearRequests.ContainsKey(conversationId))
+		{
+			return true;
+		}
+
+		if (_pendingChatMessages.TryGetValue(conversationId, out ConcurrentQueue<string>? queue) && !queue.IsEmpty)
+		{
+			return true;
+		}
+
+		return false;
 	}
 
 	public ConcurrentQueue<List<LLMConfig>> GetSettingsQueue()

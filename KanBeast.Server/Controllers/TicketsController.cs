@@ -108,6 +108,11 @@ public class TicketsController : ControllerBase
     [HttpPost]
     public async Task<ActionResult<Ticket>> CreateTicket([FromBody] Ticket ticket)
     {
+        if (string.IsNullOrWhiteSpace(ticket.PlannerLlmId))
+        {
+            return BadRequest("A planner LLM must be selected.");
+        }
+
         Ticket createdTicket = await _ticketService.CreateTicketAsync(ticket);
         _logger.LogInformation("POST /tickets - created #{Id}: {Title}", createdTicket.Id, createdTicket.Title);
 

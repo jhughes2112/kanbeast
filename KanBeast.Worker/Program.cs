@@ -160,14 +160,9 @@ public class Program
 
 		WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cancellationToken, hubClient, config.Settings.WebSearch, config.Settings.Compaction);
 
-		// Create or reconstitute the planning conversation immediately so the user
-		// can see it in the chat dropdown even before the ticket goes Active.
-		await orchestrator.EnsurePlanningConversationAsync(ticketHolder, cancellationToken);
-		logger.LogInformation("Planning conversation ready, entering reactive loop");
-
 		try
 		{
-			await orchestrator.RunReactiveLoopAsync(ticketHolder, cancellationToken);
+			await orchestrator.RunAsync(ticketHolder, cancellationToken);
 		}
 		finally
 		{

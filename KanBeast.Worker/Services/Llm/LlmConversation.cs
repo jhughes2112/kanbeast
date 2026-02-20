@@ -41,6 +41,7 @@ public class CompactingConversation : ILlmConversation
 		set
 		{
 			_role = value;
+			Data.Role = value.ToString();
 
 			if (Messages.Count > 0)
 			{
@@ -81,8 +82,9 @@ public class CompactingConversation : ILlmConversation
 		}
 
 		_role = role;
+		Data.Role = role.ToString();
 		ToolContext = toolContext;
-		_dirtyTimestamp = existingData == null ? DateTime.UtcNow.Ticks : 0;
+		_dirtyTimestamp = existingData == null && role != LlmRole.Compaction ? DateTime.UtcNow.Ticks : 0;
 
 		if (displayName != null)
 		{
@@ -165,18 +167,25 @@ public class CompactingConversation : ILlmConversation
 		MarkDirty();
 	}
 
-	public async Task AddUserMessageAsync(string content, CancellationToken cancellationToken)
+	public void AddUserMessage(string content)
 	{
+		if (Data.IsFinished)
+		{
+			return;
+		}
+
 		Messages.Add(new ConversationMessage { Role = "user", Content = content });
 		Console.WriteLine($"[{DisplayName}] User: {(content.Length > 50 ? content.Substring(0, 50) + "..." : content)}");
 		MarkDirty();
-
-		await CompactIfNeededAsync(cancellationToken);
-		await LazySyncIfDueAsync();
 	}
 
-	public async Task AddAssistantMessageAsync(ConversationMessage message, string modelName, CancellationToken cancellationToken)
+	public void AddAssistantMessage(ConversationMessage message, string modelName)
 	{
+		if (Data.IsFinished)
+		{
+			return;
+		}
+
 		Messages.Add(message);
 		Data.ActiveModel = modelName;
 		string preview = message.Content?.Length > 50 ? message.Content.Substring(0, 50) + "..." : message.Content ?? "[no content]";
@@ -186,13 +195,15 @@ public class CompactingConversation : ILlmConversation
 		}
 		Console.WriteLine($"[{DisplayName}] ({modelName}) Assistant: {preview}");
 		MarkDirty();
-
-		await CompactIfNeededAsync(cancellationToken);
-		await LazySyncIfDueAsync();
 	}
 
-	public async Task AddToolMessageAsync(string toolCallId, string toolResult, CancellationToken cancellationToken)
+	public void AddToolMessage(string toolCallId, string toolResult)
 	{
+		if (Data.IsFinished)
+		{
+			return;
+		}
+
 		Messages.Add(new ConversationMessage
 		{
 			Role = "tool",
@@ -202,9 +213,6 @@ public class CompactingConversation : ILlmConversation
 		string preview = toolResult.Length > 50 ? toolResult.Substring(0, 50) + "..." : toolResult;
 		Console.WriteLine($"[{DisplayName}] Tool result: {preview}");
 		MarkDirty();
-
-		await CompactIfNeededAsync(cancellationToken);
-		await LazySyncIfDueAsync();
 	}
 
 	public async Task RecordCostAsync(decimal cost, CancellationToken cancellationToken)
@@ -214,8 +222,6 @@ public class CompactingConversation : ILlmConversation
 			Ticket? updated = await WorkerSession.ApiClient.AddLlmCostAsync(WorkerSession.TicketHolder.Ticket.Id, cost, cancellationToken);
 			WorkerSession.TicketHolder.Update(updated);
 		}
-
-		await LazySyncIfDueAsync();
 	}
 
 	public decimal GetRemainingBudget()
@@ -229,6 +235,12 @@ public class CompactingConversation : ILlmConversation
 		decimal currentCost = WorkerSession.TicketHolder.Ticket.LlmCost;
 		decimal remaining = maxCost - currentCost;
 		return remaining > 0 ? remaining : 0;
+	}
+
+	public async Task MaintenanceAsync(CancellationToken cancellationToken)
+	{
+		await CompactIfNeededAsync(cancellationToken);
+		await LazySyncIfDueAsync();
 	}
 
 	public async Task ResetAsync()
@@ -258,25 +270,17 @@ public class CompactingConversation : ILlmConversation
 
 	public async Task<string> FinalizeAsync(LlmResult llmResult, CancellationToken cancellationToken)
 	{
-		string? handoffSummary = null;
-
-		if (Messages.Count > FirstCompressibleIndex)
-		{
-			string logPrefix = !string.IsNullOrWhiteSpace(DisplayName) ? $"{DisplayName} (Handoff)" : "Handoff";
-			handoffSummary = await RunCompactionSummaryAsync(FirstCompressibleIndex, Messages.Count, logPrefix, cancellationToken);
-		}
-
 		Data.CompletedAt = DateTime.UtcNow.ToString("O");
 		Data.IsFinished = true;
-		MarkDirty();
-		await ForceFlushAsync();
-		await WorkerSession.HubClient.FinishConversationAsync(Id);
 
-		if (handoffSummary != null)
+		if (_role != LlmRole.Compaction)
 		{
-			return handoffSummary;
+			MarkDirty();
+			await ForceFlushAsync();
+			await WorkerSession.HubClient.FinishConversationAsync(Id);
 		}
-		else if (llmResult.Success)
+
+		if (llmResult.Success)
 		{
 			return llmResult.Content;
 		}
@@ -299,35 +303,35 @@ public class CompactingConversation : ILlmConversation
 
 	// ── Compaction ──────────────────────────────────────────────────────────
 
-	// Runs a compaction LLM conversation over messages[startIndex..endIndex) and returns the summary, or null on failure.
+	// Runs a compaction LLM conversation over messages[0..endIndex) and returns the summary, or null on failure.
+	// Copies parent messages verbatim so the model sees real tool calls, not reformatted text.
 	private async Task<string?> RunCompactionSummaryAsync(int startIndex, int endIndex, string logPrefix, CancellationToken cancellationToken)
 	{
 		LlmService? service = ToolContext.LlmService;
 
-		if (!CompactionEnabled || endIndex <= startIndex || service == null)
+		if (endIndex <= startIndex || service == null)
 		{
 			return null;
 		}
 
-		string originalTask = Messages.Count > 2 ? Messages[2].Content ?? "" : "";
-		string historyBlock = BuildHistoryBlock(Messages, startIndex, endIndex);
-
-		string compactionUserPrompt = $"""
-			[Original task]
-			{originalTask}
-			""";
-
 		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, service, null);
 
-		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, compactionContext, compactionUserPrompt, logPrefix, null);
+		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, compactionContext, "compaction", logPrefix, null);
 
-		await summaryConversation.AddUserMessageAsync($"""
-			<history>
-			{historyBlock}
-			</history>
+		// Replace the scaffolded messages with the compaction system prompt followed by the parent messages verbatim.
+		summaryConversation.Messages.Clear();
+		summaryConversation.Messages.Add(new ConversationMessage { Role = "system", Content = ResolveSystemPrompt(LlmRole.Compaction) });
 
-			Read {WorkerSession.WorkDir}/MEMORY.md (create it if missing), update it with any critical project details from this history, then call summarize_history with a factual summary.
-			""", cancellationToken);
+		for (int i = 1; i < endIndex && i < Messages.Count; i++)
+		{
+			summaryConversation.Messages.Add(Messages[i]);
+		}
+
+		summaryConversation.Messages.Add(new ConversationMessage
+		{
+			Role = "user",
+			Content = $"Read {WorkerSession.WorkDir}/MEMORY.md (create it if missing), update it with any critical project details from this history, then call summarize_history with a factual summary."
+		});
 
 		LlmResult result = await service.RunToCompletionAsync(summaryConversation, "Call summarize_history with the chapter summary.", false, cancellationToken);
 
@@ -349,7 +353,7 @@ public class CompactingConversation : ILlmConversation
 
 	private async Task CompactIfNeededAsync(CancellationToken cancellationToken)
 	{
-		if (!CompactionEnabled)
+		if (!CompactionEnabled || _role == LlmRole.Compaction)
 		{
 			return;
 		}
@@ -438,56 +442,6 @@ public class CompactingConversation : ILlmConversation
 		MarkDirty();
 	}
 
-	private static string BuildHistoryBlock(List<ConversationMessage> messages, int startIndex, int endIndex)
-	{
-		StringBuilder builder = new StringBuilder();
-
-		for (int i = startIndex; i < endIndex; i++)
-		{
-			ConversationMessage message = messages[i];
-
-			if (message.Role == "user")
-			{
-				builder.Append("user: \"");
-				builder.Append(EscapeQuotes(message.Content ?? ""));
-				builder.Append("\"\n");
-			}
-			else if (message.Role == "assistant")
-			{
-				if (message.ToolCalls != null && message.ToolCalls.Count > 0)
-				{
-					foreach (ConversationToolCall toolCall in message.ToolCalls)
-					{
-						builder.Append("assistant: ");
-						builder.Append(toolCall.Function.Name);
-						builder.Append('(');
-						builder.Append(toolCall.Function.Arguments);
-						builder.Append(")\n");
-					}
-				}
-				else if (!string.IsNullOrEmpty(message.Content))
-				{
-					builder.Append("assistant: \"");
-					builder.Append(EscapeQuotes(message.Content));
-					builder.Append("\"\n");
-				}
-			}
-			else if (message.Role == "tool")
-			{
-				builder.Append("tool_result: \"");
-				builder.Append(EscapeQuotes(message.Content ?? ""));
-				builder.Append("\"\n");
-			}
-		}
-
-		return builder.ToString();
-	}
-
-	private static string EscapeQuotes(string text)
-	{
-		return text.Replace("\"", "\\\"");
-	}
-
 	// Estimates token count using ~4 characters per token, plus a fixed tool definition overhead.
 	private static int EstimateTokenCount(List<ConversationMessage> messages)
 	{
@@ -531,6 +485,11 @@ public class CompactingConversation : ILlmConversation
 
 	private void MarkDirty()
 	{
+		if (_role == LlmRole.Compaction)
+		{
+			return;
+		}
+
 		if (_dirtyTimestamp == 0)
 		{
 			_dirtyTimestamp = DateTime.UtcNow.Ticks;

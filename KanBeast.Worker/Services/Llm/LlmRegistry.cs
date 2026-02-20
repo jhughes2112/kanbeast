@@ -29,8 +29,8 @@ public class LlmRegistry
 		Console.WriteLine($"LlmProxy: Updated to {configs.Count} LLM config(s)");
 	}
 
-	// Looks up a service by config ID.
-	public LlmService? GetService(string configId)
+	// Looks up a service by config ID. Throws if not found.
+	public LlmService GetService(string configId)
 	{
 		foreach (LlmService service in _services)
 		{
@@ -40,7 +40,7 @@ public class LlmRegistry
 			}
 		}
 
-		return null;
+		throw new InvalidOperationException($"No LLM service found with id '{configId}'");
 	}
 
 	// Builds a summary of available LLMs for the planning agent to choose from.

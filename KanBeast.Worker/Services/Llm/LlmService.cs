@@ -259,11 +259,20 @@ public class LlmService
 
 				conversationToken.ThrowIfCancellationRequested();
 
+				// Handle clear-conversation requests before injecting new messages.
+				if (WorkerSession.HubClient.TryConsumeClearRequest(conversation.Id))
+				{
+					Console.WriteLine($"[{conversation.Id}] Clear request received, resetting conversation");
+					await conversation.ResetAsync();
+					finalResult = new LlmResult(LlmExitReason.Completed, string.Empty, string.Empty, null, null);
+					break;
+				}
+
 				// Inject any pending user messages from the chat hub.
 				ConcurrentQueue<string> chatQueue = WorkerSession.GetChatQueue(conversation.Id);
 				while (chatQueue.TryDequeue(out string? chatMsg))
 				{
-					await conversation.AddUserMessageAsync(chatMsg, conversationToken);
+					conversation.AddUserMessage(chatMsg);
 				}
 
 				// Some providers (e.g. Anthropic) reject conversations that don't end with a user or tool message.
@@ -334,6 +343,8 @@ public class LlmService
 							ConversationMessage assistantMessage = response.Choices[0].Message;
 
 							LlmResult? responseResult = await ProcessAssistantResponseAsync(assistantMessage, tools, conversation, continueMessage, continueOnToolExit, conversationToken);
+							await conversation.MaintenanceAsync(conversationToken);
+
 							if (responseResult != null)
 							{
 								finalResult = responseResult;
@@ -420,9 +431,8 @@ public class LlmService
 		}
 		catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 		{
-			await conversation.AddUserMessageAsync(
-				"[System: The user interrupted the current operation. Stop what you are doing and respond to the user.]",
-				CancellationToken.None);
+			conversation.AddUserMessage(
+				"[System: The user interrupted the current operation. Stop what you are doing and respond to the user.]");
 			finalResult = new LlmResult(LlmExitReason.Interrupted, string.Empty, "Interrupted", null, null);
 		}
 		finally
@@ -496,7 +506,7 @@ public class LlmService
 			}
 		}
 
-		await conversation.AddAssistantMessageAsync(assistantMessage, _config.Model, conversationToken);
+		conversation.AddAssistantMessage(assistantMessage, _config.Model);
 
 		if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
 		{
@@ -509,7 +519,7 @@ public class LlmService
 				ConcurrentQueue<string> continueQueue = WorkerSession.GetChatQueue(conversation.Id);
 				if (continueQueue.IsEmpty)
 				{
-					await conversation.AddUserMessageAsync(continueMessage, conversationToken);
+					conversation.AddUserMessage(continueMessage);
 				}
 			}
 		}
@@ -541,7 +551,7 @@ public class LlmService
 
 				if (!toolResult.MessageHandled)
 				{
-					await conversation.AddToolMessageAsync(toolCalls[i].Id, toolResult.Response, conversationToken);
+					conversation.AddToolMessage(toolCalls[i].Id, toolResult.Response);
 				}
 
 				if (toolResult.ExitLoop)

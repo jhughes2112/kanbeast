@@ -1949,6 +1949,7 @@ async function handleDrop(e) {
 function setupEventListeners() {
     // New ticket button
     document.getElementById('newTicketBtn').addEventListener('click', () => {
+        populateNewTicketLlmDropdown();
         document.getElementById('newTicketModal').classList.add('active');
         document.getElementById('ticketTitle').focus();
     });
@@ -2030,14 +2031,29 @@ function setupEventListeners() {
     });
 }
 
+function populateNewTicketLlmDropdown() {
+    const select = document.getElementById('ticketPlannerLlm');
+    const llmConfigs = (settings && settings.llmConfigs) || [];
+
+    select.innerHTML = '<option value="" disabled selected>Select an LLM...</option>';
+    for (let i = 0; i < llmConfigs.length; i++) {
+        const config = llmConfigs[i];
+        const opt = document.createElement('option');
+        opt.value = config.id || '';
+        opt.textContent = config.model || 'Unknown';
+        select.appendChild(opt);
+    }
+}
+
 async function handleCreateTicket(e) {
     e.preventDefault();
 
     const title = document.getElementById('ticketTitle').value.trim();
     const description = document.getElementById('ticketDescription').value.trim();
+    const plannerLlmId = document.getElementById('ticketPlannerLlm').value;
     const maxCost = parseFloat(document.getElementById('ticketMaxCost').value) || 0;
 
-    if (!title) {
+    if (!title || !plannerLlmId) {
         return;
     }
 
@@ -2049,6 +2065,7 @@ async function handleCreateTicket(e) {
                 title,
                 description,
                 status: 'Backlog',
+                plannerLlmId,
                 maxCost
             })
         });

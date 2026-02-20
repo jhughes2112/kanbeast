@@ -42,11 +42,7 @@ public class ToolContext
 		set => _activeToolCallId.Value = value;
 	}
 
-	public ToolContext(
-		string? currentTaskId,
-		string? currentSubtaskId,
-		LlmService? llmService,
-		LlmService? subAgentService)
+	public ToolContext(string? currentTaskId, string? currentSubtaskId, LlmService? llmService, LlmService? subAgentService)
 	{
 		ReadFiles = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 		CurrentTaskId = currentTaskId;

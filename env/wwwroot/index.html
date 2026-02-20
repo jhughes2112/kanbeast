@@ -99,6 +99,12 @@
 					<textarea id="ticketDescription" rows="4" placeholder="Describe what needs to be done..." required></textarea>
 				</div>
 				<div class="form-group">
+					<label for="ticketPlannerLlm">Planner LLM</label>
+					<select id="ticketPlannerLlm" required>
+						<option value="" disabled selected>Select an LLM...</option>
+					</select>
+				</div>
+				<div class="form-group">
 					<label for="ticketMaxCost">Max Cost ($)</label>
 					<input type="number" id="ticketMaxCost" min="0" step="0.01" placeholder="0.00 = unlimited">
 					<small style="color: var(--gray-500);">Maximum LLM spend for this ticket. 0 = no limit.</small>
