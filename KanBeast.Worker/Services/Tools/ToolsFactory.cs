@@ -25,7 +25,7 @@ public static class ToolsFactory
 		// Planning (Backlog, Done, Failed): task creation + inspection sub-agents + read_file for MEMORY.md.
 		List<Tool> planning = new List<Tool>();
 		ToolHelper.AddTools(planning, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
-		ToolHelper.AddTools(planning, typeof(TicketTools), nameof(TicketTools.CreateTaskAsync), nameof(TicketTools.CreateSubtaskAsync), nameof(TicketTools.DeleteAllTasksAsync), nameof(TicketTools.LogMessageAsync));
+		ToolHelper.AddTools(planning, typeof(TicketTools), nameof(TicketTools.CreateTaskAsync), nameof(TicketTools.CreateSubtaskAsync), nameof(TicketTools.DeleteAllTasksAsync), nameof(TicketTools.UpdateLlmNotesAsync), nameof(TicketTools.LogMessageAsync));
 		ToolHelper.AddTools(planning, typeof(SubAgentTools), nameof(SubAgentTools.StartInspectionAgentAsync));
 
 		// Planning + Active: dispatches developers, verifies results, manages LLM notes + read_file for MEMORY.md.
@@ -33,14 +33,14 @@ public static class ToolsFactory
 		ToolHelper.AddTools(planningActive, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
 		ToolHelper.AddTools(planningActive, typeof(DeveloperTools), nameof(DeveloperTools.StartDeveloperAsync));
 		ToolHelper.AddTools(planningActive, typeof(SubAgentTools), nameof(SubAgentTools.StartInspectionAgentAsync));
-		ToolHelper.AddTools(planningActive, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.UpdateLlmNotesAsync), nameof(TicketTools.SetTicketStatusAsync), nameof(TicketTools.LogMessageAsync));
+		ToolHelper.AddTools(planningActive, typeof(TicketTools), nameof(TicketTools.GetNextWorkItemAsync), nameof(TicketTools.SetTicketStatusAsync), nameof(TicketTools.UpdateLlmNotesAsync), nameof(TicketTools.LogMessageAsync));
 
 		// Developer: reads files and searches to understand context, delegates all edits/commands to sub-agents.
 		List<Tool> developer = new List<Tool>();
 		ToolHelper.AddTools(developer, typeof(FileTools), nameof(FileTools.ReadFileAsync), nameof(FileTools.GetFileAsync));
 		ToolHelper.AddTools(developer, typeof(SearchTools), nameof(SearchTools.GlobAsync), nameof(SearchTools.GrepAsync), nameof(SearchTools.ListDirectoryAsync));
 		ToolHelper.AddTools(developer, typeof(WebTools), nameof(WebTools.GetWebPageAsync), nameof(WebTools.SearchWebAsync));
-		ToolHelper.AddTools(developer, typeof(TicketTools), nameof(TicketTools.LogMessageAsync), nameof(TicketTools.EndSubtaskAsync));
+		ToolHelper.AddTools(developer, typeof(TicketTools), nameof(TicketTools.LogMessageAsync), nameof(TicketTools.EndSubtaskAsync), nameof(TicketTools.UpdateLlmNotesAsync));
 		ToolHelper.AddTools(developer, typeof(SubAgentTools), nameof(SubAgentTools.StartSubAgentAsync));
 
         // Developer sub-agent: has explicit read/search/web tools plus shell and edit capabilities.

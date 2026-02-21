@@ -7,7 +7,8 @@ namespace KanBeast.Worker.Services.Tools;
 // Tools for LLM to read and write files.
 public static class FileTools
 {
-    private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+	private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
+	private static readonly SemaphoreSlim FileLock = new SemaphoreSlim(1, 1);
 
 	[Description("""
 		Reads a file from the local filesystem. You can access any file directly by using this tool.
@@ -21,237 +22,254 @@ public static class FileTools
 		- Results are returned using cat -n format, with line numbers starting at 1
 		Use offset and lines to page through large files. Do not use cat, head, or tail via run_command; use this tool instead.
 		""")]
-    public static async Task<ToolResult> ReadFileAsync(
-        [Description("Absolute path to the file to read.")] string filePath,
-        [Description("The line number to start reading from (1 based). Only provide if the file is too large to read at once")] string offset,
-        [Description("The number of lines to read. Only provide if the file is too large to read at once")] string lines,
-        ToolContext context)
-    {
-        return await ReadFileContentAsync(filePath, offset, lines, context);
-    }
+	public static async Task<ToolResult> ReadFileAsync(
+		[Description("Absolute path to the file to read.")] string filePath,
+		[Description("The line number to start reading from (1 based). Only provide if the file is too large to read at once")] string offset,
+		[Description("The number of lines to read. Only provide if the file is too large to read at once")] string lines,
+		ToolContext context)
+	{
+		return await ReadFileContentAsync(filePath, offset, lines, context);
+	}
 
-    [Description("Alias for read_file.")] 
-    public static async Task<ToolResult> GetFileAsync(
-        [Description("Absolute path to the file to read.")] string filePath,
-        [Description("The line number to start reading from (1 based). Only provide if the file is too large to read at once")] string offset,
-        [Description("The number of lines to read. Only provide if the file is too large to read at once")] string lines,
-        ToolContext context)
-    {
-        return await ReadFileContentAsync(filePath, offset, lines, context);
-    }
+	[Description("Alias for read_file.")]
+	public static async Task<ToolResult> GetFileAsync(
+		[Description("Absolute path to the file to read.")] string filePath,
+		[Description("The line number to start reading from (1 based). Only provide if the file is too large to read at once")] string offset,
+		[Description("The number of lines to read. Only provide if the file is too large to read at once")] string lines,
+		ToolContext context)
+	{
+		return await ReadFileContentAsync(filePath, offset, lines, context);
+	}
 
-    private static async Task<ToolResult> ReadFileContentAsync(string filePath, string offset, string lines, ToolContext context)
-    {
-        const int MaxLines = 2000;
-        CancellationToken cancellationToken = WorkerSession.CancellationToken;
+	private static async Task<ToolResult> ReadFileContentAsync(string filePath, string offset, string lines, ToolContext context)
+	{
+		const int MaxLines = 2000;
+		CancellationToken cancellationToken = WorkerSession.CancellationToken;
 
-        ToolResult result;
+		ToolResult result;
 
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            result = new ToolResult("Error: Path cannot be empty", false, false);
-        }
-        else if (!Path.IsPathRooted(filePath))
-        {
-            result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
-        }
-        else
-        {
-            string fullPath = Path.GetFullPath(filePath);
+		if (string.IsNullOrWhiteSpace(filePath))
+		{
+			result = new ToolResult("Error: Path cannot be empty", false, false);
+		}
+		else if (!Path.IsPathRooted(filePath))
+		{
+			result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
+		}
+		else
+		{
+			string fullPath = Path.GetFullPath(filePath);
 
-            try
-            {
-                if (!File.Exists(fullPath))
-                {
-                    result = new ToolResult($"Error: File not found: {filePath}", false, false);
-                }
-                else
-                {
-                    int offsetValue = 0;
-                    bool offsetValid = string.IsNullOrWhiteSpace(offset) || int.TryParse(offset, out offsetValue);
+			try
+			{
+				if (!File.Exists(fullPath))
+				{
+					result = new ToolResult($"Error: File not found: {filePath}", false, false);
+				}
+				else
+				{
+					int offsetValue = 0;
+					bool offsetValid = string.IsNullOrWhiteSpace(offset) || int.TryParse(offset, out offsetValue);
 
-                    int linesValue = 0;
-                    bool linesValid = string.IsNullOrWhiteSpace(lines) || int.TryParse(lines, out linesValue);
+					int linesValue = 0;
+					bool linesValid = string.IsNullOrWhiteSpace(lines) || int.TryParse(lines, out linesValue);
 
-                    if (!offsetValid)
-                    {
-                        result = new ToolResult($"Error: Invalid offset value: {offset}", false, false);
-                    }
-                    else if (!linesValid)
-                    {
-                        result = new ToolResult($"Error: Invalid lines value: {lines}", false, false);
-                    }
-                    else if (offsetValue < 0)
-                    {
-                        result = new ToolResult("Error: offset must be >= 0", false, false);
-                    }
-                    else if (linesValue < 0)
-                    {
-                        result = new ToolResult("Error: lines must be >= 0", false, false);
-                    }
-                    else
-                    {
-                        using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                        cts.CancelAfter(DefaultTimeout);
+					if (!offsetValid)
+					{
+						result = new ToolResult($"Error: Invalid offset value: {offset}", false, false);
+					}
+					else if (!linesValid)
+					{
+						result = new ToolResult($"Error: Invalid lines value: {lines}", false, false);
+					}
+					else if (offsetValue < 0)
+					{
+						result = new ToolResult("Error: offset must be >= 0", false, false);
+					}
+					else if (linesValue < 0)
+					{
+						result = new ToolResult("Error: lines must be >= 0", false, false);
+					}
+					else
+					{
+						using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+						cts.CancelAfter(DefaultTimeout);
 
-                        using FileStream fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                        using StreamReader sr = new StreamReader(fs);
+						await FileLock.WaitAsync(cts.Token);
+						try
+						{
+							using FileStream fs = new FileStream(fullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+							using StreamReader sr = new StreamReader(fs);
 
-                        context.ReadFiles.TryAdd(fullPath, 0);
+							context.ReadFiles.TryAdd(fullPath, 0);
 
-                        // Offset is 1-based; 0 is treated as 1.
-                        if (offsetValue <= 0)
-                        {
-                            offsetValue = 1;
-                        }
+							// Offset is 1-based; 0 is treated as 1.
+							if (offsetValue <= 0)
+							{
+								offsetValue = 1;
+							}
 
-                        int startLine = offsetValue;
-                        int requestedLines = linesValue > 0 ? linesValue : MaxLines;
-                        int linesToRead = Math.Min(requestedLines, MaxLines);
+							int startLine = offsetValue;
+							int requestedLines = linesValue > 0 ? linesValue : MaxLines;
+							int linesToRead = Math.Min(requestedLines, MaxLines);
 
-                        List<string> readLines = new List<string>();
-                        int currentLine = 0;
-                        bool hitMaxLines = false;
+							List<string> readLines = new List<string>();
+							int currentLine = 0;
+							bool hitMaxLines = false;
 
-                        while (!sr.EndOfStream)
-                        {
-                            currentLine++;
+							while (!sr.EndOfStream)
+							{
+								currentLine++;
 
-                            string? line = await sr.ReadLineAsync(cts.Token);
-                            if (line == null)
-                            {
-                                break;
-                            }
+								string? line = await sr.ReadLineAsync(cts.Token);
+								if (line == null)
+								{
+									break;
+								}
 
-                            if (currentLine >= startLine && readLines.Count < linesToRead)
-                            {
-                                readLines.Add(line);
-                            }
+								if (currentLine >= startLine && readLines.Count < linesToRead)
+								{
+									readLines.Add(line);
+								}
 
-                            if (currentLine >= startLine + linesToRead)
-                            {
-                                break;
-                            }
+								if (currentLine >= startLine + linesToRead)
+								{
+									break;
+								}
 
-                            if (currentLine >= MaxLines && startLine == 1 && linesValue == 0)
-                            {
-                                hitMaxLines = true;
-                                break;
-                            }
-                        }
+								if (currentLine >= MaxLines && startLine == 1 && linesValue == 0)
+								{
+									hitMaxLines = true;
+									break;
+								}
+							}
 
-                        if (readLines.Count == 0)
-                        {
-                            if (currentLine == 0)
-                            {
-                                result = new ToolResult($"File is empty: {filePath}", false, false);
-                            }
-                            else
-                            {
-                                result = new ToolResult($"Offset {startLine} is beyond the end of the file (file has {currentLine} lines).", false, false);
-                            }
-                        }
-                        else
-                        {
-                            int endLine = startLine + readLines.Count - 1;
-                            bool isWindowed = offsetValue > 1 || linesValue > 0;
+							if (readLines.Count == 0)
+							{
+								if (currentLine == 0)
+								{
+									result = new ToolResult($"File is empty: {filePath}", false, false);
+								}
+								else
+								{
+									result = new ToolResult($"Offset {startLine} is beyond the end of the file (file has {currentLine} lines).", false, false);
+								}
+							}
+							else
+							{
+								int endLine = startLine + readLines.Count - 1;
+								bool isWindowed = offsetValue > 1 || linesValue > 0;
 
-                            StringBuilder sb = new StringBuilder();
+								StringBuilder sb = new StringBuilder();
 
-                            if (isWindowed)
-                            {
-                                sb.AppendLine($"Showing lines {startLine}-{endLine}:");
-                            }
+								if (isWindowed)
+								{
+									sb.AppendLine($"Showing lines {startLine}-{endLine}:");
+								}
 
-                            for (int i = 0; i < readLines.Count; i++)
-                            {
-                                sb.AppendLine($"{startLine + i,6}\t{readLines[i]}");
-                            }
+								for (int i = 0; i < readLines.Count; i++)
+								{
+									sb.AppendLine($"{startLine + i,6}\t{readLines[i]}");
+								}
 
-                            if (hitMaxLines)
-                            {
-                                sb.AppendLine();
-                                sb.AppendLine($"[Output truncated at {MaxLines} lines. Use offset and lines parameters to read more.]");
-                            }
+								if (hitMaxLines)
+								{
+									sb.AppendLine();
+									sb.AppendLine($"[Output truncated at {MaxLines} lines. Use offset and lines parameters to read more.]");
+								}
 
-                            result = new ToolResult(sb.ToString(), false, false);
-                        }
-                    }
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                result = new ToolResult($"Error: Timed out or cancelled reading file: {filePath}", false, false);
-            }
-            catch (Exception ex)
-            {
-                result = new ToolResult($"Error: Failed to read file: {ex.Message}", false, false);
-            }
-        }
+								result = new ToolResult(sb.ToString(), false, false);
+							}
+						}
+						finally
+						{
+							FileLock.Release();
+						}
+					}
+				}
+			}
+			catch (OperationCanceledException)
+			{
+				result = new ToolResult($"Error: Timed out or cancelled reading file: {filePath}", false, false);
+			}
+			catch (Exception ex)
+			{
+				result = new ToolResult($"Error: Failed to read file: {ex.Message}", false, false);
+			}
+		}
 
-        return result;
-    }
+		return result;
+	}
 
 	[Description("""
 		Create a new file or overwrite an existing one. Creates parent directories if needed.
 		If the file already exists, you must read_file first. Prefer edit_file for partial changes.
 		Never create files not required by the task.
 		""")]
-    public static async Task<ToolResult> WriteFileAsync(
-        [Description("The exact full path to the file to create or overwrite. Absolute paths only.")] string filePath,
-        [Description("The complete content to write to the file. This replaces the entire file contents.")] string content,
-        ToolContext context)
-    {
-        ToolResult result;
-        CancellationToken cancellationToken = WorkerSession.CancellationToken;
+	public static async Task<ToolResult> WriteFileAsync(
+		[Description("The exact full path to the file to create or overwrite. Absolute paths only.")] string filePath,
+		[Description("The complete content to write to the file. This replaces the entire file contents.")] string content,
+		ToolContext context)
+	{
+		ToolResult result;
+		CancellationToken cancellationToken = WorkerSession.CancellationToken;
 
-        if (string.IsNullOrWhiteSpace(filePath))
-        {
-            result = new ToolResult("Error: Path cannot be empty", false, false);
-        }
-        else if (!Path.IsPathRooted(filePath))
-        {
-            result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
-        }
-        else
-        {
-            string fullPath = Path.GetFullPath(filePath);
+		if (string.IsNullOrWhiteSpace(filePath))
+		{
+			result = new ToolResult("Error: Path cannot be empty", false, false);
+		}
+		else if (!Path.IsPathRooted(filePath))
+		{
+			result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
+		}
+		else
+		{
+			string fullPath = Path.GetFullPath(filePath);
 
-            if (File.Exists(fullPath) && !context.ReadFiles.ContainsKey(fullPath))
-            {
-                result = new ToolResult($"Error: You must use read_file on {filePath} before overwriting it.", false, false);
-            }
-            else
-            {
-                try
-                {
-                    string? directory = Path.GetDirectoryName(fullPath);
-                    if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                    {
-                        Directory.CreateDirectory(directory);
-                    }
+			if (File.Exists(fullPath) && !context.ReadFiles.ContainsKey(fullPath))
+			{
+				result = new ToolResult($"Error: You must use read_file on {filePath} before overwriting it.", false, false);
+			}
+			else
+			{
+				try
+				{
+					string? directory = Path.GetDirectoryName(fullPath);
+					if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+					{
+						Directory.CreateDirectory(directory);
+					}
 
-                    using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                    cts.CancelAfter(DefaultTimeout);
-                    await File.WriteAllTextAsync(fullPath, content ?? string.Empty, cts.Token);
+					using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+					cts.CancelAfter(DefaultTimeout);
 
-                    context.ReadFiles.TryAdd(fullPath, 0);
+					await FileLock.WaitAsync(cts.Token);
+					try
+					{
+						await File.WriteAllTextAsync(fullPath, content ?? string.Empty, cts.Token);
+					}
+					finally
+					{
+						FileLock.Release();
+					}
 
-                    result = new ToolResult($"File written: {filePath}", false, false);
-                }
-                catch (OperationCanceledException)
-                {
-                    result = new ToolResult($"Error: Timed out or cancelled writing file: {filePath}", false, false);
-                }
-                catch (Exception ex)
-                {
-                    result = new ToolResult($"Error: Failed to write file: {ex.Message}", false, false);
-                }
-            }
-        }
+					context.ReadFiles.TryAdd(fullPath, 0);
 
-        return result;
-    }
+					result = new ToolResult($"File written: {filePath}", false, false);
+				}
+				catch (OperationCanceledException)
+				{
+					result = new ToolResult($"Error: Timed out or cancelled writing file: {filePath}", false, false);
+				}
+				catch (Exception ex)
+				{
+					result = new ToolResult($"Error: Failed to write file: {ex.Message}", false, false);
+				}
+			}
+		}
+
+		return result;
+	}
 
 	[Description("Performs an exact find-and-replace in a file. Locates oldContent in the file and replaces it with newContent.\n\nRules:\n- You must use read_file at least once before editing. This tool will error if you attempt an edit without reading the file first.\n- oldContent must appear exactly once in the file. The edit fails if it matches zero times or more than once.\n- Matching is byte-exact including all whitespace, indentation, and line endings.\n- If oldContent is not unique, include more surrounding lines of context to disambiguate.")]
 	public static async Task<ToolResult> EditFileAsync(
@@ -296,26 +314,35 @@ public static class FileTools
 					{
 						using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 						cts.CancelAfter(DefaultTimeout);
-						string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
 
-						int firstIndex = fileContent.IndexOf(oldContent, StringComparison.Ordinal);
-						if (firstIndex < 0)
+						await FileLock.WaitAsync(cts.Token);
+						try
 						{
-							result = new ToolResult($"Error: oldContent not found in file: {filePath}", false, false);
-						}
-						else
-						{
-							int secondIndex = fileContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
-							if (secondIndex >= 0)
+							string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
+
+							int firstIndex = fileContent.IndexOf(oldContent, StringComparison.Ordinal);
+							if (firstIndex < 0)
 							{
-								result = new ToolResult("Error: oldContent matched multiple times in file. Include more context to make it unique.", false, false);
+								result = new ToolResult($"Error: oldContent not found in file: {filePath}", false, false);
 							}
 							else
 							{
-								string updatedContent = fileContent[..firstIndex] + (newContent ?? string.Empty) + fileContent[(firstIndex + oldContent.Length)..];
-								await File.WriteAllTextAsync(fullPath, updatedContent, cts.Token);
-								result = new ToolResult($"File edited: {filePath}", false, false);
+								int secondIndex = fileContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
+								if (secondIndex >= 0)
+								{
+									result = new ToolResult("Error: oldContent matched multiple times in file. Include more context to make it unique.", false, false);
+								}
+								else
+								{
+									string updatedContent = fileContent[..firstIndex] + (newContent ?? string.Empty) + fileContent[(firstIndex + oldContent.Length)..];
+									await File.WriteAllTextAsync(fullPath, updatedContent, cts.Token);
+									result = new ToolResult($"File edited: {filePath}", false, false);
+								}
 							}
+						}
+						finally
+						{
+							FileLock.Release();
 						}
 					}
 				}
@@ -380,57 +407,66 @@ public static class FileTools
 					{
 						using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 						cts.CancelAfter(DefaultTimeout);
-						string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
 
-						string workingContent = fileContent;
-						int editIndex = 0;
-
-						foreach (JsonNode? editNode in edits)
+						await FileLock.WaitAsync(cts.Token);
+						try
 						{
-							editIndex++;
+							string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
 
-							if (editNode is not JsonObject editObj)
-							{
-								result = new ToolResult($"Error: Edit {editIndex} is not a valid object.", false, false);
-								return result;
-							}
+							string workingContent = fileContent;
+							int editIndex = 0;
 
-							string? oldContent = editObj["oldContent"]?.ToString() ?? editObj["old_content"]?.ToString();
-							string? newContent = editObj["newContent"]?.ToString() ?? editObj["new_content"]?.ToString();
-							bool replaceAll = editObj["replaceAll"]?.GetValue<bool>() ?? editObj["replace_all"]?.GetValue<bool>() ?? false;
+							foreach (JsonNode? editNode in edits)
+							{
+								editIndex++;
 
-							if (string.IsNullOrEmpty(oldContent))
-							{
-								result = new ToolResult($"Error: Edit {editIndex}: oldContent cannot be empty.", false, false);
-								return result;
-							}
-
-							int firstIndex = workingContent.IndexOf(oldContent, StringComparison.Ordinal);
-							if (firstIndex < 0)
-							{
-								result = new ToolResult($"Error: Edit {editIndex}: oldContent not found in file. No edits were applied.", false, false);
-								return result;
-							}
-
-							if (replaceAll)
-							{
-								workingContent = workingContent.Replace(oldContent, newContent ?? string.Empty, StringComparison.Ordinal);
-							}
-							else
-							{
-								int secondIndex = workingContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
-								if (secondIndex >= 0)
+								if (editNode is not JsonObject editObj)
 								{
-									result = new ToolResult($"Error: Edit {editIndex}: oldContent matched multiple times. Include more context to make it unique. No edits were applied.", false, false);
+									result = new ToolResult($"Error: Edit {editIndex} is not a valid object.", false, false);
 									return result;
 								}
 
-								workingContent = workingContent[..firstIndex] + (newContent ?? string.Empty) + workingContent[(firstIndex + oldContent.Length)..];
-							}
-						}
+								string? oldContent = editObj["oldContent"]?.ToString() ?? editObj["old_content"]?.ToString();
+								string? newContent = editObj["newContent"]?.ToString() ?? editObj["new_content"]?.ToString();
+								bool replaceAll = editObj["replaceAll"]?.GetValue<bool>() ?? editObj["replace_all"]?.GetValue<bool>() ?? false;
 
-						await File.WriteAllTextAsync(fullPath, workingContent, cts.Token);
-						result = new ToolResult($"File edited: {filePath} ({edits.Count} edit(s) applied)", false, false);
+								if (string.IsNullOrEmpty(oldContent))
+								{
+									result = new ToolResult($"Error: Edit {editIndex}: oldContent cannot be empty.", false, false);
+									return result;
+								}
+
+								int firstIndex = workingContent.IndexOf(oldContent, StringComparison.Ordinal);
+								if (firstIndex < 0)
+								{
+									result = new ToolResult($"Error: Edit {editIndex}: oldContent not found in file. No edits were applied.", false, false);
+									return result;
+								}
+
+								if (replaceAll)
+								{
+									workingContent = workingContent.Replace(oldContent, newContent ?? string.Empty, StringComparison.Ordinal);
+								}
+								else
+								{
+									int secondIndex = workingContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
+									if (secondIndex >= 0)
+									{
+										result = new ToolResult($"Error: Edit {editIndex}: oldContent matched multiple times. Include more context to make it unique. No edits were applied.", false, false);
+										return result;
+									}
+
+									workingContent = workingContent[..firstIndex] + (newContent ?? string.Empty) + workingContent[(firstIndex + oldContent.Length)..];
+								}
+							}
+
+							await File.WriteAllTextAsync(fullPath, workingContent, cts.Token);
+							result = new ToolResult($"File edited: {filePath} ({edits.Count} edit(s) applied)", false, false);
+						}
+						finally
+						{
+							FileLock.Release();
+						}
 					}
 				}
 				catch (OperationCanceledException)

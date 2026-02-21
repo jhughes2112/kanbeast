@@ -20,8 +20,8 @@ public class ToolContext
 	public ConcurrentDictionary<string, byte> ReadFiles { get; }
 	public string? CurrentTaskId { get; }
 	public string? CurrentSubtaskId { get; }
-	public LlmService? LlmService { get; }
-	public LlmService? SubAgentService { get; }
+	public LlmService? LlmService { get; internal set; }
+	public LlmService? SubAgentService { get; internal set; }
 
 	// Derived from the LlmService for code that needs the config ID string.
 	public string? LlmConfigId => LlmService?.Config.Id;

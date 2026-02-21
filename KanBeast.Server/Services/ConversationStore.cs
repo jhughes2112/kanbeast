@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using KanBeast.Server.Models;
@@ -8,6 +9,7 @@ namespace KanBeast.Server.Services;
 // Stores full conversation data separately from tickets to keep ticket payloads small.
 // Reads and writes directly to disk with no in-memory cache, so edits to the JSON
 // files are immediately visible without restarting the server.
+// All access to a given ticket's file is serialized via a per-ticket lock.
 public class ConversationStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new JsonSerializerOptions
@@ -23,6 +25,7 @@ public class ConversationStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _locks = new();
     private readonly string _directory;
     private readonly ILogger<ConversationStore> _logger;
 
@@ -33,107 +36,184 @@ public class ConversationStore
         Directory.CreateDirectory(_directory);
     }
 
+    private SemaphoreSlim GetLock(string ticketId)
+    {
+        return _locks.GetOrAdd(ticketId, _ => new SemaphoreSlim(1, 1));
+    }
+
     public ConversationData? Get(string ticketId, string conversationId)
     {
-        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
-        convos.TryGetValue(conversationId, out ConversationData? data);
-        return data;
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        fileLock.Wait();
+        try
+        {
+            Dictionary<string, ConversationData> convos = LoadFile(ticketId);
+            convos.TryGetValue(conversationId, out ConversationData? data);
+            return data;
+        }
+        finally
+        {
+            fileLock.Release();
+        }
     }
 
     // Finds the active (unfinished) planning conversation for a ticket, if any.
     public ConversationData? GetActivePlanning(string ticketId)
     {
-        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
-
-        foreach ((string id, ConversationData data) in convos)
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        fileLock.Wait();
+        try
         {
-            if (!data.IsFinished && data.DisplayName == "Planning")
-            {
-                return data;
-            }
-        }
+            Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
-        return null;
+            foreach ((string id, ConversationData data) in convos)
+            {
+                if (!data.IsFinished && data.DisplayName == "Planning")
+                {
+                    return data;
+                }
+            }
+
+            return null;
+        }
+        finally
+        {
+            fileLock.Release();
+        }
     }
 
     // Returns all non-finalized conversations for a ticket.
     public List<ConversationData> GetNonFinalized(string ticketId)
     {
-        List<ConversationData> result = new List<ConversationData>();
-        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
-
-        foreach ((string id, ConversationData data) in convos)
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        fileLock.Wait();
+        try
         {
-            if (!data.IsFinished)
-            {
-                result.Add(data);
-            }
-        }
+            List<ConversationData> result = new List<ConversationData>();
+            Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
-        return result;
+            foreach ((string id, ConversationData data) in convos)
+            {
+                if (!data.IsFinished)
+                {
+                    result.Add(data);
+                }
+            }
+
+            return result;
+        }
+        finally
+        {
+            fileLock.Release();
+        }
     }
 
     public List<ConversationInfo> GetInfoList(string ticketId)
     {
-        List<ConversationInfo> result = new List<ConversationInfo>();
-        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
-
-        foreach ((string id, ConversationData data) in convos)
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        fileLock.Wait();
+        try
         {
-            result.Add(new ConversationInfo
-            {
-                Id = data.Id,
-                DisplayName = data.DisplayName,
-                MessageCount = data.Messages.Count,
-                IsFinished = data.IsFinished,
-                StartedAt = data.StartedAt,
-                ActiveModel = data.ActiveModel
-            });
-        }
+            List<ConversationInfo> result = new List<ConversationInfo>();
+            Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
-        return result;
+            foreach ((string id, ConversationData data) in convos)
+            {
+                result.Add(new ConversationInfo
+                {
+                    Id = data.Id,
+                    DisplayName = data.DisplayName,
+                    MessageCount = data.Messages.Count,
+                    IsFinished = data.IsFinished,
+                    StartedAt = data.StartedAt,
+                    ActiveModel = data.ActiveModel
+                });
+            }
+
+            return result;
+        }
+        finally
+        {
+            fileLock.Release();
+        }
     }
 
     public async Task UpsertAsync(string ticketId, ConversationData data)
     {
-        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
-        convos[data.Id] = data;
-        await SaveFileAsync(ticketId, convos);
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        await fileLock.WaitAsync();
+        try
+        {
+            Dictionary<string, ConversationData> convos = LoadFile(ticketId);
+            convos[data.Id] = data;
+            await SaveFileAsync(ticketId, convos);
+        }
+        finally
+        {
+            fileLock.Release();
+        }
     }
 
     public async Task FinishAsync(string ticketId, string conversationId)
     {
-        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
-
-        if (!convos.TryGetValue(conversationId, out ConversationData? data))
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        await fileLock.WaitAsync();
+        try
         {
-            return;
-        }
+            Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
-        data.IsFinished = true;
-        await SaveFileAsync(ticketId, convos);
+            if (!convos.TryGetValue(conversationId, out ConversationData? data))
+            {
+                return;
+            }
+
+            data.IsFinished = true;
+            await SaveFileAsync(ticketId, convos);
+        }
+        finally
+        {
+            fileLock.Release();
+        }
     }
 
     public async Task<bool> DeleteAsync(string ticketId, string conversationId)
     {
-        Dictionary<string, ConversationData> convos = LoadFile(ticketId);
-
-        if (!convos.Remove(conversationId))
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        await fileLock.WaitAsync();
+        try
         {
-            return false;
-        }
+            Dictionary<string, ConversationData> convos = LoadFile(ticketId);
 
-        await SaveFileAsync(ticketId, convos);
-        return true;
+            if (!convos.Remove(conversationId))
+            {
+                return false;
+            }
+
+            await SaveFileAsync(ticketId, convos);
+            return true;
+        }
+        finally
+        {
+            fileLock.Release();
+        }
     }
 
     public void DeleteForTicket(string ticketId)
     {
-        string path = GetPath(ticketId);
-
-        if (File.Exists(path))
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        fileLock.Wait();
+        try
         {
-            File.Delete(path);
+            string path = GetPath(ticketId);
+
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        finally
+        {
+            fileLock.Release();
         }
     }
 

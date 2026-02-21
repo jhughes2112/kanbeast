@@ -31,6 +31,7 @@ public static class SubAgentTools
 	public static async Task<ToolResult> StartSubAgentAsync(
 		[Description("Brief summary of the sub-agent's mission (logged to activity feed and shown to the sub-agent as context).")] string taskSummary,
 		[Description("Detailed, self-contained instructions and expectations for the sub-agent's response.")] string instructions,
+		[Description("The LLM config id to use for this sub-agent. Choose from the available LLMs listed in your prompt.")] string llmConfigId,
 		ToolContext context)
 	{
 		ToolResult result;
@@ -43,11 +44,15 @@ public static class SubAgentTools
 		{
 			result = new ToolResult("Error: instructions cannot be empty", false, false);
 		}
+		else if (string.IsNullOrWhiteSpace(llmConfigId))
+		{
+			result = new ToolResult("Error: llmConfigId cannot be empty", false, false);
+		}
 		else
 		{
 			try
 			{
-				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.DeveloperSubagent, "Sub-agent", context);
+				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.DeveloperSubagent, "Sub-agent", llmConfigId, context);
 				result = new ToolResult(content, false, false);
 			}
 			catch (OperationCanceledException)
@@ -107,7 +112,7 @@ public static class SubAgentTools
 		{
 			try
 			{
-				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.PlanningSubagent, "Inspection", context);
+				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.PlanningSubagent, "Inspection", context.LlmConfigId, context);
 				result = new ToolResult(content, false, false);
 			}
 			catch (OperationCanceledException)
@@ -124,22 +129,24 @@ public static class SubAgentTools
 	}
 
 	// Shared agent conversation lifecycle: create/reconstitute, run to completion, finalize with compaction.
+	// Resolves the LLM service from the registry by config ID. Returns an error string if not found.
 	private static async Task<string> RunAgentConversationAsync(
 		string taskSummary,
 		string instructions,
 		LlmRole role,
 		string displayPrefix,
+		string? llmConfigId,
 		ToolContext context)
 	{
 		await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"{displayPrefix}: {taskSummary}", WorkerSession.CancellationToken);
 
-		string fullInstructions = $"{taskSummary}\n\n{instructions}";
-
-		LlmService? service = context.SubAgentService;
+		LlmService? service = !string.IsNullOrWhiteSpace(llmConfigId) ? WorkerSession.LlmProxy.GetService(llmConfigId) : null;
 		if (service == null)
 		{
-			return $"{displayPrefix} failed: no LLM service specified for sub-agent";
+			return $"{displayPrefix} failed: LLM config '{llmConfigId}' not found";
 		}
+
+		string fullInstructions = $"{taskSummary}\n\n{instructions}";
 
 		ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, service, null);
 

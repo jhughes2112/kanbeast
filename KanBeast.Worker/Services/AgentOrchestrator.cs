@@ -31,12 +31,9 @@ public class AgentOrchestrator
 	// Processes housekeeping (heartbeats, settings, ticket updates) while idle.
 	public async Task RunAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
-		await EnsurePlanningConversationAsync(ticketHolder, cancellationToken);
+		_logger.LogInformation("Entering reactive loop");
 
-		_logger.LogInformation("Planning agent ready, entering reactive loop");
-		await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Ready, waiting for messages", cancellationToken);
-
-		Console.WriteLine($"Orchestrator: Listening for chat on conversation {_planningConversation!.Id}");
+		Console.WriteLine("Orchestrator: Starting main loop");
 		ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
 		ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
 		DateTimeOffset lastHeartbeat = DateTimeOffset.UtcNow;
@@ -46,17 +43,27 @@ public class AgentOrchestrator
 		{
 			cancellationToken.ThrowIfCancellationRequested();
 
-			// After an interrupt, ignore stale conversation state (NeedsLlmAttention) and only
-			// re-enter when the hub has new user input. This prevents the loop from immediately
-			// restarting the LLM after the user clicked stop.
-			bool hasPendingWork = WorkerSession.HubClient.HasPendingWork(_planningConversation!.Id);
-			if (hasPendingWork || (!interrupted && NeedsLlmAttention(_planningConversation!)))
+			// Ensure the planning conversation exists. If the LLM is missing, this returns
+			// false and the loop keeps running housekeeping until a valid LLM appears.
+			if (_planningConversation == null)
 			{
-				interrupted = false;
-				LlmExitReason exitReason = await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
-				if (exitReason == LlmExitReason.Interrupted)
+				await TryEnsurePlanningConversationAsync(ticketHolder, cancellationToken);
+			}
+
+			if (_planningConversation != null)
+			{
+				// After an interrupt, ignore stale conversation state (NeedsLlmAttention) and only
+				// re-enter when the hub has new user input. This prevents the loop from immediately
+				// restarting the LLM after the user clicked stop.
+				bool hasPendingWork = WorkerSession.HubClient.HasPendingWork(_planningConversation.Id);
+				if (hasPendingWork || (!interrupted && NeedsLlmAttention(_planningConversation)))
 				{
-					interrupted = true;
+					interrupted = false;
+					LlmExitReason exitReason = await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
+					if (exitReason == LlmExitReason.Interrupted)
+					{
+						interrupted = true;
+					}
 				}
 			}
 
@@ -88,6 +95,7 @@ public class AgentOrchestrator
 			if (latestTicket != null)
 			{
 				TicketStatus previousStatus = ticketHolder.Ticket.Status;
+				string? previousLlmId = ticketHolder.Ticket.PlannerLlmId;
 				ticketHolder.Update(latestTicket);
 
 				if (previousStatus != latestTicket.Status && _planningConversation != null)
@@ -102,15 +110,26 @@ public class AgentOrchestrator
 						_planningConversation.Role = LlmRole.Planning;
 					}
 				}
+
+				if (!string.Equals(previousLlmId, latestTicket.PlannerLlmId, StringComparison.Ordinal) && _planningConversation != null)
+				{
+					LlmService? newService = WorkerSession.LlmProxy.GetService(latestTicket.PlannerLlmId!);
+					if (newService != null)
+					{
+						_planningConversation.ToolContext.LlmService = newService;
+						_planningConversation.ToolContext.SubAgentService = newService;
+						_logger.LogInformation("Switched planning LLM to {Model}", newService.Model);
+					}
+				}
 			}
 
 			await Task.Delay(250, cancellationToken);
 		}
 	}
 
-	// Rebuilds all non-finalized conversations from the server and identifies the
-	// planning conversation. If none exists, creates a new one.
-	private async Task EnsurePlanningConversationAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
+	// Attempts to create or reconstitute the planning conversation.
+	// Returns without setting _planningConversation if no LLM is available.
+	private async Task TryEnsurePlanningConversationAsync(TicketHolder ticketHolder, CancellationToken cancellationToken)
 	{
 		if (_planningConversation != null)
 		{
@@ -137,41 +156,46 @@ public class AgentOrchestrator
 		}
 
 		LlmService? plannerService = WorkerSession.LlmProxy.GetService(ticketHolder.Ticket.PlannerLlmId!);
-		if (plannerService==null)
-			throw new Exception(ticketId + ": Planner LLM service not found for ID " + ticketHolder.Ticket.PlannerLlmId);
-
-		if (planningData != null)
+		if (plannerService!=null)
 		{
-			_logger.LogInformation("Reconstituting planning conversation: {Id}", planningData.Id);
-			await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Reconstituted conversation from server", cancellationToken);
+			if (planningData != null)
+			{
+				_logger.LogInformation("Reconstituting planning conversation: {Id}", planningData.Id);
+				await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Reconstituted conversation from server", cancellationToken);
 
-			ToolContext context = new ToolContext(null, null, plannerService, plannerService);
-			_planningConversation = new CompactingConversation(planningData, LlmRole.Planning, context, null, null, null);
+				ToolContext context = new ToolContext(null, null, plannerService, plannerService);
+				_planningConversation = new CompactingConversation(planningData, LlmRole.Planning, context, null, null, null);
 
-			await WorkerSession.HubClient.SyncConversationAsync(planningData);
+				await WorkerSession.HubClient.SyncConversationAsync(planningData);
+			}
+			else
+			{
+				_logger.LogInformation("Creating new planning conversation");
+				await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Creating new conversation", cancellationToken);
+
+				string userPrompt = $"""
+					Ticket: {ticketHolder.Ticket.Title}
+					Description: {ticketHolder.Ticket.Description}
+					""";
+
+				ToolContext context = new ToolContext(null, null, plannerService, plannerService);
+				_planningConversation = new CompactingConversation(null, LlmRole.Planning, context, userPrompt, "Planning", null);
+			}
+
+			// Sync the role to match current ticket status.
+			if (ticketHolder.Ticket.Status == TicketStatus.Active)
+			{
+				_planningConversation.Role = LlmRole.PlanningActive;
+			}
+
+			await _planningConversation.ForceFlushAsync();
+			_logger.LogInformation("Planning conversation ready: {Id}", _planningConversation.Id);
+			await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Ready, waiting for messages", cancellationToken);
 		}
 		else
 		{
-			_logger.LogInformation("Creating new planning conversation");
-			await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Creating new conversation", cancellationToken);
-
-			string userPrompt = $"""
-				Ticket: {ticketHolder.Ticket.Title}
-				Description: {ticketHolder.Ticket.Description}
-				""";
-
-			ToolContext context = new ToolContext(null, null, plannerService, plannerService);
-			_planningConversation = new CompactingConversation(null, LlmRole.Planning, context, userPrompt, "Planning", null);
+			_logger.LogError(ticketId + ": Planner LLM service not found for ID " + ticketHolder.Ticket.PlannerLlmId);
 		}
-
-		// Sync the role to match current ticket status.
-		if (ticketHolder.Ticket.Status == TicketStatus.Active)
-		{
-			_planningConversation.Role = LlmRole.PlanningActive;
-		}
-
-		await _planningConversation.ForceFlushAsync();
-		_logger.LogInformation("Planning conversation ready: {Id}", _planningConversation.Id);
 	}
 
 	// Returns true when the conversation has work the LLM should handle: a pending user

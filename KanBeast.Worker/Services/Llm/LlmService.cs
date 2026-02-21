@@ -519,6 +519,24 @@ public class LlmService
 	{
 		LlmResult? result = null;
 
+		// Trim content; some models return whitespace-only assistant messages.
+		if (assistantMessage.Content != null)
+		{
+			assistantMessage.Content = assistantMessage.Content.Trim();
+			if (assistantMessage.Content.Length == 0)
+			{
+				assistantMessage.Content = null;
+			}
+		}
+
+		// If the message is completely empty (no content, no tool calls), skip it.
+		bool hasToolCalls = assistantMessage.ToolCalls != null && assistantMessage.ToolCalls.Count > 0;
+		if (assistantMessage.Content == null && !hasToolCalls)
+		{
+			Console.WriteLine($"[{_config.Model}] Skipping empty assistant message");
+			return null;
+		}
+
 		// Trim whitespace from function names and argument keys that some models produce.
 		if (assistantMessage.ToolCalls != null && assistantMessage.ToolCalls.Count > 0)
 		{
