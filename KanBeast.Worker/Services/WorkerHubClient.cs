@@ -13,6 +13,7 @@ public class WorkerHubClient : IAsyncDisposable
 	private readonly string _ticketId;
 	private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _pendingChatMessages = new();
 	private readonly ConcurrentDictionary<string, bool> _pendingClearRequests = new();
+	private readonly ConcurrentDictionary<string, string> _pendingModelChanges = new();
 	private readonly ConcurrentQueue<List<LLMConfig>> _pendingSettingsUpdates = new();
 	private readonly ConcurrentQueue<Ticket> _pendingTicketUpdates = new();
 	private readonly ConcurrentDictionary<string, CancellationTokenSource> _conversationInterruptSources = new();
@@ -122,6 +123,16 @@ public class WorkerHubClient : IAsyncDisposable
 			}
 		});
 
+		// Listen for model change requests from the browser.
+		_connection.On<string, string, string>("ConversationModelChanged", (fromTicketId, conversationId, llmConfigId) =>
+		{
+			if (fromTicketId == _ticketId)
+			{
+				_pendingModelChanges[conversationId] = llmConfigId;
+				Console.WriteLine($"Worker: Model change queued for conversation {conversationId} -> {llmConfigId}");
+			}
+		});
+
 		// Listen for settings updates pushed from the server.
 		_connection.On<List<LLMConfig>>("SettingsUpdated", (llmConfigs) =>
 		{
@@ -172,6 +183,17 @@ public class WorkerHubClient : IAsyncDisposable
 	public bool TryConsumeClearRequest(string conversationId)
 	{
 		return _pendingClearRequests.TryRemove(conversationId, out _);
+	}
+
+	// Atomically checks and consumes a pending model change for a conversation.
+	public string? TryConsumeModelChange(string conversationId)
+	{
+		if (_pendingModelChanges.TryRemove(conversationId, out string? llmConfigId))
+		{
+			return llmConfigId;
+		}
+
+		return null;
 	}
 
 	// Returns true if there are pending chat messages or a clear request for the conversation.

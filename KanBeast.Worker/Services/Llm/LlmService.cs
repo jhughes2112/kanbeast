@@ -124,7 +124,8 @@ public enum LlmExitReason
 	MaxIterationsReached,  // Hit iteration limit without completion
 	CostExceeded,          // Accumulated cost exceeded the budget
 	RateLimited,           // Rate limited, RetryAfter indicates when to retry
-	Interrupted            // User interrupted the conversation via the hub
+	Interrupted,           // User interrupted the conversation via the hub
+	ModelChanged           // User switched the conversation's LLM model
 }
 
 public class LlmResult
@@ -209,6 +210,17 @@ public class LlmService
 			}
 
 			result = await ExecuteConversationAsync(conversation, continueMessage, continueOnToolExit, finalizeOnExit, cancellationToken);
+
+			// If the user switched models mid-conversation, the old service's loop exited cleanly.
+			// Trampoline to the new service so the switch is invisible to callers.
+			if (result.ExitReason == LlmExitReason.ModelChanged)
+			{
+				LlmService? newService = conversation.ToolContext.LlmService;
+				if (newService != null && newService != this)
+				{
+					result = await newService.RunToCompletionAsync(conversation, continueMessage, continueOnToolExit, finalizeOnExit, cancellationToken);
+				}
+			}
 		}
 		else if (_isPermanentlyDown)
 		{
@@ -284,6 +296,20 @@ public class LlmService
 				while (chatQueue.TryDequeue(out string? chatMsg))
 				{
 					conversation.AddUserMessage(chatMsg);
+				}
+
+				// Check for pending model changes from the hub.
+				string? newLlmConfigId = WorkerSession.HubClient.TryConsumeModelChange(conversation.Id);
+				if (newLlmConfigId != null)
+				{
+					LlmService? newService = WorkerSession.LlmProxy.GetService(newLlmConfigId);
+					if (newService != null)
+					{
+						conversation.ToolContext.LlmService = newService;
+						conversation.AddNote($"Model switched to {newService.Model}");
+						finalResult = new LlmResult(LlmExitReason.ModelChanged, string.Empty, string.Empty, null, null);
+						break;
+					}
 				}
 
 				// Some providers (e.g. Anthropic) reject conversations that don't end with a user or tool message.
@@ -465,7 +491,7 @@ public class LlmService
 			WorkerSession.HubClient.UnregisterConversation(conversation.Id);
 		}
 
-		if (finalizeOnExit)
+		if (finalizeOnExit && finalResult.ExitReason != LlmExitReason.ModelChanged)
 		{
 			string finalContent = await conversation.FinalizeAsync(finalResult, cancellationToken);
 			finalResult = new LlmResult(finalResult.ExitReason, finalContent, finalResult.ErrorMessage, finalResult.FinalToolCalled, finalResult.RetryAfter);
@@ -555,7 +581,7 @@ public class LlmService
 			}
 		}
 
-		conversation.AddAssistantMessage(assistantMessage, _config.Model);
+		conversation.AddAssistantMessage(assistantMessage);
 
 		if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
 		{

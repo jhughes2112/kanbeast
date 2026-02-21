@@ -65,6 +65,22 @@ public class AgentOrchestrator
 						interrupted = true;
 					}
 				}
+				else
+				{
+					// While idle, check for model changes so the dropdown stays in sync
+					// even when the LLM loop isn't running.
+					string? pendingModelChange = WorkerSession.HubClient.TryConsumeModelChange(_planningConversation.Id);
+					if (pendingModelChange != null)
+					{
+						LlmService? newService = WorkerSession.LlmProxy.GetService(pendingModelChange);
+						if (newService != null)
+						{
+							_planningConversation.ToolContext.LlmService = newService;
+							await _planningConversation.ForceFlushAsync();
+							_logger.LogInformation("Switched idle planning LLM to {Model}", newService.Model);
+						}
+					}
+				}
 			}
 
 			// Housekeeping while idle.
@@ -95,7 +111,6 @@ public class AgentOrchestrator
 			if (latestTicket != null)
 			{
 				TicketStatus previousStatus = ticketHolder.Ticket.Status;
-				string? previousLlmId = ticketHolder.Ticket.PlannerLlmId;
 				ticketHolder.Update(latestTicket);
 
 				if (previousStatus != latestTicket.Status && _planningConversation != null)
@@ -108,17 +123,6 @@ public class AgentOrchestrator
 					else
 					{
 						_planningConversation.Role = LlmRole.Planning;
-					}
-				}
-
-				if (!string.Equals(previousLlmId, latestTicket.PlannerLlmId, StringComparison.Ordinal) && _planningConversation != null)
-				{
-					LlmService? newService = WorkerSession.LlmProxy.GetService(latestTicket.PlannerLlmId!);
-					if (newService != null)
-					{
-						_planningConversation.ToolContext.LlmService = newService;
-						_planningConversation.ToolContext.SubAgentService = newService;
-						_logger.LogInformation("Switched planning LLM to {Model}", newService.Model);
 					}
 				}
 			}
@@ -242,7 +246,8 @@ public class AgentOrchestrator
 		await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, true);
 		try
 		{
-			LlmResult result = await service.RunToCompletionAsync(_planningConversation!, null, true, false, effectiveToken);
+			string? continueMessage = isActive ? "Continue working. Call get_next_work_item for the next subtask ({messagesRemaining} turns remaining)." : null;
+			LlmResult result = await service.RunToCompletionAsync(_planningConversation!, continueMessage, true, false, effectiveToken);
 			exitReason = result.ExitReason;
 
 			if (result.ExitReason == LlmExitReason.CostExceeded)

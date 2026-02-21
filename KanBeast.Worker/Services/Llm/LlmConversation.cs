@@ -179,7 +179,7 @@ public class CompactingConversation : ILlmConversation
 		MarkDirty();
 	}
 
-	public void AddAssistantMessage(ConversationMessage message, string modelName)
+	public void AddAssistantMessage(ConversationMessage message)
 	{
 		if (Data.IsFinished)
 		{
@@ -187,13 +187,12 @@ public class CompactingConversation : ILlmConversation
 		}
 
 		Messages.Add(message);
-		Data.ActiveModel = modelName;
 		string preview = message.Content?.Length > 50 ? message.Content.Substring(0, 50) + "..." : message.Content ?? "[no content]";
 		if (message.ToolCalls?.Count > 0)
 		{
 			preview = $"[{message.ToolCalls.Count} tool call(s)] {preview}";
 		}
-		Console.WriteLine($"[{DisplayName}] ({modelName}) Assistant: {preview}");
+		Console.WriteLine($"[{DisplayName}] Assistant: {preview}");
 		MarkDirty();
 	}
 
@@ -220,6 +219,18 @@ public class CompactingConversation : ILlmConversation
 		Messages.Add(new ConversationMessage { Role = "system", Content = content });
 		Console.WriteLine($"[{DisplayName}] Note: {content}");
 		MarkDirty();
+	}
+
+	// Pulls the active model name from the current LlmService on the ToolContext.
+	// Called before every sync so Data.ActiveModel stays in step.
+	private void SyncActiveModel()
+	{
+		string? currentModel = ToolContext.LlmService?.Model;
+		if (currentModel != null && currentModel != Data.ActiveModel)
+		{
+			Data.ActiveModel = currentModel;
+			MarkDirty();
+		}
 	}
 
 	public async Task RecordCostAsync(decimal cost, CancellationToken cancellationToken)
@@ -298,6 +309,8 @@ public class CompactingConversation : ILlmConversation
 
 	public async Task ForceFlushAsync()
 	{
+		SyncActiveModel();
+
 		if (_dirtyTimestamp == 0)
 		{
 			return;
@@ -476,6 +489,8 @@ public class CompactingConversation : ILlmConversation
 
 	private async Task LazySyncIfDueAsync()
 	{
+		SyncActiveModel();
+
 		if (_dirtyTimestamp == 0)
 		{
 			return;

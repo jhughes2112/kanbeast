@@ -20,7 +20,7 @@ public interface ILlmConversation
     void IncrementIteration();
 
     void AddUserMessage(string content);
-    void AddAssistantMessage(ConversationMessage message, string modelName);
+    void AddAssistantMessage(ConversationMessage message);
     void AddToolMessage(string toolCallId, string toolResult);
     void AddNote(string content);
 

@@ -134,6 +134,13 @@ public class KanbanHub : Hub<IKanbanHubClient>
     {
         await Clients.Group($"worker-{ticketId}").InterruptConversation(ticketId, conversationId);
     }
+
+    // Called by a browser to change the LLM model of a running conversation.
+    public async Task ChangeConversationModel(string ticketId, string conversationId, string llmConfigId)
+    {
+        Console.WriteLine($"Hub: ChangeConversationModel for ticket '{ticketId}', conversation '{conversationId}', llm '{llmConfigId}'");
+        await Clients.Group($"worker-{ticketId}").ConversationModelChanged(ticketId, conversationId, llmConfigId);
+    }
 }
 
 public interface IKanbanHubClient
@@ -148,6 +155,7 @@ public interface IKanbanHubClient
     Task ConversationBusy(string ticketId, string conversationId, bool isBusy);
     Task ClearConversation(string ticketId, string conversationId);
     Task InterruptConversation(string ticketId, string conversationId);
+    Task ConversationModelChanged(string ticketId, string conversationId, string llmConfigId);
     Task SettingsUpdated(List<LLMConfig> llmConfigs);
     Task WorkerChatMessage(string ticketId, string conversationId, string message);
 }

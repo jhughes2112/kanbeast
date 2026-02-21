@@ -1630,7 +1630,7 @@ function buildPlannerLlmDropdown(ticket, elementId) {
     }
 
     const currentId = ticket.plannerLlmId || '';
-    let options = `<option value=""${currentId === '' ? ' selected' : ''}>🤖 Auto</option>`;
+    let options = '';
 
     llmConfigs.forEach(config => {
         const id = config.id || '';
@@ -1642,7 +1642,7 @@ function buildPlannerLlmDropdown(ticket, elementId) {
     return `<select id="${elementId}" class="${elementId === 'chatPlannerLlm' ? 'chat-conversation-select' : 'detail-chat-select'}" onchange="updatePlannerLlm('${ticket.id}', this.value)" title="Planner LLM">${options}</select>`;
 }
 
-// Update the planner LLM for a ticket and sync both dropdowns
+// Update the planner LLM for a ticket and notify the active conversation
 async function updatePlannerLlm(ticketId, llmId) {
     // Sync both dropdowns so they stay in sync.
     const detailSelect = document.getElementById('detailPlannerLlm');
@@ -1654,6 +1654,18 @@ async function updatePlannerLlm(ticketId, llmId) {
         chatSelect.value = llmId;
     }
 
+    // Notify the worker to switch the active conversation's model.
+    const conversationId = (detailChatTicketId === ticketId ? detailChatConversationId : null)
+        || (chatModalTicketId === ticketId ? chatModalConversationId : null);
+    if (conversationId && llmId && connection) {
+        try {
+            await connection.invoke('ChangeConversationModel', ticketId, conversationId, llmId);
+        } catch (error) {
+            console.error('Error sending model change to worker:', error);
+        }
+    }
+
+    // Persist the preference on the ticket for future startups.
     try {
         const response = await fetch(`${API_BASE}/tickets/${ticketId}/plannerllm`, {
             method: 'PATCH',
