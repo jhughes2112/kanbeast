@@ -46,7 +46,6 @@ public static class DeveloperTools
 			try
 			{
 				await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(WorkerSession.TicketHolder.Ticket.Id, taskId, subtaskId, SubtaskStatus.InProgress, WorkerSession.CancellationToken);
-				await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Started subtask: {subtaskName}", WorkerSession.CancellationToken);
 
 				string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
@@ -56,6 +55,9 @@ public static class DeveloperTools
 					result = new ToolResult($"Error: LLM config '{llmConfigId}' not found", false, false);
 					return result;
 				}
+
+				string modelTag = $"{llmConfigId[..4]}:{service.Model}";
+				await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Started subtask [{modelTag}]: {subtaskName}", WorkerSession.CancellationToken);
 
 				ToolContext devContext = new ToolContext(taskId, subtaskId, service, null);
 

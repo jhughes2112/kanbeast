@@ -71,6 +71,15 @@ public class TicketsController : ControllerBase
         return Ok(data);
     }
 
+    [HttpDelete("{id}/conversations/finished")]
+    public async Task<IActionResult> DeleteFinishedConversations(string id)
+    {
+        int removed = await _conversationStore.DeleteFinishedAsync(id);
+        List<ConversationInfo> infos = _conversationStore.GetInfoList(id);
+        await _hubContext.Clients.Group($"ticket-{id}").ConversationsUpdated(id, infos);
+        return Ok(new { removed });
+    }
+
     [HttpDelete("{id}/conversations/{conversationId}")]
     public async Task<IActionResult> DeleteConversation(string id, string conversationId)
     {

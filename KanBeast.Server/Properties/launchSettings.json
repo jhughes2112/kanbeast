@@ -2,11 +2,7 @@
   "profiles": {
     "Server": {
       "commandName": "Project",
-      "workingDirectory": "D:\\kanbeast",
-      "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Production",
-        "ASPNETCORE_URLS": "http://localhost:8080"
-      },
+      "workingDirectory": "D:\\Github\\kanbeast\\env",
       "dotnetRunMessages": false,
       "applicationUrl": "http://localhost:8080"
     }

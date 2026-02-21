@@ -310,6 +310,11 @@ public class LlmService
 						finalResult = new LlmResult(LlmExitReason.ModelChanged, string.Empty, string.Empty, null, null);
 						break;
 					}
+					else
+					{
+						Console.WriteLine($"[{conversation.Id}] Model change to '{newLlmConfigId}' failed: config not found in registry, re-queuing");
+						WorkerSession.HubClient.RequeueModelChange(conversation.Id, newLlmConfigId);
+					}
 				}
 
 				// Some providers (e.g. Anthropic) reject conversations that don't end with a user or tool message.

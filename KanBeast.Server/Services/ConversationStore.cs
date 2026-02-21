@@ -126,7 +126,8 @@ public class ConversationStore
                     MessageCount = data.Messages.Count,
                     IsFinished = data.IsFinished,
                     StartedAt = data.StartedAt,
-                    ActiveModel = data.ActiveModel
+                    ActiveModel = data.ActiveModel,
+                    Role = data.Role
                 });
             }
 
@@ -191,6 +192,43 @@ public class ConversationStore
 
             await SaveFileAsync(ticketId, convos);
             return true;
+        }
+        finally
+        {
+            fileLock.Release();
+        }
+    }
+
+    public async Task<int> DeleteFinishedAsync(string ticketId)
+    {
+        SemaphoreSlim fileLock = GetLock(ticketId);
+        await fileLock.WaitAsync();
+        try
+        {
+            Dictionary<string, ConversationData> convos = LoadFile(ticketId);
+            int removed = 0;
+
+            List<string> toRemove = new List<string>();
+            foreach ((string id, ConversationData data) in convos)
+            {
+                if (data.IsFinished)
+                {
+                    toRemove.Add(id);
+                }
+            }
+
+            foreach (string id in toRemove)
+            {
+                convos.Remove(id);
+                removed++;
+            }
+
+            if (removed > 0)
+            {
+                await SaveFileAsync(ticketId, convos);
+            }
+
+            return removed;
         }
         finally
         {

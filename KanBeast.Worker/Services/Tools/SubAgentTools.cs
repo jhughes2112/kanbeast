@@ -52,7 +52,8 @@ public static class SubAgentTools
 		{
 			try
 			{
-				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.DeveloperSubagent, "Sub-agent", llmConfigId, context);
+				string continueMessage = "Continue working. You must use tools to make progress and call agent_task_complete when finished ({messagesRemaining} turns remaining). Do NOT respond with only text.";
+				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.DeveloperSubagent, "Sub-agent", llmConfigId, continueMessage, context);
 				result = new ToolResult(content, false, false);
 			}
 			catch (OperationCanceledException)
@@ -112,7 +113,8 @@ public static class SubAgentTools
 		{
 			try
 			{
-				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.PlanningSubagent, "Inspection", context.LlmConfigId, context);
+				string continueMessage = "Continue investigating. Use tools to gather information and call agent_task_complete with your findings when done ({messagesRemaining} turns remaining). Do NOT respond with only text.";
+				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.PlanningSubagent, "Inspection", context.LlmConfigId, continueMessage, context);
 				result = new ToolResult(content, false, false);
 			}
 			catch (OperationCanceledException)
@@ -136,15 +138,17 @@ public static class SubAgentTools
 		LlmRole role,
 		string displayPrefix,
 		string? llmConfigId,
+		string continueMessage,
 		ToolContext context)
 	{
-		await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"{displayPrefix}: {taskSummary}", WorkerSession.CancellationToken);
-
 		LlmService? service = !string.IsNullOrWhiteSpace(llmConfigId) ? WorkerSession.LlmProxy.GetService(llmConfigId) : null;
 		if (service == null)
 		{
 			return $"{displayPrefix} failed: LLM config '{llmConfigId}' not found";
 		}
+
+		string modelTag = $"{llmConfigId![..4]}:{service.Model}";
+		await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"{displayPrefix} [{modelTag}]: {taskSummary}", WorkerSession.CancellationToken);
 
 		string fullInstructions = $"{taskSummary}\n\n{instructions}";
 
@@ -172,7 +176,7 @@ public static class SubAgentTools
 		await WorkerSession.HubClient.SetConversationBusyAsync(conversation.Id, true);
 		try
 		{
-			llmResult = await service.RunToCompletionAsync(conversation, null, false, true, context.CancellationToken);
+			llmResult = await service.RunToCompletionAsync(conversation, continueMessage, false, true, context.CancellationToken);
 		}
 		finally
 		{

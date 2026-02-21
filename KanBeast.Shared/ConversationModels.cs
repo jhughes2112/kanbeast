@@ -97,4 +97,8 @@ public class ConversationInfo
 	[JsonPropertyName("activeModel")]
 	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
 	public string? ActiveModel { get; set; }
+
+	[JsonPropertyName("role")]
+	[JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+	public string? Role { get; set; }
 }

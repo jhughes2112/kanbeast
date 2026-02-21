@@ -949,6 +949,7 @@ async function showTicketDetails(ticketId) {
                         <option value="">💬 Select conversation…</option>
                     </select>
                     <button id="detailDeleteConvoBtn" class="detail-chat-maximize" title="Delete conversation" style="display:none;" onclick="deleteSelectedDetailConversation()">🗑️</button>
+                    <button class="detail-chat-maximize" title="Delete all finished conversations" onclick="deleteFinishedConversations('${ticketId}')">🧹</button>
                     <button class="detail-chat-maximize" onclick="openChat('${ticketId}')" title="Maximize chat">⤢</button>
                 </div>
                 <div class="detail-chat-messages" id="detailChatMessages">
@@ -1209,7 +1210,7 @@ function setupDetailChat(ticketId) {
         const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
         const option = document.createElement('option');
         option.value = c.id;
-        option.textContent = c.displayName + suffix;
+        option.textContent = conversationDepthPrefix(c.role) + c.displayName + suffix;
         dropdown.appendChild(option);
     }
 
@@ -1845,6 +1846,21 @@ function deleteSelectedDetailConversation() {
 
 window.deleteSelectedDetailConversation = deleteSelectedDetailConversation;
 
+async function deleteFinishedConversations(ticketId) {
+    if (!ticketId) return;
+
+    try {
+        const resp = await fetch(`${API_BASE}/tickets/${ticketId}/conversations/finished`, { method: 'DELETE' });
+        if (!resp.ok) {
+            console.warn('Failed to delete finished conversations:', resp.status);
+        }
+    } catch (err) {
+        console.error('Error deleting finished conversations:', err);
+    }
+}
+
+window.deleteFinishedConversations = deleteFinishedConversations;
+
 // Drag and drop
 function canMoveFrom(status) {
     return ALLOWED_TRANSITIONS[status] && ALLOWED_TRANSITIONS[status].length > 0;
@@ -2417,6 +2433,13 @@ function saveSettingsAccordionState(key, expanded) {
     }
 }
 
+// Returns a depth-prefix arrow for the conversation dropdown based on role.
+function conversationDepthPrefix(role) {
+    if (role === 'Developer') return '→ ';
+    if (role === 'DeveloperSubagent' || role === 'PlanningSubagent') return '→→ ';
+    return '';
+}
+
 // Sorts conversations: unfinished first, then finished. Within each group, newest first by startedAt.
 function sortConversations(convos) {
     return [...convos].sort((a, b) => {
@@ -2456,7 +2479,7 @@ function updateConversationDropdown(ticketId, switchToId) {
         const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
         const option = document.createElement('option');
         option.value = c.id;
-        option.textContent = c.displayName + suffix;
+        option.textContent = conversationDepthPrefix(c.role) + c.displayName + suffix;
         dropdown.appendChild(option);
     }
 
@@ -2500,7 +2523,7 @@ function updateDetailConversationDropdown(ticketId, switchToId) {
         const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
         const option = document.createElement('option');
         option.value = c.id;
-        option.textContent = c.displayName + suffix;
+        option.textContent = conversationDepthPrefix(c.role) + c.displayName + suffix;
         dropdown.appendChild(option);
     }
 
@@ -2624,7 +2647,7 @@ function openChat(ticketId) {
         const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
         const option = document.createElement('option');
         option.value = c.id;
-        option.textContent = c.displayName + suffix;
+        option.textContent = conversationDepthPrefix(c.role) + c.displayName + suffix;
         dropdown.appendChild(option);
     }
 
@@ -2671,6 +2694,15 @@ function openChat(ticketId) {
         deleteConversation(ticketId, dropdown.value);
     });
     dropdownContainer.appendChild(deleteBtn);
+
+    const deleteAllBtn = document.createElement('button');
+    deleteAllBtn.className = 'detail-chat-maximize';
+    deleteAllBtn.title = 'Delete all finished conversations';
+    deleteAllBtn.textContent = '🧹';
+    deleteAllBtn.addEventListener('click', () => {
+        deleteFinishedConversations(ticketId);
+    });
+    dropdownContainer.appendChild(deleteAllBtn);
 
     // Show/hide delete button based on selection.
     function updateDeleteButton() {

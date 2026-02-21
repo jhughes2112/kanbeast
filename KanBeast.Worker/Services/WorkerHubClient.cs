@@ -196,6 +196,12 @@ public class WorkerHubClient : IAsyncDisposable
 		return null;
 	}
 
+	// Re-queues a model change that could not be applied (e.g. config not yet in registry).
+	public void RequeueModelChange(string conversationId, string llmConfigId)
+	{
+		_pendingModelChanges[conversationId] = llmConfigId;
+	}
+
 	// Returns true if there are pending chat messages or a clear request for the conversation.
 	public bool HasPendingWork(string conversationId)
 	{
