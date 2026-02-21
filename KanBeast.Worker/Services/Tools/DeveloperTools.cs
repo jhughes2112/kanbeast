@@ -157,33 +157,7 @@ public static class DeveloperTools
 		sb.AppendLine(subtaskDescription);
 		sb.AppendLine();
 		sb.AppendLine("Call end_subtask tool when complete.");
-		sb.AppendLine();
-
-		// Include available LLMs so the developer can pick its own sub-agent model.
-		decimal remainingBudget = ticket.MaxCost <= 0 ? 0m : Math.Max(0m, ticket.MaxCost - ticket.LlmCost);
-		List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> llms =
-			WorkerSession.LlmProxy.GetAvailableLlmSummaries(remainingBudget);
-
-		sb.AppendLine("# Available LLMs for sub-agents");
-		sb.AppendLine("Choose a sub-agent LLM from this list when launching start_sub_agent. Prefer cheaper models for straightforward tool work.");
-		foreach ((string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable) llm in llms)
-		{
-			if (!llm.isAvailable)
-			{
-				continue;
-			}
-
-			sb.Append($"  - id: {llm.id}, model: {llm.model}, cost: ${llm.costPer1MTokens:F2}");
-			if (!string.IsNullOrWhiteSpace(llm.strengths))
-			{
-				sb.Append($", strengths: {llm.strengths}");
-			}
-			if (!string.IsNullOrWhiteSpace(llm.weaknesses))
-			{
-				sb.Append($", weaknesses: {llm.weaknesses}");
-			}
-			sb.AppendLine();
-		}
+		sb.AppendLine("Use list_available_llms to see which models you can pass to start_sub_agent.");
 
 		return sb.ToString();
 	}

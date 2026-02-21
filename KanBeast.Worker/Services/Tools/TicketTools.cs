@@ -292,6 +292,68 @@ public static class TicketTools
     }
 
     [Description("""
+        List all available LLM configurations with their strengths, weaknesses, and cost.
+        Paid models are automatically filtered out when the ticket has no remaining budget.
+        Use this to pick which model to pass to start_developer or start_sub_agent.
+        Prefer cheaper models for straightforward tool work and reserve expensive models for complex reasoning.
+        """)]
+    public static Task<ToolResult> ListAvailableLlmsAsync(ToolContext context)
+    {
+        Ticket ticket = WorkerSession.TicketHolder.Ticket;
+        decimal remainingBudget = ticket.MaxCost <= 0 ? 0m : Math.Max(0m, ticket.MaxCost - ticket.LlmCost);
+        List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> llms =
+            WorkerSession.LlmProxy.GetAvailableLlmSummaries(remainingBudget);
+
+        List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> availableLlms = new();
+        foreach ((string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable) llm in llms)
+        {
+            if (llm.isAvailable)
+            {
+                availableLlms.Add(llm);
+            }
+        }
+
+        StringBuilder sb = new StringBuilder();
+
+        if (availableLlms.Count == 0)
+        {
+            sb.AppendLine("BLOCKED: No LLMs are available.");
+
+            if (remainingBudget > 0)
+            {
+                sb.AppendLine($"  Reason: Remaining budget (${remainingBudget:F2}) cannot afford 1M tokens from any configured model.");
+            }
+            else
+            {
+                sb.AppendLine("  Reason: All configured LLMs are permanently down or unavailable.");
+            }
+        }
+        else
+        {
+            sb.AppendLine("AVAILABLE LLMs (prefer cheaper models for straightforward work):");
+
+            foreach ((string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable) llm in availableLlms)
+            {
+                sb.AppendLine($"  - id: {llm.id}");
+                sb.AppendLine($"    model: {llm.model}");
+                sb.AppendLine($"    cost_per_1m_tokens: ${llm.costPer1MTokens:F2}");
+
+                if (!string.IsNullOrWhiteSpace(llm.strengths))
+                {
+                    sb.AppendLine($"    strengths: {llm.strengths}");
+                }
+
+                if (!string.IsNullOrWhiteSpace(llm.weaknesses))
+                {
+                    sb.AppendLine($"    weaknesses: {llm.weaknesses}");
+                }
+            }
+        }
+
+        return Task.FromResult(new ToolResult(sb.ToString(), false, false));
+    }
+
+    [Description("""
         Get the next subtask (or task without subtasks) that needs work, along with the list of available LLMs you can delegate to.
         Call this to find what to work on next.
         The response includes:

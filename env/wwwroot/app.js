@@ -141,19 +141,19 @@ function setupSignalR() {
         .configureLogging(signalR.LogLevel.Warning)
         .build();
 
-    // All events trigger full state refresh for idempotency
+    // Targeted handlers: update local state and only refresh the detail modal for the affected ticket.
     connection.on('TicketUpdated', (ticket) => {
         console.log('SignalR: TicketUpdated received', ticket.id, ticket.title);
         checkCompletionSounds(ticket);
-        handleTicketEvent();
+        applyTicketUpdate(ticket);
     });
     connection.on('TicketCreated', (ticket) => {
         console.log('SignalR: TicketCreated received', ticket.id, ticket.title);
-        handleTicketEvent();
+        applyTicketCreated(ticket);
     });
     connection.on('TicketDeleted', (ticketId) => {
         console.log('SignalR: TicketDeleted received', ticketId);
-        handleTicketEvent();
+        applyTicketDeleted(ticketId);
     });
 
     connection.on('SettingsUpdated', async (llmConfigs) => {
@@ -360,16 +360,63 @@ function updateConnectionStatus(status, text) {
     }
 }
 
-// Event handlers - always refresh full state
+// Merge a single ticket update into the local array without re-fetching.
+function mergeTicketIntoLocal(ticket) {
+    let found = false;
+    for (let i = 0; i < tickets.length; i++) {
+        if (tickets[i].id === ticket.id) {
+            tickets[i] = ticket;
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        tickets.push(ticket);
+    }
+}
+
+// TicketUpdated: merge into local state, re-render board cards, refresh detail only for this ticket.
+async function applyTicketUpdate(ticket) {
+    mergeTicketIntoLocal(ticket);
+    renderAllTickets();
+
+    if (currentDetailTicketId === ticket.id) {
+        await showTicketDetails(ticket.id);
+    }
+
+    if (chatModalTicketId === ticket.id) {
+        refreshChatInfoBar(ticket.id);
+        if (chatModalConversationId) {
+            syncLlmDropdownToConversation(ticket.id, chatModalConversationId, 'chatPlannerLlm');
+        }
+    }
+}
+
+// TicketCreated: add to local state and re-render board cards. No detail modal impact.
+function applyTicketCreated(ticket) {
+    mergeTicketIntoLocal(ticket);
+    renderAllTickets();
+}
+
+// TicketDeleted: remove from local state, re-render board, close detail only if viewing that ticket.
+function applyTicketDeleted(ticketId) {
+    tickets = tickets.filter(t => t.id !== ticketId);
+    renderAllTickets();
+
+    if (currentDetailTicketId === ticketId) {
+        document.getElementById('ticketDetailModal').classList.remove('active');
+        currentDetailTicketId = null;
+    }
+}
+
+// Full refresh used only on reconnect.
 async function handleTicketEvent() {
     await refreshAllTickets();
 
-    // If viewing a ticket detail, refresh it too
     if (currentDetailTicketId) {
         await showTicketDetails(currentDetailTicketId);
     }
 
-    // If the full-screen chat modal is open, refresh its info bar and planner LLM dropdown.
     if (chatModalTicketId) {
         refreshChatInfoBar(chatModalTicketId);
         if (chatModalConversationId) {
