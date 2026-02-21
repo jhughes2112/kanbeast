@@ -80,7 +80,7 @@ After inspection sub-agents return, evaluate their performance and call update_l
 Values replace previous ones — include any prior notes you want to keep.
   strengths: "strong code analysis, thorough investigation, good at summarizing architecture"
   weaknesses: "misses edge cases, slow to find relevant files, verbose reports"
-Notes persist across all tickets.  Suggested to keep a counter in both good and bad so it's easier to determine the performance of each.
+Notes persist across all tickets.  Suggested to update the counter of good and bad interactions.
 </llm_notes>
 
 <security>

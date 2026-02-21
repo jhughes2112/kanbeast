@@ -125,6 +125,9 @@ public class TicketsController : ControllerBase
         Ticket createdTicket = await _ticketService.CreateTicketAsync(ticket);
         _logger.LogInformation("POST /tickets - created #{Id}: {Title}", createdTicket.Id, createdTicket.Title);
 
+        // Purge any stale conversation file left over from a previous ticket with the same ID.
+        _conversationStore.DeleteForTicket(createdTicket.Id);
+
         // Start a worker container for this ticket immediately.
         if (_workerOrchestrator is WorkerOrchestrator orchestrator)
         {
@@ -187,6 +190,8 @@ public class TicketsController : ControllerBase
         {
             return NotFound();
         }
+
+        _conversationStore.DeleteForTicket(id);
 
         _logger.LogInformation("DELETE /tickets/{Id} - deleted", id);
         await _hubContext.Clients.All.TicketDeleted(id);
