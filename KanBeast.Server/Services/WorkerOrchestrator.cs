@@ -196,7 +196,7 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
         List<Ticket> ticketsWithWorkers = new List<Ticket>();
         foreach (Ticket ticket in allTickets)
         {
-            if (!string.IsNullOrEmpty(ticket.ContainerName) && ticket.Status != TicketStatus.Done)
+            if (!string.IsNullOrEmpty(ticket.ContainerName))
             {
                 ticketsWithWorkers.Add(ticket);
             }

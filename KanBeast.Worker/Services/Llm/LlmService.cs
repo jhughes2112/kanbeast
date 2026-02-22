@@ -482,7 +482,7 @@ public class LlmService
 				}
 			}
 		}
-		catch (OperationCanceledException)
+		catch (OperationCanceledException ex)
 		{
 			// Cancel tool CTS so any running tools/sub-agents see it and add their own notes.
 			toolCts.Cancel();
@@ -495,8 +495,10 @@ public class LlmService
 			}
 			else
 			{
-				// Parent cancelled (e.g., planning agent interrupted while this sub-agent was running).
-				conversation.AddNote("Parent conversation was interrupted.");
+				// The caller's token was cancelled (ticket left Active, or parent agent interrupted).
+				// Surface the exception message so the real reason is visible in the conversation.
+				string reason = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
+				conversation.AddNote($"Cancelled: {reason}");
 				throw;
 			}
 		}

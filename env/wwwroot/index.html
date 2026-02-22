@@ -46,7 +46,7 @@
 				<span class="status-dot"></span>
 				<span id="connectionText">Connecting...</span>
 			</div>
-			<button id="settingsBtn" class="btn-secondary">⚙️ Settings</button>
+			<button id="settingsBtn" class="btn-secondary" title="Open settings">⚙️ Settings</button>
 		</nav>
 	</header>
 
@@ -54,7 +54,7 @@
 		<div class="column" data-status="Backlog">
 			<div class="column-header">
 				<h2>📋 Backlog</h2>
-				<button id="newTicketBtn" class="btn-primary btn-sm">+ New</button>
+				<button id="newTicketBtn" class="btn-primary btn-sm" title="Create new ticket">+ New</button>
 				<span class="count" id="backlog-count">0</span>
 			</div>
 			<div class="ticket-container" id="backlog-container"></div>
@@ -87,7 +87,7 @@
 		<div class="modal-content">
 			<div class="modal-header">
 				<h2>Create New Ticket</h2>
-				<button class="close" aria-label="Close">&times;</button>
+				<button class="close" title="Close" aria-label="Close">&times;</button>
 			</div>
 			<form id="newTicketForm">
 				<div class="form-group">
@@ -117,30 +117,7 @@
 	<!-- Ticket Detail Modal -->
 	<div id="ticketDetailModal" class="modal">
 		<div class="modal-content detail-modal-content">
-			<div class="modal-header">
-				<h2 id="detailTitle">Ticket Details</h2>
-			</div>
 			<div id="ticketDetail" class="detail-panes"></div>
-			<div id="ticketDetailActions" class="ticket-actions"></div>
-			<div class="detail-resize-handle" id="detailResizeHandle">⟡</div>
-		</div>
-	</div>
-
-	<!-- Chat Modal -->
-	<div id="chatModal" class="modal">
-		<div class="modal-content chat-modal-content">
-			<div class="modal-header chat-modal-header">
-				<h2 id="chatTitle">💬 Conversations</h2>
-				<div id="chatConversationPicker" class="chat-conversation-picker"></div>
-				<button class="close" id="chatCloseBtn" aria-label="Close">&times;</button>
-			</div>
-			<div id="chatInfoBar" class="chat-info-bar" style="display:none;"></div>
-			<div id="chatMessages" class="chat-messages"></div>
-			<div class="chat-input-area">
-				<textarea id="chatInput" class="chat-input" placeholder="Select a conversation…" rows="1" disabled></textarea>
-				<button id="chatStopBtn" class="btn-danger chat-stop-btn" title="Stop" onclick="interruptConversation()">■</button>
-				<button id="chatSendBtn" class="btn-primary chat-send-btn" disabled>→</button>
-			</div>
 		</div>
 	</div>
 
@@ -149,7 +126,7 @@
 		<div class="modal-content">
 			<div class="modal-header">
 				<h2>Settings</h2>
-				<button class="close" aria-label="Close">&times;</button>
+				<button class="close" title="Close" aria-label="Close">&times;</button>
 			</div>
 			<div id="settingsContent">
 				<div class="accordion collapsed">
@@ -169,7 +146,7 @@
 							<small style="color: var(--gray-500);">Shared by all LLMs and web search.</small>
 						</div>
 						<div id="llmConfigs"></div>
-						<button id="addLLMBtn" class="btn-secondary" type="button">+ Add LLM Configuration</button>
+						<button id="addLLMBtn" class="btn-secondary" type="button" title="Add a new LLM configuration">+ Add LLM Configuration</button>
 					</div>
 				</div>
 
@@ -329,11 +306,13 @@
 
 				if (typeof init === 'function') {
 					init();
-					setupChatEventListeners();
 				}
 			} catch (error) {
 				console.error('Failed to load application:', error);
-				document.getElementById('loadingStatus').textContent = 'Failed to load. Please refresh.';
+				const loadingStatus = document.getElementById('loadingStatus');
+				if (loadingStatus) {
+					loadingStatus.textContent = 'Failed to load. Please refresh.';
+				}
 			}
 		})();
 	</script>

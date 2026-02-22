@@ -182,9 +182,6 @@ function setupSignalR() {
             }
         }
 
-        if (chatModalTicketId === ticketId) {
-            updateConversationDropdown(ticketId, newestNewId);
-        }
         if (currentDetailTicketId === ticketId) {
             updateDetailConversationDropdown(ticketId, newestNewId);
         }
@@ -199,14 +196,7 @@ function setupSignalR() {
         for (let i = 0; i < messages.length; i++) {
             conversationMessages[key].push(messages[i]);
         }
-        // If this conversation is currently displayed in the full chat modal, render new messages live.
-        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
-            const fullMessages = conversationMessages[key];
-            for (let i = 0; i < messages.length; i++) {
-                renderSingleChatMessage(fullMessages, startIndex + i);
-            }
-        }
-        // Also render in the inline detail chat if visible.
+        // Render in the inline detail chat if visible.
         if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
             const messagesDiv = document.getElementById('detailChatMessages');
             if (messagesDiv) {
@@ -231,9 +221,6 @@ function setupSignalR() {
     connection.on('ConversationSynced', (ticketId, conversationId) => {
         const key = `${ticketId}:${conversationId}`;
         delete conversationMessages[key];
-        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
-            reloadConversationPreservingScroll(ticketId, conversationId);
-        }
         if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
             reloadDetailConversationPreservingScroll(ticketId, conversationId);
         }
@@ -242,9 +229,6 @@ function setupSignalR() {
     connection.on('ConversationReset', (ticketId, conversationId) => {
         const key = `${ticketId}:${conversationId}`;
         delete conversationMessages[key];
-        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
-            reloadConversationPreservingScroll(ticketId, conversationId);
-        }
         if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
             reloadDetailConversationPreservingScroll(ticketId, conversationId);
         }
@@ -263,19 +247,6 @@ function setupSignalR() {
         // Auto-switch: if the user was watching this conversation, jump to the next active one.
         const nextActiveId = pickDefaultConversation((convos || []).filter(c => !c.isFinished));
 
-        if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
-            if (nextActiveId) {
-                chatModalConversationId = nextActiveId;
-                const dropdown = document.getElementById('conversationDropdown');
-                if (dropdown) {
-                    dropdown.value = nextActiveId;
-                    dropdown.dispatchEvent(new Event('change'));
-                }
-            } else {
-                setChatInputEnabled(false);
-            }
-        }
-
         if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
             if (nextActiveId) {
                 detailChatConversationId = nextActiveId;
@@ -289,9 +260,6 @@ function setupSignalR() {
             }
         }
 
-        if (chatModalTicketId === ticketId) {
-            updateConversationDropdown(ticketId);
-        }
         if (currentDetailTicketId === ticketId) {
             updateDetailConversationDropdown(ticketId);
         }
@@ -322,13 +290,6 @@ function setupSignalR() {
                 await connection.invoke('SubscribeToTicket', currentDetailTicketId);
             } catch (error) {
                 console.warn('Could not re-subscribe to ticket updates:', error);
-            }
-        }
-        if (chatModalTicketId && chatModalTicketId !== currentDetailTicketId) {
-            try {
-                await connection.invoke('SubscribeToTicket', chatModalTicketId);
-            } catch (error) {
-                console.warn('Could not re-subscribe to chat modal ticket:', error);
             }
         }
     });
@@ -411,13 +372,6 @@ async function applyTicketUpdate(ticket) {
     if (currentDetailTicketId === ticket.id) {
         await showTicketDetails(ticket.id);
     }
-
-    if (chatModalTicketId === ticket.id) {
-        refreshChatInfoBar(ticket.id);
-        if (chatModalConversationId) {
-            syncLlmDropdownToConversation(ticket.id, chatModalConversationId, 'chatPlannerLlm');
-        }
-    }
 }
 
 // TicketCreated: add to local state and re-render board cards. No detail modal impact.
@@ -443,13 +397,6 @@ async function handleTicketEvent() {
 
     if (currentDetailTicketId) {
         await showTicketDetails(currentDetailTicketId);
-    }
-
-    if (chatModalTicketId) {
-        refreshChatInfoBar(chatModalTicketId);
-        if (chatModalConversationId) {
-            syncLlmDropdownToConversation(chatModalTicketId, chatModalConversationId, 'chatPlannerLlm');
-        }
     }
 }
 
@@ -810,7 +757,6 @@ async function showTicketDetails(ticketId) {
 
     const ticket = await response.json();
     const modal = document.getElementById('ticketDetailModal');
-    const titleEl = document.getElementById('detailTitle');
     const detailDiv = document.getElementById('ticketDetail');
     const status = ticket.status || 'Backlog';
 
@@ -827,10 +773,7 @@ async function showTicketDetails(ticketId) {
         console.warn('Could not fetch conversations:', error);
     }
 
-    // Title will be placed in the detail section below
-
     // Build task/subtask HTML with status icons
-    // Statuses: Incomplete=0, InProgress=1, AwaitingReview=2, Complete=3, Rejected=4
     let tasksHtml = '<div class="empty-state">No tasks yet</div>';
 
     if (ticket.tasks && ticket.tasks.length > 0) {
@@ -905,8 +848,8 @@ async function showTicketDetails(ticketId) {
         tasksHtml += '</ul>';
     }
 
-    // Build latest activity message (shown under title)
-    let latestActivityHtml = '';
+    // Build latest activity message
+    let latestActivityHtml = '<div class="detail-latest-activity" style="opacity:0.5;"><span class="activity-message">No activity yet</span></div>';
     if (ticket.activityLog && ticket.activityLog.length > 0) {
         const latestLog = ticket.activityLog[ticket.activityLog.length - 1];
         const parsed = parseLogEntry(latestLog);
@@ -920,7 +863,7 @@ async function showTicketDetails(ticketId) {
             logClass = 'worker';
         }
 
-        const displayMessage = parsed.message.length > 75 ? parsed.message.substring(0, 75) + '…' : parsed.message;
+        const displayMessage = parsed.message.length > 100 ? parsed.message.substring(0, 100) + '…' : parsed.message;
 
         latestActivityHtml = `
             <div class="detail-latest-activity ${logClass}">
@@ -930,134 +873,143 @@ async function showTicketDetails(ticketId) {
         `;
     }
 
-    // Build action buttons based on allowed transitions
-    let actionsHtml = '';
-    const allowedTargets = ALLOWED_TRANSITIONS[status] || [];
     const canDelete = status === 'Backlog' || status === 'Done';
     const canEdit = status === 'Backlog';
 
+    // Build status action button
+    let statusActionBtn = '';
     if (status === 'Backlog') {
-        actionsHtml += `<button class="btn-primary" onclick="moveTicket('${ticketId}', 'Active')">🚀 Start Work</button>`;
+        statusActionBtn = `<button class="btn-primary btn-sm" title="Start working on this ticket" onclick="moveTicket('${ticketId}', 'Active')">🚀 Start</button>`;
     } else if (status !== 'Done') {
-        actionsHtml += `<button class="btn-danger" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Cancel & Return to Backlog</button>`;
+        statusActionBtn = `<button class="btn-danger btn-sm" title="Cancel and return to backlog" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Cancel</button>`;
     } else {
-        actionsHtml += `<button class="btn-secondary" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Reopen</button>`;
+        statusActionBtn = `<button class="btn-secondary btn-sm" title="Reopen this ticket" onclick="moveTicket('${ticketId}', 'Backlog')">↩️ Reopen</button>`;
     }
 
-    // Clear Tasks button - always enabled
-    actionsHtml += `<button class="btn-secondary" onclick="clearTasks('${ticketId}')">🧹 Clear Tasks</button>`;
-
-    // Clear Conversation button
-    actionsHtml += `<button class="btn-secondary" onclick="clearConversation('${ticketId}')">💬 Clear Conversation</button>`;
-
+    // Delete button
+    let deleteBtn = '';
     if (canDelete) {
-        actionsHtml += `<button class="btn-danger btn-delete" onclick="deleteTicket('${ticketId}')">🗑️ Delete Ticket</button>`;
+        deleteBtn = `<button class="btn-danger btn-sm btn-delete" title="Delete this ticket" onclick="deleteTicket('${ticketId}')">🗑️</button>`;
     }
 
-    actionsHtml += '</div>';
-
-    // Title section
-    let titleHtml = `
-        <div class="detail-section">
-            ${canEdit 
-                ? `<input type="text" id="editTitle" class="edit-title-input" value="${escapeHtml(ticket.title)}" placeholder="Ticket title..." onblur="saveTicketDetails('${ticketId}')">`
-                : `<h2 class="detail-title">${escapeHtml(ticket.title)}</h2>`
-            }
-        </div>
-    `;
-
-    // Description accordion
-    let descriptionAccordionHtml = `
-        <div class="accordion collapsed" id="descriptionAccordion">
+    // Title + Description accordion combined
+    let titleDescAccordionHtml = `
+        <div class="accordion" id="titleDescAccordion">
             <div class="accordion-header">
-                <span>📝 Description</span>
+                <span>📝 ${escapeHtml(ticket.title)}</span>
                 <span class="accordion-icon">▼</span>
             </div>
             <div class="accordion-content">
                 ${canEdit 
+                    ? `<input type="text" id="editTitle" class="edit-title-input" value="${escapeHtml(ticket.title)}" placeholder="Ticket title..." onblur="saveTicketDetails('${ticketId}')">`
+                    : ''
+                }
+                ${canEdit 
                     ? `<textarea id="editDescription" class="edit-description-input" rows="4" placeholder="Description..." onblur="saveTicketDetails('${ticketId}')">${escapeHtml(ticket.description || '')}</textarea>`
-                    : `${escapeHtml(ticket.description || 'No description provided.')}`
+                    : `<div class="description-text">${escapeHtml(ticket.description || 'No description provided.')}</div>`
                 }
             </div>
         </div>
     `;
 
-    detailDiv.innerHTML = `
-        <div class="ticket-detail-header">
-            <span class="status-badge ${status.toLowerCase()}">${status}</span>
-            ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : '<span class="branch-name-spacer"></span>'}
-            <div class="ticket-detail-right">
-                <span class="ticket-detail-id">#${ticket.id}</span>
-                <span class="ticket-detail-cost">
-                    $${ticket.llmCost.toFixed(2)} / 
-                    ${status === 'Done' 
-                        ? `$${ticket.maxCost.toFixed(2)}` 
-                        : `$<input type="number" id="maxCostInput" class="cost-inline-input" value="${ticket.maxCost.toFixed(2)}" min="0" step="0.01" onchange="updateMaxCost('${ticket.id}')">`
-                    }
-                </span>
-            </div>
-        </div>
-
-        ${latestActivityHtml}
-
-        ${titleHtml}
-
-        ${descriptionAccordionHtml}
-
+    // Tasks accordion with clear button in header
+    let tasksAccordionHtml = `
         <div class="accordion" id="tasksAccordion">
             <div class="accordion-header">
                 <span>📋 Tasks</span>
+                <button class="btn-secondary btn-sm tasks-clear-btn" title="Clear all tasks" onclick="event.stopPropagation(); clearTasks('${ticketId}')">🧹</button>
                 <span class="accordion-icon">▼</span>
             </div>
             <div class="accordion-content">
                 ${tasksHtml}
             </div>
         </div>
+    `;
 
-        <div class="accordion collapsed" id="chatAccordion">
-            <div class="accordion-header">
-                <span>💬 Chat</span>
-                <span class="accordion-icon">▼</span>
+    detailDiv.innerHTML = `
+        <div class="detail-top-bar">
+            <div class="detail-top-bar-row">
+                <div class="detail-top-bar-left">
+                    <span class="status-badge ${status.toLowerCase()}">${status}</span>
+                    ${statusActionBtn}
+                    ${deleteBtn}
+                </div>
+                <div class="detail-top-bar-center">
+                    ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : ''}
+                </div>
+                <div class="detail-top-bar-right">
+                    <span class="ticket-detail-cost">
+                        $${ticket.llmCost.toFixed(2)} / 
+                        ${status === 'Done' 
+                            ? `$${ticket.maxCost.toFixed(2)}` 
+                            : `$<input type="number" id="maxCostInput" class="cost-inline-input" value="${ticket.maxCost.toFixed(2)}" min="0" step="0.01" title="Max cost budget" onchange="updateMaxCost('${ticket.id}')">`
+                        }
+                    </span>
+                    <button class="close" title="Close" aria-label="Close">&times;</button>
+                </div>
             </div>
-            <div class="accordion-content">
-                <div class="detail-chat-header">
-                    ${buildPlannerLlmDropdown(ticket, 'detailPlannerLlm')}
-                    <select id="detailConversationDropdown" class="detail-chat-select">
-                        <option value="">💬 Select conversation…</option>
-                    </select>
-                    <button id="detailDeleteConvoBtn" class="detail-chat-maximize" title="Delete conversation" style="display:none;" onclick="deleteSelectedDetailConversation()">🗑️</button>
-                    <button class="detail-chat-maximize" title="Delete all finished conversations" onclick="deleteFinishedConversations('${ticketId}')">🧹</button>
-                    <button class="detail-chat-maximize" onclick="openChat('${ticketId}')" title="Maximize chat">⤢</button>
+        </div>
+
+        <div class="detail-main-content">
+            <div class="detail-left-pane">
+                <div class="detail-pane-header">
+                    ${latestActivityHtml}
+                </div>
+                <div class="detail-pane-scroll">
+                    ${titleDescAccordionHtml}
+                    ${tasksAccordionHtml}
+                </div>
+            </div>
+
+            <div class="detail-right-pane">
+                <div class="detail-pane-header">
+                    <div class="detail-conversation-controls">
+                        ${buildPlannerLlmDropdown(ticket, 'detailPlannerLlm')}
+                        <select id="detailConversationDropdown" class="detail-chat-select" title="Select conversation">
+                            <option value="">💬 Select conversation…</option>
+                        </select>
+                        <button id="detailDeleteConvoBtn" class="btn-secondary btn-sm" title="Delete this conversation" style="display:none;" onclick="deleteSelectedDetailConversation()">🗑️</button>
+                        <button class="btn-secondary btn-sm" title="Delete all finished conversations" onclick="deleteFinishedConversations('${ticketId}')">🧹</button>
+                    </div>
                 </div>
                 <div class="detail-chat-messages" id="detailChatMessages">
                     <div class="chat-msg chat-msg-system">Select a conversation above.</div>
                 </div>
-                <div class="detail-chat-input-area">
-                    <textarea id="detailChatInput" class="detail-chat-input" placeholder="Type a message…" rows="1" disabled></textarea>
-                    <button id="detailChatStopBtn" class="btn-danger detail-chat-stop" title="Stop" onclick="interruptConversation()">■</button>
-                    <button id="detailChatSendBtn" class="btn-primary detail-chat-send" disabled>→</button>
-                </div>
             </div>
+        </div>
+
+        <div class="detail-chat-input-area">
+            <textarea id="detailChatInput" class="detail-chat-input" placeholder="Type a message…" rows="1" disabled></textarea>
+            <button id="detailChatStopBtn" class="btn-danger detail-chat-btn inactive" title="Stop generation" onclick="interruptConversation()">■</button>
+            <button id="detailClearConvoBtn" class="btn-secondary detail-chat-btn" title="Clear conversation" onclick="clearConversation('${ticketId}')">🔄</button>
+            <button id="detailChatSendBtn" class="btn-primary detail-chat-btn" title="Send message" disabled>→</button>
         </div>
     `;
 
-    const actionsDiv = document.getElementById('ticketDetailActions');
-    actionsDiv.innerHTML = `<div class="ticket-actions-container">${actionsHtml}</div>`;
-
     modal.classList.add('active');
+
+    // Setup close button
+    const closeBtn = detailDiv.querySelector('.close');
+    if (closeBtn) {
+        closeBtn.addEventListener('click', () => {
+            modal.classList.remove('active');
+            currentDetailTicketId = null;
+            detailChatTicketId = null;
+            detailChatConversationId = null;
+        });
+    }
 
     // Restore accordion states from localStorage
     const accordionStates = getTicketAccordionStates(ticketId);
 
-    const descAccordion = detailDiv.querySelector('#descriptionAccordion');
+    const titleDescAccordion = detailDiv.querySelector('#titleDescAccordion');
     const tasksAccordion = detailDiv.querySelector('#tasksAccordion');
-    const chatAccordion = detailDiv.querySelector('#chatAccordion');
 
-    if (descAccordion) {
-        if (accordionStates.description) {
-            descAccordion.classList.remove('collapsed');
+    if (titleDescAccordion) {
+        if (accordionStates.titleDesc !== false) {
+            titleDescAccordion.classList.remove('collapsed');
         } else {
-            descAccordion.classList.add('collapsed');
+            titleDescAccordion.classList.add('collapsed');
         }
     }
 
@@ -1069,31 +1021,25 @@ async function showTicketDetails(ticketId) {
         }
     }
 
-    if (chatAccordion) {
-        if (accordionStates.chat) {
-            chatAccordion.classList.remove('collapsed');
-        } else {
-            chatAccordion.classList.add('collapsed');
-        }
-    }
-
     // Setup accordion click handlers with state saving
-    const descAccordionHeader = detailDiv.querySelector('#descriptionAccordion .accordion-header');
+    const titleDescAccordionHeader = detailDiv.querySelector('#titleDescAccordion .accordion-header');
     const tasksAccordionHeader = detailDiv.querySelector('#tasksAccordion .accordion-header');
-    const chatAccordionHeader = detailDiv.querySelector('#chatAccordion .accordion-header');
 
-    if (descAccordionHeader) {
-        descAccordionHeader.addEventListener('click', function() {
+    if (titleDescAccordionHeader) {
+        titleDescAccordionHeader.addEventListener('click', function(e) {
             const accordion = this.closest('.accordion');
             accordion.classList.toggle('collapsed');
             const states = getTicketAccordionStates(ticketId);
-            states.description = !accordion.classList.contains('collapsed');
+            states.titleDesc = !accordion.classList.contains('collapsed');
             saveTicketAccordionStates(ticketId, states);
         });
     }
 
     if (tasksAccordionHeader) {
-        tasksAccordionHeader.addEventListener('click', function() {
+        tasksAccordionHeader.addEventListener('click', function(e) {
+            if (e.target.closest('.tasks-clear-btn')) {
+                return;
+            }
             const accordion = this.closest('.accordion');
             accordion.classList.toggle('collapsed');
             const states = getTicketAccordionStates(ticketId);
@@ -1102,17 +1048,7 @@ async function showTicketDetails(ticketId) {
         });
     }
 
-    if (chatAccordionHeader) {
-        chatAccordionHeader.addEventListener('click', function() {
-            const accordion = this.closest('.accordion');
-            accordion.classList.toggle('collapsed');
-            const states = getTicketAccordionStates(ticketId);
-            states.chat = !accordion.classList.contains('collapsed');
-            saveTicketAccordionStates(ticketId, states);
-        });
-    }
-
-    // Add click handlers for expandable tasks and subtasks with single expansion and state preservation
+    // Add click handlers for expandable tasks and subtasks
     detailDiv.querySelectorAll('.task-item[data-has-description="true"]').forEach(taskItem => {
         const taskIndex = taskItem.dataset.taskIndex;
         const descDiv = taskItem.querySelector('.task-description-full');
@@ -1216,51 +1152,6 @@ async function showTicketDetails(ticketId) {
             restoredInput.selectionEnd = savedSelEnd;
         }
     }
-
-    // Setup resize handle
-    setupDetailResize();
-}
-
-// Horizontal splitter drag between two panes.
-function setupSplitter(splitterId, topPaneId, bottomPaneId) {
-    const splitter = document.getElementById(splitterId);
-    const topPane = document.getElementById(topPaneId);
-    const bottomPane = document.getElementById(bottomPaneId);
-    if (!splitter || !topPane || !bottomPane) return;
-
-    let startY = 0;
-    let startTopH = 0;
-    let startBottomH = 0;
-
-    function onMouseDown(e) {
-        e.preventDefault();
-        startY = e.clientY;
-        startTopH = topPane.offsetHeight;
-        startBottomH = bottomPane.offsetHeight;
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-        document.body.style.cursor = 'row-resize';
-        document.body.style.userSelect = 'none';
-    }
-
-    function onMouseMove(e) {
-        const delta = e.clientY - startY;
-        const newTop = Math.max(40, startTopH + delta);
-        const newBottom = Math.max(40, startBottomH - delta);
-        topPane.style.height = newTop + 'px';
-        topPane.style.flex = 'none';
-        bottomPane.style.height = newBottom + 'px';
-        bottomPane.style.flex = 'none';
-    }
-
-    function onMouseUp() {
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-    }
-
-    splitter.addEventListener('mousedown', onMouseDown);
 }
 
 // Inline chat inside the ticket detail modal.
@@ -1549,100 +1440,29 @@ function appendDetailChatBubble(role, content) {
     messagesDiv.scrollTop = messagesDiv.scrollHeight;
 }
 
-// Resize the detail modal from the bottom-right corner.
-function setupDetailResize() {
-    const handle = document.getElementById('detailResizeHandle');
-    const modalContent = handle ? handle.closest('.detail-modal-content') : null;
-    const modal = handle ? handle.closest('.modal') : null;
-    if (!handle || !modalContent || !modal) return;
-
-    let startX = 0;
-    let startY = 0;
-    let startW = 0;
-    let startH = 0;
-    let startLeft = 0;
-    let startTop = 0;
-
-    function onMouseDown(e) {
-        e.preventDefault();
-        e.stopPropagation();
-
-        // Capture initial state.
-        const rect = modalContent.getBoundingClientRect();
-        startX = e.clientX;
-        startY = e.clientY;
-        startW = rect.width;
-        startH = rect.height;
-        startLeft = rect.left;
-        startTop = rect.top;
-
-        // Switch to absolute positioning so we can control position during resize.
-        modal.style.alignItems = 'flex-start';
-        modalContent.style.position = 'absolute';
-        modalContent.style.left = startLeft + 'px';
-        modalContent.style.top = startTop + 'px';
-        modalContent.style.margin = '0';
-
-        document.addEventListener('mousemove', onMouseMove);
-        document.addEventListener('mouseup', onMouseUp);
-        document.body.style.cursor = 'nwse-resize';
-        document.body.style.userSelect = 'none';
-    }
-
-    function onMouseMove(e) {
-        const deltaX = e.clientX - startX;
-        const deltaY = e.clientY - startY;
-
-        const newW = Math.max(400, startW + deltaX);
-        const newH = Math.max(300, startH + deltaY);
-
-        // Keep top-left corner fixed, bottom-right follows mouse.
-        modalContent.style.width = newW + 'px';
-        modalContent.style.maxWidth = newW + 'px';
-        modalContent.style.height = newH + 'px';
-        modalContent.style.maxHeight = newH + 'px';
-    }
-
-    function onMouseUp() {
-        document.removeEventListener('mousemove', onMouseMove);
-        document.removeEventListener('mouseup', onMouseUp);
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-
-        // Leave the modal in absolute positioning so it stays where the user placed it.
-    }
-
-    handle.addEventListener('mousedown', onMouseDown);
-}
-
 // Move ticket to new status
 async function moveTicket(ticketId, newStatus) {
-    // Close modal immediately before API call to prevent SignalR race condition
-    if (currentDetailTicketId === ticketId) {
-        document.getElementById('ticketDetailModal').classList.remove('active');
-        currentDetailTicketId = null;
-        detailChatTicketId = null;
-        detailChatConversationId = null;
-    }
-
     try {
-        const response = await fetch(`${API_BASE}/tickets/${ticketId}/status`, {
-            method: 'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ status: newStatus })
-        });
+            const response = await fetch(`${API_BASE}/tickets/${ticketId}/status`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: newStatus })
+            });
 
-        if (response.ok) {
-            await refreshAllTickets();
-        } else {
-            console.error('Failed to move ticket');
+            if (response.ok) {
+                await refreshAllTickets();
+                if (currentDetailTicketId === ticketId) {
+                    await showTicketDetails(ticketId);
+                }
+            } else {
+                console.error('Failed to move ticket');
+            }
+        } catch (error) {
+            console.error('Error moving ticket:', error);
         }
-    } catch (error) {
-        console.error('Error moving ticket:', error);
     }
-}
 
-// Make moveTicket available globally for onclick handlers
+    // Make moveTicket available globally for onclick handlers
 window.moveTicket = moveTicket;
 window.toggleActivityLog = toggleActivityLog;
 
@@ -1722,19 +1542,14 @@ function buildPlannerLlmDropdown(ticket, elementId) {
 
 // Update the planner LLM for a ticket and notify the active conversation
 async function updatePlannerLlm(ticketId, llmId) {
-    // Sync both dropdowns so they stay in sync.
+    // Sync the dropdown.
     const detailSelect = document.getElementById('detailPlannerLlm');
-    const chatSelect = document.getElementById('chatPlannerLlm');
     if (detailSelect) {
         detailSelect.value = llmId;
     }
-    if (chatSelect) {
-        chatSelect.value = llmId;
-    }
 
     // Notify the worker to switch the active conversation's model.
-    const conversationId = (detailChatTicketId === ticketId ? detailChatConversationId : null)
-        || (chatModalTicketId === ticketId ? chatModalConversationId : null);
+    const conversationId = (detailChatTicketId === ticketId) ? detailChatConversationId : null;
     if (conversationId && llmId && connection) {
         try {
             await connection.invoke('ChangeConversationModel', ticketId, conversationId, llmId);
@@ -1781,10 +1596,6 @@ async function deleteTicket(ticketId) {
                     delete conversationMessages[key];
                 }
             });
-
-            if (chatModalTicketId === ticketId) {
-                closeChatModal();
-            }
 
             await refreshAllTickets();
 
@@ -2103,21 +1914,15 @@ function setupEventListeners() {
         });
     });
 
-    // Close modals on backdrop click
+    // Close modals on backdrop click (not for full-screen ticket detail)
     document.querySelectorAll('.modal').forEach(modal => {
         modal.addEventListener('click', (e) => {
-            if (e.target === modal) {
+            if (e.target === modal && modal.id !== 'ticketDetailModal') {
                 if (modal.id === 'settingsModal') {
                     saveSettings();
                 }
 
                 modal.classList.remove('active');
-
-                if (modal.id === 'ticketDetailModal') {
-                    currentDetailTicketId = null;
-                    detailChatTicketId = null;
-                    detailChatConversationId = null;
-                }
             }
         });
     });
@@ -2136,10 +1941,6 @@ function setupEventListeners() {
                     currentDetailTicketId = null;
                     detailChatTicketId = null;
                     detailChatConversationId = null;
-                }
-
-                if (modal.id === 'chatModal') {
-                    closeChatModal();
                 }
             });
         }
@@ -2327,7 +2128,7 @@ function renderLLMConfigs() {
                     <label>Weaknesses</label>
                     <input type="text" class="llm-weaknesses" value="${escapeHtml(config.weaknesses || '')}" placeholder="e.g. Slow, expensive, poor at UI work">
                 </div>
-                <button type="button" class="btn-danger btn-sm" data-index="${index}" style="width: 100%; display: flex; align-items: center; justify-content: center;">Remove This LLM</button>
+                <button type="button" class="btn-danger btn-sm" data-index="${index}" title="Remove this LLM configuration" style="width: 100%; display: flex; align-items: center; justify-content: center;">Remove This LLM</button>
             </div>
         `;
 
@@ -2435,7 +2236,9 @@ async function saveSettings() {
 function updatePercentLabel() {
     const slider = document.getElementById('contextPercent');
     const label = document.getElementById('contextPercentValue');
-    label.textContent = `${slider.value}%`;
+    if (slider && label) {
+        label.textContent = `${slider.value}%`;
+    }
 }
 
 window.updatePercentLabel = updatePercentLabel;
@@ -2449,8 +2252,6 @@ window.saveSettings = saveSettings;
 let ticketConversations = {};    // ticketId -> [{id, displayName, messageCount, isFinished}]
 let conversationMessages = {};   // "ticketId:conversationId" -> [ConversationMessage]
 let ticketPendingToolCalls = {}; // ticketId -> {toolCallId -> domElement}
-let chatModalTicketId = null;
-let chatModalConversationId = null;
 
 // Tracks which conversations are currently busy (LLM running).
 // Key: "ticketId:conversationId", Value: true
@@ -2479,9 +2280,9 @@ function saveTicketConversationState(ticketId, conversationId, scrollState) {
 function getTicketAccordionStates(ticketId) {
     try {
         const stored = localStorage.getItem(`ticket-${ticketId}-accordions`);
-        return stored ? JSON.parse(stored) : { description: false, tasks: true, chat: false };
+        return stored ? JSON.parse(stored) : { titleDesc: true, tasks: true };
     } catch {
-        return { description: false, tasks: true, chat: false };
+        return { titleDesc: true, tasks: true };
     }
 }
 
@@ -2541,52 +2342,6 @@ function pickDefaultConversation(convos) {
     return sorted[0].id;
 }
 
-// Updates the conversation dropdown in the full chat modal.
-// switchToId: if a new conversation just appeared, switch to it.
-function updateConversationDropdown(ticketId, switchToId) {
-    const dropdown = document.getElementById('conversationDropdown');
-    if (!dropdown) {
-        return;
-    }
-
-    const convos = sortConversations(ticketConversations[ticketId] || []);
-    const previousValue = dropdown.value;
-
-    dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
-    for (let i = 0; i < convos.length; i++) {
-        const c = convos[i];
-        const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
-        const option = document.createElement('option');
-        option.value = c.id;
-        option.textContent = conversationDepthPrefix(c.role) + c.displayName + suffix;
-        dropdown.appendChild(option);
-    }
-
-    // Auto-follow: switch to a newly appeared conversation.
-    if (switchToId && convos.some(c => c.id === switchToId)) {
-        dropdown.value = switchToId;
-        dropdown.dispatchEvent(new Event('change'));
-    } else if (previousValue && convos.some(c => c.id === previousValue)) {
-        dropdown.value = previousValue;
-        syncLlmDropdownToConversation(ticketId, previousValue, 'chatPlannerLlm');
-    }
-
-    // If still nothing selected, pick the best active conversation.
-    if (!dropdown.value && convos.length > 0) {
-        const bestId = pickDefaultConversation(convos);
-        if (bestId) {
-            dropdown.value = bestId;
-            dropdown.dispatchEvent(new Event('change'));
-        }
-    }
-
-    // Update delete button visibility.
-    const chatDeleteBtn = document.getElementById('chatDeleteConvoBtn');
-    if (chatDeleteBtn) {
-        chatDeleteBtn.style.display = dropdown.value ? '' : 'none';
-    }
-}
-
 function updateDetailConversationDropdown(ticketId, switchToId) {
     const dropdown = document.getElementById('detailConversationDropdown');
     if (!dropdown) {
@@ -2631,365 +2386,25 @@ function updateDetailConversationDropdown(ticketId, switchToId) {
     }
 }
 
-// Builds the info bar content for the full-screen chat modal from the current ticket state.
-function refreshChatInfoBar(ticketId) {
-    const bar = document.getElementById('chatInfoBar');
-    if (!bar) {
-        return;
-    }
+// Reloads the detail chat conversation while preserving scroll position.
+async function reloadDetailConversationPreservingScroll(ticketId, conversationId) {
+    const messagesDiv = document.getElementById('detailChatMessages');
+    if (!messagesDiv) return;
 
-    const ticket = tickets.find(t => t.id === ticketId);
-    if (!ticket) {
-        bar.style.display = 'none';
-        return;
-    }
+    const atBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 40;
+    const previousScroll = messagesDiv.scrollTop;
 
-    const status = ticket.status || 'Backlog';
+    await loadAndDisplayDetailConversation(ticketId, conversationId);
 
-    // Latest activity log line.
-    let latestActivityHtml = '';
-    if (ticket.activityLog && ticket.activityLog.length > 0) {
-        const latestLog = ticket.activityLog[ticket.activityLog.length - 1];
-        const parsed = parseLogEntry(latestLog);
-
-        let logClass = '';
-        if (parsed.message.includes('Manager:')) {
-            logClass = 'manager';
-        } else if (parsed.message.includes('Developer:')) {
-            logClass = 'developer';
-        } else if (parsed.message.includes('Worker:')) {
-            logClass = 'worker';
-        }
-
-        const displayMessage = parsed.message.length > 120 ? parsed.message.substring(0, 120) + '…' : parsed.message;
-
-        latestActivityHtml = `
-            <div class="detail-latest-activity ${logClass}">
-                ${parsed.timestamp ? `<span class="activity-timestamp ${logClass}" data-timestamp="${parsed.timestamp}">${formatRelativeTime(parsed.timestamp)}</span>` : ''}
-                <span class="activity-message">${escapeHtml(displayMessage)}</span>
-            </div>
-        `;
-    }
-
-    bar.innerHTML = `
-        <div class="ticket-detail-header">
-            <span class="status-badge ${status.toLowerCase()}">${status}</span>
-            ${ticket.branchName ? `<span class="branch-name">🌿 ${escapeHtml(ticket.branchName)}</span>` : '<span class="branch-name-spacer"></span>'}
-            <div class="ticket-detail-right">
-                <span class="ticket-detail-id">#${ticket.id}</span>
-                <span class="ticket-detail-cost">$${ticket.llmCost.toFixed(2)} / $${ticket.maxCost.toFixed(2)}</span>
-            </div>
-        </div>
-        ${latestActivityHtml}
-    `;
-    bar.style.display = '';
-}
-
-function openChat(ticketId) {
-    const modal = document.getElementById('chatModal');
-    const messagesDiv = document.getElementById('chatMessages');
-    const titleEl = document.getElementById('chatTitle');
-    titleEl.textContent = `💬 Conversations — #${ticketId}`;
-
-    // If opening from detail modal, preserve the selected conversation.
-    const selectedConvId = (detailChatTicketId === ticketId) ? detailChatConversationId : null;
-
-    chatModalTicketId = ticketId;
-    chatModalConversationId = selectedConvId;
-    ticketPendingToolCalls[ticketId] = {};
-
-    // Build dropdown.
-    const dropdownContainer = document.getElementById('chatConversationPicker');
-    dropdownContainer.innerHTML = '';
-
-    // Add planner LLM selector.
-    const ticket = tickets.find(t => t.id === ticketId);
-    if (ticket) {
-        const plannerHtml = buildPlannerLlmDropdown(ticket, 'chatPlannerLlm');
-        if (plannerHtml) {
-            const plannerWrapper = document.createElement('span');
-            plannerWrapper.innerHTML = plannerHtml;
-            dropdownContainer.appendChild(plannerWrapper.firstElementChild);
-        }
-    }
-
-    refreshChatInfoBar(ticketId);
-
-    const dropdown = document.createElement('select');
-    dropdown.id = 'conversationDropdown';
-    dropdown.className = 'chat-conversation-select';
-    dropdown.innerHTML = '<option value="">💬 Select conversation…</option>';
-
-    const convos = sortConversations(ticketConversations[ticketId] || []);
-    for (let i = 0; i < convos.length; i++) {
-        const c = convos[i];
-        const suffix = c.isFinished ? ' ✓' : ` (${c.messageCount})`;
-        const option = document.createElement('option');
-        option.value = c.id;
-        option.textContent = conversationDepthPrefix(c.role) + c.displayName + suffix;
-        dropdown.appendChild(option);
-    }
-
-    // Set initial selection.
-    if (selectedConvId && convos.some(c => c.id === selectedConvId)) {
-        dropdown.value = selectedConvId;
-        loadAndDisplayConversation(ticketId, selectedConvId);
-        const info = convos.find(c => c.id === selectedConvId);
-        setChatInputEnabled(!(info && info.isFinished));
-        updateBusyIndicators(ticketId, selectedConvId, !!busyConversations[`${ticketId}:${selectedConvId}`]);
-        syncLlmDropdownToConversation(ticketId, selectedConvId, 'chatPlannerLlm');
-    } else {
-        messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation from the dropdown above.</div>';
-        setChatInputEnabled(false);
-    }
-
-    dropdown.addEventListener('change', () => {
-        const convId = dropdown.value;
-        if (convId) {
-            chatModalConversationId = convId;
-            loadAndDisplayConversation(ticketId, convId);
-            const currentConvos = ticketConversations[ticketId] || [];
-            const info = currentConvos.find(c => c.id === convId);
-            setChatInputEnabled(!(info && info.isFinished));
-            updateBusyIndicators(ticketId, convId, !!busyConversations[`${ticketId}:${convId}`]);
-            syncLlmDropdownToConversation(ticketId, convId, 'chatPlannerLlm');
+    requestAnimationFrame(() => {
+        if (atBottom) {
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+            saveTicketConversationState(ticketId, conversationId, { atBottom: true });
         } else {
-            chatModalConversationId = null;
-            messagesDiv.innerHTML = '<div class="chat-msg chat-msg-system">Select a conversation from the dropdown above.</div>';
-            setChatInputEnabled(false);
-            updateBusyIndicators(ticketId, '', false);
+            messagesDiv.scrollTop = previousScroll;
+            saveTicketConversationState(ticketId, conversationId, { messageIndex: messagesDiv.children.length - 1 });
         }
     });
-
-    dropdownContainer.appendChild(dropdown);
-
-    const deleteBtn = document.createElement('button');
-    deleteBtn.id = 'chatDeleteConvoBtn';
-    deleteBtn.className = 'detail-chat-maximize';
-    deleteBtn.title = 'Delete conversation';
-    deleteBtn.textContent = '🗑️';
-    deleteBtn.style.display = 'none';
-    deleteBtn.addEventListener('click', () => {
-        deleteConversation(ticketId, dropdown.value);
-    });
-    dropdownContainer.appendChild(deleteBtn);
-
-    const deleteAllBtn = document.createElement('button');
-    deleteAllBtn.className = 'detail-chat-maximize';
-    deleteAllBtn.title = 'Delete all finished conversations';
-    deleteAllBtn.textContent = '🧹';
-    deleteAllBtn.addEventListener('click', () => {
-        deleteFinishedConversations(ticketId);
-    });
-    dropdownContainer.appendChild(deleteAllBtn);
-
-    // Show/hide delete button based on selection.
-    function updateDeleteButton() {
-        deleteBtn.style.display = dropdown.value ? '' : 'none';
-    }
-    dropdown.addEventListener('change', updateDeleteButton);
-    updateDeleteButton();
-
-    // Subscribe to this ticket's group for real-time updates.
-    if (connection && connection.state === signalR.HubConnectionState.Connected) {
-        connection.invoke('SubscribeToTicket', ticketId).catch(() => {});
-    }
-
-    modal.classList.add('active');
-
-    const input = document.getElementById('chatInput');
-    input.value = '';
-}
-
-window.openChat = openChat;
-
-function closeChatModal() {
-    const ticketId = chatModalTicketId;
-    const modal = document.getElementById('chatModal');
-    modal.classList.remove('active');
-    chatModalTicketId = null;
-    chatModalConversationId = null;
-
-    if (ticketId && connection && connection.state === signalR.HubConnectionState.Connected) {
-        connection.invoke('UnsubscribeFromTicket', ticketId).catch(() => {});
-    }
-}
-
-function setChatInputEnabled(enabled) {
-    const input = document.getElementById('chatInput');
-    const btn = document.getElementById('chatSendBtn');
-    if (input) {
-        input.disabled = !enabled;
-        input.placeholder = enabled ? 'Type a message…' : 'Conversation finished';
-    }
-    if (btn) {
-        btn.disabled = !enabled;
-    }
-}
-
-async function loadAndDisplayConversation(ticketId, conversationId) {
-    const messagesDiv = document.getElementById('chatMessages');
-    ticketPendingToolCalls[ticketId] = {};
-
-    const key = `${ticketId}:${conversationId}`;
-    let msgs = conversationMessages[key];
-
-    // Fetch from server if not cached.
-    if (!msgs) {
-        try {
-            const response = await fetch(`${API_BASE}/tickets/${ticketId}/conversations/${conversationId}`);
-            if (response.ok) {
-                const data = await response.json();
-                msgs = data.messages || [];
-                conversationMessages[key] = msgs;
-            } else {
-                msgs = [];
-            }
-        } catch {
-            msgs = [];
-        }
-    }
-
-    messagesDiv.innerHTML = '';
-    for (let i = 0; i < msgs.length; i++) {
-        renderSingleChatMessage(msgs, i);
-    }
-}
-
-function renderSingleChatMessage(messages, index) {
-    const msg = messages[index];
-    const messagesDiv = document.getElementById('chatMessages');
-
-    if (msg.role === 'user') {
-        const content = (msg.content || '');
-        appendChatUser(content);
-    } else if (msg.role === 'assistant') {
-        if (msg.content && (!msg.tool_calls || msg.content.trim() !== '')) {
-            appendChatAssistant(msg.content);
-        }
-        if (msg.tool_calls) {
-            for (let i = 0; i < msg.tool_calls.length; i++) {
-                const tc = msg.tool_calls[i];
-                // Look ahead for the matching tool result
-                let result = null;
-                for (let j = index + 1; j < messages.length; j++) {
-                    if (messages[j].role === 'tool' && messages[j].tool_call_id === tc.id) {
-                        result = messages[j].content || '';
-                        break;
-                    }
-                }
-                appendChatToolCall(messagesDiv, tc.function.name, tc.function.arguments, result);
-            }
-        }
-    } else if (msg.role === 'system') {
-        appendChatSystem(msg.content || '');
-    }
-    // Skip role === 'tool' — results are embedded in tool call accordions
-}
-
-function appendChatAssistant(content) {
-    const messagesDiv = document.getElementById('chatMessages');
-    const el = document.createElement('div');
-    el.className = 'chat-msg chat-msg-assistant';
-    el.innerHTML = renderMarkdown(content);
-
-    messagesDiv.appendChild(el);
-    scrollChatToBottom();
-}
-
-function appendChatUser(content) {
-    const messagesDiv = document.getElementById('chatMessages');
-    const el = document.createElement('div');
-    el.className = 'chat-msg chat-msg-user';
-    el.textContent = content;
-
-    messagesDiv.appendChild(el);
-    scrollChatToBottom();
-}
-
-function appendChatSystem(content) {
-    const messagesDiv = document.getElementById('chatMessages');
-    const el = document.createElement('div');
-    el.className = 'chat-msg chat-msg-system';
-    el.textContent = content;
-
-    messagesDiv.appendChild(el);
-    scrollChatToBottom();
-}
-
-function appendChatToolCall(container, name, argsJson, result) {
-    const args = formatToolCallParams(argsJson);
-    const el = document.createElement('div');
-    el.className = 'chat-tool-accordion';
-
-    const resultHtml = result ? `
-        <div class="chat-tool-section chat-tool-result">
-            <pre>${escapeHtml(result)}</pre>
-        </div>
-    ` : '';
-
-    el.innerHTML = `
-        <div class="chat-tool-header">
-            <span class="chat-tool-icon">▶</span>
-            <span class="chat-tool-name">${escapeHtml(name)}</span>
-            <span class="chat-tool-params">${escapeHtml(args)}</span>
-        </div>
-        <div class="chat-tool-body">
-            ${resultHtml}
-        </div>
-    `;
-
-    el.querySelector('.chat-tool-header').addEventListener('click', () => {
-        const icon = el.querySelector('.chat-tool-icon');
-        const body = el.querySelector('.chat-tool-body');
-        const isOpen = body.classList.contains('open');
-
-        if (isOpen) {
-            body.classList.remove('open');
-            icon.classList.remove('open');
-        } else {
-            body.classList.add('open');
-            icon.classList.add('open');
-        }
-    });
-
-    container.appendChild(el);
-    scrollChatToBottom();
-}
-
-function truncateToolLine(name, args) {
-    try {
-        const obj = JSON.parse(args);
-        const keys = Object.keys(obj);
-        if (keys.length > 0) {
-            const firstVal = String(obj[keys[0]]);
-            return firstVal.length > 80 ? firstVal.substring(0, 80) + '…' : firstVal;
-        }
-    } catch {
-        // Not valid JSON
-    }
-
-    if (args && args.length > 80) {
-        return args.substring(0, 80) + '…';
-    }
-
-    return args || '';
-}
-
-function truncateToolResult(result) {
-    if (result.length > 2000) {
-        return result.substring(0, 2000) + '\n… (truncated)';
-    }
-
-    return result;
-}
-
-function formatJsonSafe(jsonStr) {
-    try {
-        return JSON.stringify(JSON.parse(jsonStr), null, 2);
-    } catch {
-        return jsonStr;
-    }
 }
 
 function renderMarkdown(text) {
@@ -3014,145 +2429,25 @@ function renderMarkdown(text) {
     return html;
 }
 
-function sendChatMessage() {
-    const input = document.getElementById('chatInput');
-    const text = input.value.trim();
-
-    if (!text || !chatModalTicketId || !chatModalConversationId) {
-        return;
-    }
-
-    if (!connection || connection.state !== signalR.HubConnectionState.Connected) {
-        appendChatSystem('Not connected to server.');
-        return;
-    }
-
-    connection.invoke('SendChatToWorker', chatModalTicketId, chatModalConversationId, text).catch(err => {
-        appendChatSystem(`Failed to send: ${err.message}`);
-    });
-    input.value = '';
-    autoResizeChatInput();
-    input.focus();
-}
-
-function scrollChatToBottom() {
-    const messagesDiv = document.getElementById('chatMessages');
-    requestAnimationFrame(() => {
-        messagesDiv.scrollTop = messagesDiv.scrollHeight;
-    });
-}
-
-// Reloads the full-screen chat conversation while preserving scroll position.
-// If the user was scrolled to the bottom, it stays at the bottom after reload.
-async function reloadConversationPreservingScroll(ticketId, conversationId) {
-    const messagesDiv = document.getElementById('chatMessages');
-    if (!messagesDiv) return;
-
-    const atBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 40;
-    const previousScroll = messagesDiv.scrollTop;
-
-    await loadAndDisplayConversation(ticketId, conversationId);
-
-    requestAnimationFrame(() => {
-        if (atBottom) {
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-        } else {
-            messagesDiv.scrollTop = previousScroll;
-        }
-    });
-}
-
-// Reloads the inline detail chat conversation while preserving scroll position.
-async function reloadDetailConversationPreservingScroll(ticketId, conversationId) {
-    const messagesDiv = document.getElementById('detailChatMessages');
-    if (!messagesDiv) return;
-
-    const atBottom = messagesDiv.scrollHeight - messagesDiv.scrollTop - messagesDiv.clientHeight < 40;
-    const previousScroll = messagesDiv.scrollTop;
-
-    await loadAndDisplayDetailConversation(ticketId, conversationId);
-
-    requestAnimationFrame(() => {
-        if (atBottom) {
-            messagesDiv.scrollTop = messagesDiv.scrollHeight;
-            saveTicketConversationState(ticketId, conversationId, { atBottom: true });
-        } else {
-            messagesDiv.scrollTop = previousScroll;
-            saveTicketConversationState(ticketId, conversationId, { messageIndex: messagesDiv.children.length - 1 });
-        }
-    });
-}
-
-function autoResizeChatInput() {
-    const input = document.getElementById('chatInput');
-    input.style.height = 'auto';
-    input.style.height = Math.min(input.scrollHeight, 200) + 'px';
-}
-
-function setupChatEventListeners() {
-    const input = document.getElementById('chatInput');
-    const sendBtn = document.getElementById('chatSendBtn');
-    const closeBtn = document.getElementById('chatCloseBtn');
-    const modal = document.getElementById('chatModal');
-
-    input.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            sendChatMessage();
-        }
-    });
-
-    input.addEventListener('input', autoResizeChatInput);
-
-    sendBtn.addEventListener('click', () => {
-        sendChatMessage();
-    });
-
-    closeBtn.addEventListener('click', () => {
-        closeChatModal();
-    });
-
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            closeChatModal();
-        }
-    });
-}
-
 // Utility functions
 
 // Updates busy spinner and stop button state for a conversation.
 function updateBusyIndicators(ticketId, conversationId, isBusy) {
-    // Full-screen chat modal.
-    if (chatModalTicketId === ticketId && chatModalConversationId === conversationId) {
-        const messagesDiv = document.getElementById('chatMessages');
-        const stopBtn = document.getElementById('chatStopBtn');
-        if (isBusy) {
-            appendBusySpinner(messagesDiv, 'chatBusySpinner');
-            if (stopBtn) {
-                stopBtn.classList.add('active');
-            }
-        } else {
-            removeBusySpinner(messagesDiv, 'chatBusySpinner');
-            if (stopBtn) {
-                stopBtn.classList.remove('active');
-            }
-        }
-    }
-
-    // Inline detail chat.
+    // Inline detail chat only.
     if (detailChatTicketId === ticketId && detailChatConversationId === conversationId) {
         const messagesDiv = document.getElementById('detailChatMessages');
         const stopBtn = document.getElementById('detailChatStopBtn');
         if (isBusy) {
             appendBusySpinner(messagesDiv, 'detailBusySpinner');
             if (stopBtn) {
+                stopBtn.classList.remove('inactive');
                 stopBtn.classList.add('active');
             }
         } else {
             removeBusySpinner(messagesDiv, 'detailBusySpinner');
             if (stopBtn) {
                 stopBtn.classList.remove('active');
+                stopBtn.classList.add('inactive');
             }
         }
     }
@@ -3183,13 +2478,9 @@ function removeBusySpinner(container, spinnerId) {
 }
 
 function interruptConversation() {
-    // Determine which conversation to interrupt based on which chat is active.
-    let ticketId = chatModalTicketId;
-    let conversationId = chatModalConversationId;
-    if (!ticketId || !conversationId) {
-        ticketId = detailChatTicketId;
-        conversationId = detailChatConversationId;
-    }
+    // Interrupt the currently viewed conversation.
+    const ticketId = detailChatTicketId;
+    const conversationId = detailChatConversationId;
     if (!ticketId || !conversationId) {
         return;
     }
@@ -3217,5 +2508,4 @@ function escapeHtml(text) {
 // Initialize on DOM ready
 document.addEventListener('DOMContentLoaded', () => {
     init();
-    setupChatEventListeners();
 });

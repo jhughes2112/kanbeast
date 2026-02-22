@@ -40,84 +40,108 @@ public class AgentOrchestrator
 		DateTimeOffset lastHeartbeat = DateTimeOffset.UtcNow;
 		bool interrupted = false;
 
-		for (; ; )
+		while (cancellationToken.IsCancellationRequested==false)
 		{
-			cancellationToken.ThrowIfCancellationRequested();
-
-			// Ensure the planning conversation exists. If the LLM is missing, this returns
-			// false and the loop keeps running housekeeping until a valid LLM appears.
-			if (_planningConversation == null)
+			try
 			{
-				await TryEnsurePlanningConversationAsync(ticketHolder, cancellationToken);
-			}
-
-			if (_planningConversation != null)
-			{
-				// After an interrupt, ignore stale conversation state (NeedsLlmAttention) and only
-				// re-enter when the hub has new user input. This prevents the loop from immediately
-				// restarting the LLM after the user clicked stop.
-				bool hasPendingWork = WorkerSession.HubClient.HasPendingWork(_planningConversation.Id);
-				if (hasPendingWork || (!interrupted && NeedsLlmAttention(_planningConversation)))
+				// Ensure the planning conversation exists. If the LLM is missing, this returns
+				// false and the loop keeps running housekeeping until a valid LLM appears.
+				if (_planningConversation == null)
 				{
-					interrupted = false;
-					LlmExitReason exitReason = await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
-					if (exitReason == LlmExitReason.Interrupted)
+					await TryEnsurePlanningConversationAsync(ticketHolder, cancellationToken);
+				}
+
+				if (_planningConversation != null)
+				{
+					// After an interrupt, ignore stale conversation state (NeedsLlmAttention) and only
+					// re-enter when the hub has new user input. This prevents the loop from immediately
+					// restarting the LLM after the user clicked stop.
+					bool hasPendingWork = WorkerSession.HubClient.HasPendingWork(_planningConversation.Id);
+					if (hasPendingWork || (!interrupted && NeedsLlmAttention(_planningConversation)))
 					{
-						interrupted = true;
+						interrupted = false;
+						LlmExitReason exitReason = await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
+						if (exitReason == LlmExitReason.Interrupted)
+						{
+							interrupted = true;
+						}
+					}
+				}
+
+				// Housekeeping while idle.
+				DateTimeOffset now = DateTimeOffset.UtcNow;
+				if ((now - lastHeartbeat).TotalSeconds >= 30)
+				{
+					lastHeartbeat = now;
+					await WorkerSession.HubClient.SendHeartbeatAsync();
+				}
+
+				// Apply settings updates before processing model changes so newly added
+				// LLMs are registered before the switch lookup runs.
+				WorkerSession.ApplyPendingSettings();
+
+				// Process model changes after settings are applied so new LLMs are in the registry.
+				if (_planningConversation != null)
+				{
+					string? pendingModelChange = WorkerSession.HubClient.TryConsumeModelChange(_planningConversation.Id);
+					if (pendingModelChange != null)
+					{
+						LlmService? newService = WorkerSession.LlmProxy.GetService(pendingModelChange);
+						if (newService != null)
+						{
+							_planningConversation.ToolContext.LlmService = newService;
+							await _planningConversation.ForceFlushAsync();
+							_logger.LogInformation("Switched idle planning LLM to {Model}", newService.Model);
+						}
+					}
+				}
+
+				Ticket? latestTicket = null;
+				while (ticketQueue.TryDequeue(out Ticket? updated))
+				{
+					latestTicket = updated;
+				}
+				if (latestTicket != null)
+				{
+					TicketStatus previousStatus = ticketHolder.Ticket.Status;
+					ticketHolder.Update(latestTicket);
+
+					if (previousStatus != latestTicket.Status && _planningConversation != null)
+					{
+						if (latestTicket.Status == TicketStatus.Active)
+						{
+							_planningConversation.Role = LlmRole.PlanningActive;
+							WorkerSession.HubClient.GetChatQueue(_planningConversation.Id).Enqueue("Beast Mode Activated.  Call get_next_work_item and start the developer.");
+						}
+						else
+						{
+							_planningConversation.Role = LlmRole.Planning;
+						}
 					}
 				}
 			}
-
-			// Housekeeping while idle.
-			DateTimeOffset now = DateTimeOffset.UtcNow;
-			if ((now - lastHeartbeat).TotalSeconds >= 30)
+			catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
 			{
-				lastHeartbeat = now;
-				await WorkerSession.HubClient.SendHeartbeatAsync();
+				// Conversation-level cancellation (user interrupt, ticket status change).
+				// Log and continue the main loop.
+				_logger.LogInformation("Conversation cancelled, continuing main loop");
+				await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Worker: Conversation cancelled, standing by", CancellationToken.None);
+				interrupted = true;
 			}
-
-			// Apply settings updates before processing model changes so newly added
-			// LLMs are registered before the switch lookup runs.
-			WorkerSession.ApplyPendingSettings();
-
-			// Process model changes after settings are applied so new LLMs are in the registry.
-			if (_planningConversation != null)
+			catch (Exception ex)
 			{
-				string? pendingModelChange = WorkerSession.HubClient.TryConsumeModelChange(_planningConversation.Id);
-				if (pendingModelChange != null)
+				// Any other exception should not kill the worker. Log it and continue.
+				_logger.LogError(ex, "Exception in main loop: {Message}", ex.Message);
+				await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Worker: Error - {ex.Message}", CancellationToken.None);
+
+				if (_planningConversation != null)
 				{
-					LlmService? newService = WorkerSession.LlmProxy.GetService(pendingModelChange);
-					if (newService != null)
-					{
-						_planningConversation.ToolContext.LlmService = newService;
-						await _planningConversation.ForceFlushAsync();
-						_logger.LogInformation("Switched idle planning LLM to {Model}", newService.Model);
-					}
+					_planningConversation.AddNote($"Error: {ex.Message}");
+					await _planningConversation.ForceFlushAsync();
 				}
-			}
 
-			Ticket? latestTicket = null;
-			while (ticketQueue.TryDequeue(out Ticket? updated))
-			{
-				latestTicket = updated;
-			}
-			if (latestTicket != null)
-			{
-				TicketStatus previousStatus = ticketHolder.Ticket.Status;
-				ticketHolder.Update(latestTicket);
-
-				if (previousStatus != latestTicket.Status && _planningConversation != null)
-				{
-					if (latestTicket.Status == TicketStatus.Active)
-					{
-						_planningConversation.Role = LlmRole.PlanningActive;
-						WorkerSession.HubClient.GetChatQueue(_planningConversation.Id).Enqueue("Beast Mode Activated.  Call get_next_work_item and start the developer.");
-					}
-					else
-					{
-						_planningConversation.Role = LlmRole.Planning;
-					}
-				}
+				// Small delay before retrying to avoid tight error loops.
+				await Task.Delay(2000, cancellationToken);
 			}
 
 			await Task.Delay(250, cancellationToken);
@@ -256,32 +280,49 @@ public class AgentOrchestrator
 
 		await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, true);
 		try
-		{
-			string? continueMessage = isActive ? "Continue working. Call get_next_work_item for the next subtask ({messagesRemaining} turns remaining)." : null;
-			LlmResult result = await service.RunToCompletionAsync(_planningConversation!, continueMessage, true, false, effectiveToken);
-			exitReason = result.ExitReason;
-
-			if (result.ExitReason == LlmExitReason.CostExceeded)
 			{
-				await WorkerSession.ApiClient.UpdateTicketStatusAsync(ticketHolder.Ticket.Id, "Failed", cancellationToken);
+					string? continueMessage = isActive ? "Continue working. Call get_next_work_item for the next subtask ({messagesRemaining} turns remaining)." : null;
+					LlmResult result = await service.RunToCompletionAsync(_planningConversation!, continueMessage, true, false, effectiveToken);
+					exitReason = result.ExitReason;
+
+					if (result.ExitReason == LlmExitReason.CostExceeded)
+					{
+						await WorkerSession.ApiClient.UpdateTicketStatusAsync(ticketHolder.Ticket.Id, "Failed", cancellationToken);
+					}
+				}
+				catch (OperationCanceledException) when (isActive && !cancellationToken.IsCancellationRequested)
+				{
+					_logger.LogInformation("Planning: Work cancelled (ticket left Active)");
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Work cancelled", CancellationToken.None);
+					exitReason = LlmExitReason.Interrupted;
+				}
+				catch (OperationCanceledException)
+				{
+					throw;
+				}
+				catch (Exception ex)
+				{
+					_logger.LogError(ex, "Error during LLM execution: {Message}", ex.Message);
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Planning: Error - {ex.Message}", CancellationToken.None);
+
+					if (_planningConversation != null)
+					{
+						_planningConversation.AddNote($"Error during execution: {ex.Message}");
+					}
+
+					exitReason = LlmExitReason.LlmCallFailed;
+				}
+				finally
+				{
+					await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, false);
+
+					if (isActive)
+					{
+						WorkerSession.HubClient.EndActiveWork();
+						WorkerSession.UpdateCancellationToken(cancellationToken);
+					}
+				}
+
+				return exitReason;
 			}
 		}
-		catch (OperationCanceledException) when (isActive && !cancellationToken.IsCancellationRequested)
-		{
-			_logger.LogInformation("Planning: Work cancelled (ticket left Active)");
-			await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Work cancelled", CancellationToken.None);
-		}
-		finally
-		{
-			await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, false);
-
-			if (isActive)
-			{
-				WorkerSession.HubClient.EndActiveWork();
-				WorkerSession.UpdateCancellationToken(cancellationToken);
-			}
-		}
-
-		return exitReason;
-	}
-}
