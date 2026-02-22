@@ -15,19 +15,13 @@ public enum LlmRole
 }
 
 // Per-conversation state for tool calls.
+// Built from a conversation to give tools access to services and execution state.
 public class ToolContext
 {
 	public ConcurrentDictionary<string, byte> ReadFiles { get; }
-	public string? CurrentTaskId { get; }
-	public string? CurrentSubtaskId { get; }
+	public ILlmConversation? Conversation { get; }
 	public LlmService? LlmService { get; internal set; }
 	public LlmService? SubAgentService { get; internal set; }
-
-	// CRC32 -> count. Detects repetitive identical actions from the model.
-	public Dictionary<uint, int> ActionFingerprints { get; }
-
-	// Derived from the LlmService for code that needs the config ID string.
-	public string? LlmConfigId => LlmService?.Config.Id;
 
 	// Conversation-scoped token set by LlmService.RunToCompletionAsync.
 	// Tools should pass this to child RunToCompletionAsync calls for interrupt cascade.
@@ -45,12 +39,10 @@ public class ToolContext
 		set => _activeToolCallId.Value = value;
 	}
 
-	public ToolContext(string? currentTaskId, string? currentSubtaskId, LlmService? llmService, LlmService? subAgentService)
+	public ToolContext(ILlmConversation? conversation, LlmService? llmService, LlmService? subAgentService)
 	{
 		ReadFiles = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
-		ActionFingerprints = new Dictionary<uint, int>();
-		CurrentTaskId = currentTaskId;
-		CurrentSubtaskId = currentSubtaskId;
+		Conversation = conversation;
 		LlmService = llmService;
 		SubAgentService = subAgentService;
 		Shell = null;

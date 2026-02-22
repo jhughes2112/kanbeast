@@ -1869,7 +1869,9 @@ async function clearTasks(ticketId) {
 
 window.clearTasks = clearTasks;
 
-// Clear a conversation back to its initial state
+// Clear a conversation back to its initial state.
+// Uses the currently-viewed conversation when available so that clearing
+// while watching a sub-agent targets that conversation, not the planner.
 async function clearConversation(ticketId) {
     console.log('clearConversation called with ticketId:', ticketId);
     if (!ticketId) {
@@ -1879,8 +1881,16 @@ async function clearConversation(ticketId) {
 
     const convos = ticketConversations[ticketId] || [];
     console.log('clearConversation: found', convos.length, 'conversations, finished states:', convos.map(c => c.isFinished));
-    const activeConvo = convos.find(c => !c.isFinished);
-    if (!activeConvo) {
+
+    // Prefer the conversation the user is currently viewing in the detail panel.
+    let targetConvo = null;
+    if (detailChatTicketId === ticketId && detailChatConversationId) {
+        targetConvo = convos.find(c => c.id === detailChatConversationId && !c.isFinished);
+    }
+    if (!targetConvo) {
+        targetConvo = convos.find(c => !c.isFinished);
+    }
+    if (!targetConvo) {
         alert('No active conversation to clear.');
         return;
     }
@@ -1889,9 +1899,9 @@ async function clearConversation(ticketId) {
         return;
     }
 
-    console.log('clearConversation: invoking RequestClearConversation', ticketId, activeConvo.id);
+    console.log('clearConversation: invoking RequestClearConversation', ticketId, targetConvo.id);
     try {
-        await connection.invoke('RequestClearConversation', ticketId, activeConvo.id);
+        await connection.invoke('RequestClearConversation', ticketId, targetConvo.id);
         console.log('clearConversation: invoke completed successfully');
     } catch (error) {
         console.error('Error clearing conversation:', error);

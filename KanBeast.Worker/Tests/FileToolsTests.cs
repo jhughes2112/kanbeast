@@ -17,7 +17,7 @@ public static class FileToolsTests
 		try
 		{
 			WorkerSession.Start(null!, null!, null!, null!, tempDir, CancellationToken.None, null!, string.Empty, string.Empty, new KanBeast.Shared.WebSearchConfig(), new KanBeast.Shared.CompactionSettings());
-			ToolContext tc = new ToolContext(null, null, null, null);
+			ToolContext tc = new ToolContext(null, null, null);
 
 			TestWriteAndRead(ctx, tc, tempDir);
 			TestCatNFormat(ctx, tc, tempDir);

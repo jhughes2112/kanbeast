@@ -153,8 +153,6 @@ public static class SubAgentTools
 
 		string fullInstructions = $"{taskSummary}\n\n{instructions}";
 
-		ToolContext subContext = new ToolContext(context.CurrentTaskId, context.CurrentSubtaskId, service, null);
-
 		// Check for a prior conversation from a crashed run. If found, reconstitute it.
 		ILlmConversation conversation;
 		string? toolCallId = ToolContext.ActiveToolCallId;
@@ -165,12 +163,12 @@ public static class SubAgentTools
 
 		if (existing != null)
 		{
-			conversation = new CompactingConversation(existing, role, subContext, null, null, null);
+			conversation = new CompactingConversation(existing, role, service, null, null, null, null, context.Conversation?.CurrentTaskId, context.Conversation?.CurrentSubtaskId);
 			Console.WriteLine($"[{displayPrefix}] Reconstituted conversation {toolCallId}");
 		}
 		else
 		{
-			conversation = new CompactingConversation(null, role, subContext, fullInstructions, $"{displayPrefix}: {taskSummary}", toolCallId);
+			conversation = new CompactingConversation(null, role, service, null, fullInstructions, $"{displayPrefix}: {taskSummary}", toolCallId, context.Conversation?.CurrentTaskId, context.Conversation?.CurrentSubtaskId);
 		}
 
 		LlmResult llmResult;

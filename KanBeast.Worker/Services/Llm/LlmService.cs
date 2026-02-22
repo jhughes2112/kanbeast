@@ -161,8 +161,6 @@ public class LlmService
 	private static readonly TimeSpan DownCooldown = TimeSpan.FromMinutes(5);
 
 	private const int ShortWaitThresholdSeconds = 20;
-	private const int RepetitionWarningStart = 3;
-	private const int RepetitionLimit = 5;
 
 	private readonly Random SeedRandom = new();
 
@@ -249,10 +247,6 @@ public class LlmService
 		// sub-agents see the cancellation before this conversation exits.
 		using CancellationTokenSource toolCts = CancellationTokenSource.CreateLinkedTokenSource(conversationToken);
 		conversation.ToolContext.CancellationToken = toolCts.Token;
-
-		// Reset repetition tracking so a previously terminated conversation can make progress
-		// after the user sends a new message or context changes.
-		conversation.ToolContext.ActionFingerprints.Clear();
 
 		decimal accumulatedCost = 0m;
 		LlmResult finalResult = new LlmResult(LlmExitReason.Completed, string.Empty, string.Empty, null, null);
@@ -612,17 +606,19 @@ public class LlmService
 
 		conversation.AddAssistantMessage(assistantMessage);
 
-		if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
-		{
-			// Content-only response — fingerprint is the content itself.
-			int repeatCount = TrackRepetition(FingerprintAssistantMessage(assistantMessage), conversation);
+		// Refresh after XML parsing may have added tool calls.
+		hasToolCalls = assistantMessage.ToolCalls != null && assistantMessage.ToolCalls.Count > 0;
 
-			if (repeatCount >= RepetitionLimit)
+		if (!hasToolCalls)
+		{
+			uint fingerprint = FingerprintAssistantMessage(assistantMessage);
+			string? terminationReason = conversation.EvaluateTurn(fingerprint, false, continueMessage != null);
+
+			if (terminationReason != null)
 			{
-				Console.WriteLine($"[{_config.Model}] Terminating: identical response repeated {repeatCount} times");
-				conversation.AddNote($"TERMINATED: Model repeated the same response {repeatCount} times without making progress.");
+				Console.WriteLine($"[{_config.Model}] Terminating: {terminationReason}");
 				string recentContext = ExtractRecentAssistantContext(conversation.Messages, 3);
-				return new LlmResult(LlmExitReason.RepetitionDetected, recentContext, $"Identical response repeated {repeatCount} times", null, null);
+				return new LlmResult(LlmExitReason.RepetitionDetected, recentContext, terminationReason, null, null);
 			}
 
 			if (continueMessage == null)
@@ -635,10 +631,6 @@ public class LlmService
 				if (continueQueue.IsEmpty)
 				{
 					string effective = BuildContinueMessageWithWarning(continueMessage!, conversation.Iteration, conversation.MaxIterations);
-					if (repeatCount >= RepetitionWarningStart)
-					{
-						effective += $"\n\n⚠️ REPETITION WARNING: You have repeated this exact same response {repeatCount} time(s). You will be TERMINATED at {RepetitionLimit}. Do something different or call your completion tool NOW.";
-					}
 					conversation.AddUserMessage(effective);
 				}
 			}
@@ -647,7 +639,7 @@ public class LlmService
 		{
 			// Concurrent tool execution. All tool calls from the same assistant
 			// message run as parallel Tasks. Results are collected in order.
-			List<ConversationToolCall> toolCalls = assistantMessage.ToolCalls;
+			List<ConversationToolCall> toolCalls = assistantMessage.ToolCalls!;
 			(string toolName, ToolResult toolResult)[] completedTools = new (string, ToolResult)[toolCalls.Count];
 
 			Task[] tasks = new Task[toolCalls.Count];
@@ -664,39 +656,29 @@ public class LlmService
 
 			await Task.WhenAll(tasks);
 
-			// Fingerprint the full turn (action + results) so identical calls that return
-			// different data (e.g. get_next_work_item) are not flagged as repetition.
-			int repeatCount = TrackRepetition(FingerprintTurn(assistantMessage, completedTools), conversation);
-
-			if (repeatCount >= RepetitionLimit)
+			// Add tool messages before evaluation so conversation has full context.
+			for (int i = 0; i < completedTools.Length; i++)
 			{
-				Console.WriteLine($"[{_config.Model}] Terminating: identical action+result repeated {repeatCount} times");
-				for (int i = 0; i < completedTools.Length; i++)
+				if (!completedTools[i].toolResult.MessageHandled)
 				{
-					if (!completedTools[i].toolResult.MessageHandled)
-					{
-						conversation.AddToolMessage(toolCalls[i].Id, completedTools[i].toolResult.Response);
-					}
+					conversation.AddToolMessage(toolCalls[i].Id, completedTools[i].toolResult.Response);
 				}
-				conversation.AddNote($"TERMINATED: Model repeated the same action with identical results {repeatCount} times without making progress.");
-				string recentContext = ExtractRecentAssistantContext(conversation.Messages, 3);
-				return new LlmResult(LlmExitReason.RepetitionDetected, recentContext, $"Identical action repeated {repeatCount} times", null, null);
 			}
 
-			// Add tool messages in order and check for exit/message-handled.
+			uint fingerprint = FingerprintTurn(assistantMessage, completedTools);
+			string? terminationReason = conversation.EvaluateTurn(fingerprint, true, continueMessage != null);
+
+			if (terminationReason != null)
+			{
+				Console.WriteLine($"[{_config.Model}] Terminating: {terminationReason}");
+				string recentContext = ExtractRecentAssistantContext(conversation.Messages, 3);
+				return new LlmResult(LlmExitReason.RepetitionDetected, recentContext, terminationReason, null, null);
+			}
+
+			// Check for exit/message-handled.
 			for (int i = 0; i < completedTools.Length; i++)
 			{
 				(string toolName, ToolResult toolResult) = completedTools[i];
-
-				if (!toolResult.MessageHandled)
-				{
-					string response = toolResult.Response;
-					if (repeatCount >= RepetitionWarningStart && i == completedTools.Length - 1)
-					{
-						response += $"\n\n⚠️ REPETITION WARNING: You have made this exact same tool call with the same result {repeatCount} time(s). You will be TERMINATED at {RepetitionLimit}. Do something different or call your completion tool NOW.";
-					}
-					conversation.AddToolMessage(toolCalls[i].Id, response);
-				}
 
 				if (toolResult.ExitLoop)
 				{
@@ -867,22 +849,6 @@ public class LlmService
 
 		byte[] bytes = Encoding.UTF8.GetBytes(sb.ToString());
 		return ComputeCrc32(bytes);
-	}
-
-	// Increments the repetition counter for a fingerprint and logs warnings.
-	private int TrackRepetition(uint fingerprint, ILlmConversation conversation)
-	{
-		Dictionary<uint, int> fingerprints = conversation.ToolContext.ActionFingerprints;
-		fingerprints.TryGetValue(fingerprint, out int count);
-		count++;
-		fingerprints[fingerprint] = count;
-
-		if (count >= RepetitionWarningStart)
-		{
-			Console.WriteLine($"[{_config.Model}] Repetition: identical turn seen {count}/{RepetitionLimit} times");
-		}
-
-		return count;
 	}
 
 	// Extracts the last N assistant messages (with any immediately following tool results) for context

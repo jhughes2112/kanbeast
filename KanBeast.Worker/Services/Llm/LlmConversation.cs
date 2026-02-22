@@ -24,6 +24,10 @@ public class CompactingConversation : ILlmConversation
 	private const int MinimumCompactionThreshold = 3072;
 	private const int CharsPerToken = 4;
 
+	private const int RepetitionWarningStart = 3;
+	private const int RepetitionLimit = 5;
+	private const int ConsecutiveIdleLimit = 4;
+
 	private const long SyncDelayTicks = TimeSpan.TicksPerSecond * 1;
 	private long _dirtyTimestamp;
 
@@ -53,6 +57,9 @@ public class CompactingConversation : ILlmConversation
 
 	public ToolContext ToolContext { get; }
 
+	public string? CurrentTaskId { get; }
+	public string? CurrentSubtaskId { get; }
+
 	public int Iteration { get; private set; }
 
 	public int MaxIterations { get; private set; } = 250;
@@ -61,12 +68,26 @@ public class CompactingConversation : ILlmConversation
 
 	private bool CompactionEnabled => WorkerSession.Prompts.ContainsKey("compaction");
 
+	// Turn health tracking — owned by the conversation, evaluated via EvaluateTurn.
+	private readonly Dictionary<uint, int> _actionFingerprints = new Dictionary<uint, int>();
+	private int _consecutiveIdleResponses;
+	private bool _resetTrackingOnNextEval = true;
+
 	// Creates a new conversation or reconstitutes from server data.
 	// existingData: null to create new, non-null to reconstitute.
 	// userPrompt: if non-null, overwrites message[2]; if null, preserves existing.
 	// displayName: if non-null, sets the display name; if null, preserves existing.
 	// id: explicit conversation ID for new conversations (used for crash recovery). Ignored when reconstituting.
-	public CompactingConversation(ConversationData? existingData, LlmRole role, ToolContext toolContext, string? userPrompt, string? displayName, string? id)
+	public CompactingConversation(
+		ConversationData? existingData,
+		LlmRole role,
+		LlmService? llmService,
+		LlmService? subAgentService,
+		string? userPrompt,
+		string? displayName,
+		string? id,
+		string? currentTaskId,
+		string? currentSubtaskId)
 	{
 		if (existingData != null)
 		{
@@ -83,7 +104,9 @@ public class CompactingConversation : ILlmConversation
 
 		_role = role;
 		Data.Role = role.ToString();
-		ToolContext = toolContext;
+		CurrentTaskId = currentTaskId;
+		CurrentSubtaskId = currentSubtaskId;
+		ToolContext = new ToolContext(this, llmService, subAgentService);
 		_dirtyTimestamp = existingData == null && role != LlmRole.Compaction ? DateTime.UtcNow.Ticks : 0;
 
 		if (displayName != null)
@@ -119,6 +142,77 @@ public class CompactingConversation : ILlmConversation
 	public void IncrementIteration()
 	{
 		Iteration++;
+	}
+
+	// Returns null to continue, or a termination reason to stop.
+	// Handles resets, warnings, and termination notes internally.
+	public string? EvaluateTurn(uint fingerprint, bool hasToolCalls, bool hasContinueMessage)
+	{
+		if (_resetTrackingOnNextEval)
+		{
+			_actionFingerprints.Clear();
+			_consecutiveIdleResponses = 0;
+			_resetTrackingOnNextEval = false;
+		}
+
+		int repeatCount = TrackFingerprint(fingerprint);
+
+		if (hasToolCalls)
+		{
+			_consecutiveIdleResponses = 0;
+		}
+
+		if (repeatCount >= RepetitionLimit)
+		{
+			string kind = hasToolCalls ? "action with identical results" : "response";
+			string reason = $"Model repeated the same {kind} {repeatCount} times without making progress.";
+			AddNote($"TERMINATED: {reason}");
+			_resetTrackingOnNextEval = true;
+			return reason;
+		}
+
+		if (!hasToolCalls && hasContinueMessage)
+		{
+			_consecutiveIdleResponses++;
+
+			if (_consecutiveIdleResponses >= ConsecutiveIdleLimit)
+			{
+				string reason = $"Model produced {_consecutiveIdleResponses} consecutive content responses without calling any tools.";
+				AddNote($"TERMINATED: {reason}");
+				_resetTrackingOnNextEval = true;
+				return reason;
+			}
+		}
+
+		// Inject warnings as a note so the model sees them on the next turn.
+		string? warning = null;
+
+		if (repeatCount >= RepetitionWarningStart)
+		{
+			string kind = hasToolCalls ? "tool call with the same result" : "response";
+			warning = $"⚠️ REPETITION WARNING: You have repeated this exact same {kind} {repeatCount} time(s). You will be TERMINATED at {RepetitionLimit}. Do something different or call your completion tool NOW.";
+		}
+
+		if (!hasToolCalls && _consecutiveIdleResponses >= 2)
+		{
+			string idleWarning = $"⚠️ IDLE WARNING: You have produced {_consecutiveIdleResponses} consecutive response(s) without calling any tools. You will be TERMINATED at {ConsecutiveIdleLimit}. Call a tool NOW.";
+			warning = warning != null ? $"{warning}\n{idleWarning}" : idleWarning;
+		}
+
+		if (warning != null)
+		{
+			AddNote(warning);
+		}
+
+		return null;
+	}
+
+	private int TrackFingerprint(uint fingerprint)
+	{
+		_actionFingerprints.TryGetValue(fingerprint, out int count);
+		count++;
+		_actionFingerprints[fingerprint] = count;
+		return count;
 	}
 
 	private static string ResolveSystemPrompt(LlmRole role)
@@ -338,9 +432,9 @@ public class CompactingConversation : ILlmConversation
 			return null;
 		}
 
-		ToolContext compactionContext = new ToolContext(ToolContext.CurrentTaskId, ToolContext.CurrentSubtaskId, service, null);
+		ToolContext compactionContext = new ToolContext(null, service, null);
 
-		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, compactionContext, "compaction", logPrefix, null);
+		CompactingConversation summaryConversation = new CompactingConversation(null, LlmRole.Compaction, service, null, "compaction", logPrefix, null, CurrentTaskId, CurrentSubtaskId);
 
 		// Replace the scaffolded messages with the compaction system prompt followed by the parent messages verbatim.
 		summaryConversation.Messages.Clear();

@@ -178,8 +178,7 @@ public class AgentOrchestrator
 				_logger.LogInformation("Reconstituting planning conversation: {Id}", planningData.Id);
 				await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, "Planning: Reconstituted conversation from server", cancellationToken);
 
-				ToolContext context = new ToolContext(null, null, plannerService, plannerService);
-				_planningConversation = new CompactingConversation(planningData, LlmRole.Planning, context, null, null, null);
+				_planningConversation = new CompactingConversation(planningData, LlmRole.Planning, plannerService, plannerService, null, null, null, null, null);
 
 				await WorkerSession.HubClient.SyncConversationAsync(planningData);
 			}
@@ -193,8 +192,7 @@ public class AgentOrchestrator
 					Description: {ticketHolder.Ticket.Description}
 					""";
 
-				ToolContext context = new ToolContext(null, null, plannerService, plannerService);
-				_planningConversation = new CompactingConversation(null, LlmRole.Planning, context, userPrompt, "Planning", null);
+				_planningConversation = new CompactingConversation(null, LlmRole.Planning, plannerService, plannerService, userPrompt, "Planning", null, null, null);
 			}
 
 			// Sync the role to match current ticket status.

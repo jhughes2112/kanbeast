@@ -14,6 +14,9 @@ public interface ILlmConversation
     LlmRole Role { get; set; }
     ToolContext ToolContext { get; }
 
+    string? CurrentTaskId { get; }
+    string? CurrentSubtaskId { get; }
+
     int Iteration { get; }
     int MaxIterations { get; }
     bool HasReachedMaxIterations { get; }
@@ -28,6 +31,11 @@ public interface ILlmConversation
     decimal GetRemainingBudget();
 
     Task ResetAsync();
+
+    // Evaluates turn health after the assistant message and tool results are ready.
+    // Tracks fingerprints, idle counts, and adds termination notes and warnings.
+    // Returns null if the conversation should continue, or a termination reason string.
+    string? EvaluateTurn(uint fingerprint, bool hasToolCalls, bool hasContinueMessage);
 
     // Runs periodic maintenance: compaction if context exceeds threshold, and lazy sync if due.
     Task MaintenanceAsync(CancellationToken cancellationToken);

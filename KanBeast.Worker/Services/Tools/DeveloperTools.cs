@@ -59,8 +59,6 @@ public static class DeveloperTools
 				string modelTag = $"{id[..4]}:{service.Model}";
 				await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Started subtask [{modelTag}]: {subtaskName}", WorkerSession.CancellationToken);
 
-				ToolContext devContext = new ToolContext(taskId, subtaskId, service, null);
-
 				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
 
 				// Check for a prior conversation from a crashed run.
@@ -73,12 +71,12 @@ public static class DeveloperTools
 
 				if (existing != null)
 				{
-					conversation = new CompactingConversation(existing, LlmRole.Developer, devContext, null, null, null);
+					conversation = new CompactingConversation(existing, LlmRole.Developer, service, null, null, null, null, taskId, subtaskId);
 					Console.WriteLine($"[Developer] Reconstituted conversation {toolCallId}");
 				}
 				else
 				{
-					conversation = new CompactingConversation(null, LlmRole.Developer, devContext, initialPrompt, $"Developer - {subtaskName}", toolCallId);
+					conversation = new CompactingConversation(null, LlmRole.Developer, service, null, initialPrompt, $"Developer - {subtaskName}", toolCallId, taskId, subtaskId);
 				}
 
 				bool subtaskComplete = false;
