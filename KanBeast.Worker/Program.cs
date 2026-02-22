@@ -152,13 +152,13 @@ public class Program
 		}
 
 		TicketHolder ticketHolder = new TicketHolder(ticket);
-		LlmRegistry llmProxy = new LlmRegistry(config.Settings.LLMConfigs);
+		LlmRegistry llmProxy = new LlmRegistry(config.Settings.Endpoint, config.Settings.ApiKey, config.Settings.LLMConfigs);
 
 		AgentOrchestrator orchestrator = new AgentOrchestrator(
 			LoggerFactory.Create(b => { b.AddConsole(); b.SetMinimumLevel(LogLevel.Information); }).CreateLogger<AgentOrchestrator>(),
 			config.Settings.LLMConfigs);
 
-		WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cancellationToken, hubClient, config.Settings.WebSearch, config.Settings.Compaction);
+		WorkerSession.Start(apiClient, llmProxy, prompts, ticketHolder, repoDir, cancellationToken, hubClient, config.Settings.Endpoint, config.Settings.ApiKey, config.Settings.WebSearch, config.Settings.Compaction);
 
 		try
 		{

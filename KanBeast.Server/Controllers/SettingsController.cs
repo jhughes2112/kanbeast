@@ -31,7 +31,7 @@ public class SettingsController : ControllerBase
     public async Task<ActionResult<Settings>> UpdateSettings([FromBody] Settings settings)
     {
         Settings updatedSettings = await _settingsService.UpdateSettingsAsync(settings);
-        await _hubContext.Clients.All.SettingsUpdated(updatedSettings.File.LLMConfigs);
+        await _hubContext.Clients.All.SettingsUpdated(updatedSettings.File);
         return Ok(updatedSettings);
     }
 
@@ -40,7 +40,7 @@ public class SettingsController : ControllerBase
     {
         LLMConfig? addedConfig = await _settingsService.AddLLMConfigAsync(config);
         Settings current = await _settingsService.GetSettingsAsync();
-        await _hubContext.Clients.All.SettingsUpdated(current.File.LLMConfigs);
+        await _hubContext.Clients.All.SettingsUpdated(current.File);
         return Ok(addedConfig);
     }
 
@@ -54,7 +54,7 @@ public class SettingsController : ControllerBase
         }
 
         Settings current = await _settingsService.GetSettingsAsync();
-        await _hubContext.Clients.All.SettingsUpdated(current.File.LLMConfigs);
+        await _hubContext.Clients.All.SettingsUpdated(current.File);
         return Ok(config);
     }
 
@@ -68,7 +68,7 @@ public class SettingsController : ControllerBase
         }
 
         Settings current = await _settingsService.GetSettingsAsync();
-        await _hubContext.Clients.All.SettingsUpdated(current.File.LLMConfigs);
+        await _hubContext.Clients.All.SettingsUpdated(current.File);
         return NoContent();
     }
 }

@@ -301,10 +301,15 @@ public class CompactingConversation : ILlmConversation
 		{
 			return llmResult.Content;
 		}
-		else
+
+		// Prefer Content when present (e.g. recent assistant context from terminated conversations)
+		// so callers see useful work product. Fall back to ErrorMessage otherwise.
+		if (!string.IsNullOrEmpty(llmResult.Content))
 		{
-			return llmResult.ErrorMessage;
+			return llmResult.Content;
 		}
+
+		return llmResult.ErrorMessage;
 	}
 
 	public async Task ForceFlushAsync()

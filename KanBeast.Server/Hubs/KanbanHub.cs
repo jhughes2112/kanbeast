@@ -156,6 +156,6 @@ public interface IKanbanHubClient
     Task ClearConversation(string ticketId, string conversationId);
     Task InterruptConversation(string ticketId, string conversationId);
     Task ConversationModelChanged(string ticketId, string conversationId, string llmConfigId);
-    Task SettingsUpdated(List<LLMConfig> llmConfigs);
+    Task SettingsUpdated(SettingsFile settingsFile);
     Task WorkerChatMessage(string ticketId, string conversationId, string message);
 }

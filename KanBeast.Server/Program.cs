@@ -35,6 +35,10 @@ public class Program
         builder.Services.AddSignalR(options =>
         {
             options.MaximumReceiveMessageSize = 10 * 1024 * 1024;
+        })
+        .AddJsonProtocol(options =>
+        {
+            options.PayloadSerializerOptions.Converters.Add(new JsonStringEnumConverter());
         });
         builder.Services.AddOpenApi();
 

@@ -14,7 +14,7 @@ public class WorkerHubClient : IAsyncDisposable
 	private readonly ConcurrentDictionary<string, ConcurrentQueue<string>> _pendingChatMessages = new();
 	private readonly ConcurrentDictionary<string, bool> _pendingClearRequests = new();
 	private readonly ConcurrentDictionary<string, string> _pendingModelChanges = new();
-	private readonly ConcurrentQueue<List<LLMConfig>> _pendingSettingsUpdates = new();
+	private readonly ConcurrentQueue<SettingsFile> _pendingSettingsUpdates = new();
 	private readonly ConcurrentQueue<Ticket> _pendingTicketUpdates = new();
 	private readonly ConcurrentDictionary<string, CancellationTokenSource> _conversationInterruptSources = new();
 	private readonly SemaphoreSlim _ticketChangedSignal = new SemaphoreSlim(0);
@@ -134,9 +134,9 @@ public class WorkerHubClient : IAsyncDisposable
 		});
 
 		// Listen for settings updates pushed from the server.
-		_connection.On<List<LLMConfig>>("SettingsUpdated", (llmConfigs) =>
+		_connection.On<SettingsFile>("SettingsUpdated", (settingsFile) =>
 		{
-			_pendingSettingsUpdates.Enqueue(llmConfigs);
+			_pendingSettingsUpdates.Enqueue(settingsFile);
 		});
 	}
 
@@ -218,7 +218,7 @@ public class WorkerHubClient : IAsyncDisposable
 		return false;
 	}
 
-	public ConcurrentQueue<List<LLMConfig>> GetSettingsQueue()
+	public ConcurrentQueue<SettingsFile> GetSettingsQueue()
 	{
 		return _pendingSettingsUpdates;
 	}

@@ -7,28 +7,34 @@ namespace KanBeast.Worker.Services;
 public class LlmRegistry
 {
 	private List<LlmService> _services;
+	private string _endpoint;
+	private string _apiKey;
 
-	public LlmRegistry(List<LLMConfig> configs)
+	public LlmRegistry(string endpoint, string apiKey, List<LLMConfig> configs)
 	{
-		_services = new List<LlmService>();
-		foreach (LLMConfig config in configs)
-		{
-			_services.Add(new LlmService(config));
-		}
+		_endpoint = endpoint;
+		_apiKey = apiKey;
+		_services = BuildServices(endpoint, apiKey, configs);
 	}
 
 	// Replaces the service list with fresh instances, resetting all disabled/rate-limited state.
 	// Builds the new list fully before swapping so GetService never sees an empty list.
-	public void UpdateConfigs(List<LLMConfig> configs)
+	public void UpdateConfigs(string endpoint, string apiKey, List<LLMConfig> configs)
 	{
-		List<LlmService> newServices = new List<LlmService>();
+		_endpoint = endpoint;
+		_apiKey = apiKey;
+		_services = BuildServices(endpoint, apiKey, configs);
+		Console.WriteLine($"LlmProxy: Updated to {configs.Count} LLM config(s)");
+	}
+
+	private static List<LlmService> BuildServices(string endpoint, string apiKey, List<LLMConfig> configs)
+	{
+		List<LlmService> services = new List<LlmService>();
 		foreach (LLMConfig config in configs)
 		{
-			newServices.Add(new LlmService(config));
+			services.Add(new LlmService(config, endpoint, apiKey));
 		}
-
-		_services = newServices;
-		Console.WriteLine($"LlmProxy: Updated to {configs.Count} LLM config(s)");
+		return services;
 	}
 
 	// Looks up a service by config ID. Returns null if not found.
@@ -39,6 +45,21 @@ public class LlmRegistry
 		foreach (LlmService service in services)
 		{
 			if (service.Config.Id == configId)
+			{
+				return service;
+			}
+		}
+
+		return null;
+	}
+
+	// Returns the first non-permanently-down service, or null if none exist.
+	public LlmService? GetFirstAvailableService()
+	{
+		List<LlmService> services = _services;
+		foreach (LlmService service in services)
+		{
+			if (!service.IsPermanentlyDown)
 			{
 				return service;
 			}

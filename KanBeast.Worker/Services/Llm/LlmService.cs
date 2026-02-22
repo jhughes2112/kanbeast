@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -125,7 +126,8 @@ public enum LlmExitReason
 	CostExceeded,          // Accumulated cost exceeded the budget
 	RateLimited,           // Rate limited, RetryAfter indicates when to retry
 	Interrupted,           // User interrupted the conversation via the hub
-	ModelChanged           // User switched the conversation's LLM model
+	ModelChanged,          // User switched the conversation's LLM model
+	RepetitionDetected     // Model repeated the same action too many times
 }
 
 public class LlmResult
@@ -159,11 +161,14 @@ public class LlmService
 	private static readonly TimeSpan DownCooldown = TimeSpan.FromMinutes(5);
 
 	private const int ShortWaitThresholdSeconds = 20;
+	private const int RepetitionWarningStart = 3;
+	private const int RepetitionLimit = 5;
 
 	private readonly Random SeedRandom = new();
 
 	private readonly LLMConfig _config;
 	private readonly HttpClient _httpClient;
+	private readonly string _endpoint;
 
 	private bool _parallelToolCallsSupported = true;
 	private bool _hasSucceeded;
@@ -177,18 +182,19 @@ public class LlmService
 	public bool IsPermanentlyDown => _isPermanentlyDown;
 	public DateTimeOffset AvailableAt => _availableAt;
 
-	public LlmService(LLMConfig config)
+	public LlmService(LLMConfig config, string endpoint, string apiKey)
 	{
 		_config = config;
+		_endpoint = endpoint.TrimEnd('/');
 
-		if (string.IsNullOrWhiteSpace(config.Endpoint))
+		if (string.IsNullOrWhiteSpace(endpoint))
 		{
-			throw new InvalidOperationException("LLM endpoint is required, such as https://api.openai.com/v1");
+			throw new InvalidOperationException("LLM endpoint is required, such as https://openrouter.ai/api/v1");
 		}
 
 		_httpClient = new HttpClient();
-		_httpClient.Timeout = TimeSpan.FromMinutes(5);  // ridiculously long timeout, because sometimes openrouter takes its time
-		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {config.ApiKey}");
+		_httpClient.Timeout = TimeSpan.FromMinutes(5);
+		_httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {apiKey}");
 	}
 
 	// Runs the conversation in a loop until idle, tool-exit, or fatal error.
@@ -268,10 +274,11 @@ public class LlmService
 				await WorkerSession.HubClient.SendHeartbeatAsync();
 
 				if (conversation.HasReachedMaxIterations)
-				{
-					finalResult = new LlmResult(LlmExitReason.MaxIterationsReached, string.Empty, "Max iterations reached", null, null);
-					break;
-				}
+					{
+						string recentContext = ExtractRecentAssistantContext(conversation.Messages, 3);
+						finalResult = new LlmResult(LlmExitReason.MaxIterationsReached, recentContext, "Max iterations reached", null, null);
+						break;
+					}
 
 				decimal remainingBudget = conversation.GetRemainingBudget();
 				if (remainingBudget > 0 && accumulatedCost >= remainingBudget)
@@ -346,7 +353,7 @@ public class LlmService
 				};
 
 				string requestJson = JsonSerializer.Serialize(request, JsonOptions);
-				string fullUrl = $"{_config.Endpoint!.TrimEnd('/')}/chat/completions";
+				string fullUrl = $"{_endpoint}/chat/completions";
 
 				try
 				{
@@ -476,16 +483,17 @@ public class LlmService
 		{
 			// Cancel tool CTS so any running tools/sub-agents see it and add their own notes.
 			toolCts.Cancel();
-			conversation.AddNote("Interrupted by user.");
 
 			if (!cancellationToken.IsCancellationRequested)
 			{
-				// Direct interrupt: this conversation's CTS was cancelled, parent still alive.
-				finalResult = new LlmResult(LlmExitReason.Interrupted, string.Empty, "Interrupted", null, null);
+				// Direct interrupt: the user clicked stop on this conversation.
+				conversation.AddNote("Interrupted by user.");
+				finalResult = new LlmResult(LlmExitReason.Interrupted, string.Empty, "Interrupted by user", null, null);
 			}
 			else
 			{
-				// Indirect interrupt: parent cancelled (e.g., planning interrupted while sub-agent running).
+				// Parent cancelled (e.g., planning agent interrupted while this sub-agent was running).
+				conversation.AddNote("Parent conversation was interrupted.");
 				throw;
 			}
 		}
@@ -586,6 +594,27 @@ public class LlmService
 			}
 		}
 
+		// Detect repetitive identical actions from the model.
+		uint fingerprint = FingerprintAssistantMessage(assistantMessage);
+		Dictionary<uint, int> fingerprints = conversation.ToolContext.ActionFingerprints;
+		fingerprints.TryGetValue(fingerprint, out int repeatCount);
+		repeatCount++;
+		fingerprints[fingerprint] = repeatCount;
+
+		if (repeatCount >= RepetitionLimit)
+		{
+			Console.WriteLine($"[{_config.Model}] Terminating: identical action repeated {repeatCount} times");
+			conversation.AddAssistantMessage(assistantMessage);
+			conversation.AddNote($"TERMINATED: Model repeated the same action {repeatCount} times without making progress.");
+			string recentContext = ExtractRecentAssistantContext(conversation.Messages, 3);
+			return new LlmResult(LlmExitReason.RepetitionDetected, recentContext, $"Identical action repeated {repeatCount} times", null, null);
+		}
+
+		if (repeatCount >= RepetitionWarningStart)
+		{
+			Console.WriteLine($"[{_config.Model}] Repetition warning: identical action seen {repeatCount}/{RepetitionLimit} times");
+		}
+
 		conversation.AddAssistantMessage(assistantMessage);
 
 		if (assistantMessage.ToolCalls == null || assistantMessage.ToolCalls.Count == 0)
@@ -600,6 +629,10 @@ public class LlmService
 				if (continueQueue.IsEmpty)
 				{
 					string effective = BuildContinueMessageWithWarning(continueMessage!, conversation.Iteration, conversation.MaxIterations);
+					if (repeatCount >= RepetitionWarningStart)
+					{
+						effective += $"\n\n⚠️ REPETITION WARNING: You have repeated this exact same response {repeatCount} time(s). You will be TERMINATED at {RepetitionLimit}. Do something different or call your completion tool NOW.";
+					}
 					conversation.AddUserMessage(effective);
 				}
 			}
@@ -632,7 +665,12 @@ public class LlmService
 
 				if (!toolResult.MessageHandled)
 				{
-					conversation.AddToolMessage(toolCalls[i].Id, toolResult.Response);
+					string response = toolResult.Response;
+					if (repeatCount >= RepetitionWarningStart && i == completedTools.Length - 1)
+					{
+						response += $"\n\n⚠️ REPETITION WARNING: You have made this exact same tool call {repeatCount} time(s). You will be TERMINATED at {RepetitionLimit}. Do something different or call your completion tool NOW.";
+					}
+					conversation.AddToolMessage(toolCalls[i].Id, response);
 				}
 
 				if (toolResult.ExitLoop)
@@ -721,6 +759,113 @@ public class LlmService
 		}
 
 		return effective;
+	}
+
+	// IEEE 802.3 CRC32 lookup table, computed once.
+	private static readonly uint[] Crc32Table = BuildCrc32Table();
+
+	private static uint[] BuildCrc32Table()
+	{
+		uint[] table = new uint[256];
+		for (uint i = 0; i < 256; i++)
+		{
+			uint crc = i;
+			for (int j = 0; j < 8; j++)
+			{
+				if ((crc & 1) != 0)
+				{
+					crc = (crc >> 1) ^ 0xEDB88320u;
+				}
+				else
+				{
+					crc >>= 1;
+				}
+			}
+			table[i] = crc;
+		}
+		return table;
+	}
+
+	private static uint ComputeCrc32(byte[] data)
+	{
+		uint crc = 0xFFFFFFFFu;
+		for (int i = 0; i < data.Length; i++)
+		{
+			crc = Crc32Table[(crc ^ data[i]) & 0xFF] ^ (crc >> 8);
+		}
+		return crc ^ 0xFFFFFFFFu;
+	}
+
+	// Builds a stable fingerprint from the assistant message content and tool call signatures.
+	// Tool call IDs are excluded since they are unique each time.
+	private static uint FingerprintAssistantMessage(ConversationMessage message)
+	{
+		StringBuilder sb = new StringBuilder();
+
+		if (message.Content != null)
+		{
+			sb.Append(message.Content);
+		}
+
+		if (message.ToolCalls != null)
+		{
+			foreach (ConversationToolCall tc in message.ToolCalls)
+			{
+				sb.Append('\0');
+				sb.Append(tc.Function.Name);
+				sb.Append('\0');
+				sb.Append(tc.Function.Arguments);
+			}
+		}
+
+		byte[] bytes = Encoding.UTF8.GetBytes(sb.ToString());
+		return ComputeCrc32(bytes);
+	}
+
+	// Extracts the last N assistant messages (with any immediately following tool results) for context
+	// when a conversation is terminated. Callers get useful work product instead of an empty string.
+	private static string ExtractRecentAssistantContext(List<ConversationMessage> messages, int count)
+	{
+		StringBuilder sb = new StringBuilder();
+		int found = 0;
+
+		for (int i = messages.Count - 1; i >= 0 && found < count; i--)
+		{
+			ConversationMessage msg = messages[i];
+			if (msg.Role != "assistant")
+			{
+				continue;
+			}
+
+			found++;
+			sb.Insert(0, "\n---\n");
+
+			// Collect tool results that immediately follow this assistant message.
+			for (int j = i + 1; j < messages.Count && messages[j].Role == "tool"; j++)
+			{
+				string toolSnippet = messages[j].Content ?? string.Empty;
+				if (toolSnippet.Length > 500)
+				{
+					toolSnippet = toolSnippet.Substring(0, 500) + "…";
+				}
+				sb.Insert(0, $"[tool result] {toolSnippet}\n");
+			}
+
+			if (msg.ToolCalls != null)
+			{
+				foreach (ConversationToolCall tc in msg.ToolCalls)
+				{
+					sb.Insert(0, $"[called {tc.Function.Name}] {tc.Function.Arguments}\n");
+				}
+			}
+
+			if (!string.IsNullOrEmpty(msg.Content))
+			{
+				sb.Insert(0, msg.Content + "\n");
+			}
+		}
+
+		return sb.ToString().Trim();
 	}
 
 	private DateTimeOffset ComputeRetryAfterTime(HttpResponseMessage response, string responseBody)

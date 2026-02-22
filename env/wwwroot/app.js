@@ -156,9 +156,12 @@ function setupSignalR() {
         applyTicketDeleted(ticketId);
     });
 
-    connection.on('SettingsUpdated', async (llmConfigs) => {
+    connection.on('SettingsUpdated', async (settingsFile) => {
         if (settings) {
-            settings.llmConfigs = llmConfigs || [];
+            settings.endpoint = settingsFile.endpoint || 'https://openrouter.ai/api/v1';
+            settings.apiKey = settingsFile.apiKey || '';
+            settings.llmConfigs = settingsFile.llmConfigs || [];
+            settings.webSearch = settingsFile.webSearch || {};
         }
     });
 
@@ -360,8 +363,33 @@ function updateConnectionStatus(status, text) {
     }
 }
 
+// Status enum values sent by SignalR before the server uses JsonStringEnumConverter.
+const STATUS_INT_TO_STRING = { 0: 'Backlog', 1: 'Active', 2: 'Failed', 3: 'Done' };
+const SUBTASK_INT_TO_STRING = { 0: 'Incomplete', 1: 'InProgress', 2: 'AwaitingReview', 3: 'Complete', 4: 'Rejected' };
+
+// Normalizes a ticket so enum fields are always strings, regardless of how they were serialized.
+function normalizeTicket(ticket) {
+    if (typeof ticket.status === 'number') {
+        ticket.status = STATUS_INT_TO_STRING[ticket.status] || 'Backlog';
+    }
+    if (ticket.tasks) {
+        for (let t = 0; t < ticket.tasks.length; t++) {
+            if (ticket.tasks[t].subtasks) {
+                for (let s = 0; s < ticket.tasks[t].subtasks.length; s++) {
+                    let st = ticket.tasks[t].subtasks[s];
+                    if (typeof st.status === 'number') {
+                        st.status = SUBTASK_INT_TO_STRING[st.status] || 'Incomplete';
+                    }
+                }
+            }
+        }
+    }
+}
+
 // Merge a single ticket update into the local array without re-fetching.
 function mergeTicketIntoLocal(ticket) {
+    normalizeTicket(ticket);
+
     let found = false;
     for (let i = 0; i < tickets.length; i++) {
         if (tickets[i].id === ticket.id) {
@@ -481,6 +509,8 @@ function normalizeSettings(raw) {
     }
 
     if (raw.file) {
+        raw.endpoint = raw.file.endpoint || 'https://openrouter.ai/api/v1';
+        raw.apiKey = raw.file.apiKey || '';
         raw.llmConfigs = raw.file.llmConfigs || [];
         raw.gitConfig = raw.file.gitConfig || {};
         raw.compaction = raw.file.compaction || {};
@@ -2181,11 +2211,12 @@ function showSettings() {
     updateCompactionVisibility();
 
     // Populate LLM configs
+    document.getElementById('providerEndpoint').value = (settings && settings.endpoint) || 'https://openrouter.ai/api/v1';
+    document.getElementById('providerApiKey').value = (settings && settings.apiKey) || '';
     renderLLMConfigs();
 
     // Populate web search settings
     if (settings && settings.webSearch) {
-        document.getElementById('webSearchApiKey').value = settings.webSearch.apiKey || '';
         document.getElementById('webSearchModel').value = settings.webSearch.model || 'openai/gpt-4.1-nano';
         document.getElementById('webSearchEngine').value = settings.webSearch.engine || 'auto';
     }
@@ -2258,15 +2289,7 @@ function renderLLMConfigs() {
             <div class="accordion-content" style="padding: 12px; padding-top: 8px;">
                 <div class="form-group">
                     <label>Model</label>
-                    <input type="text" class="llm-model" value="${escapeHtml(config.model || '')}" placeholder="gpt-4o">
-                </div>
-                <div class="form-group">
-                    <label>API Key</label>
-                    <input type="password" class="llm-apikey" value="${escapeHtml(config.apiKey || '')}" placeholder="sk-...">
-                </div>
-                <div class="form-group">
-                    <label>Endpoint (optional, for Azure/custom)</label>
-                    <input type="text" class="llm-endpoint" value="${escapeHtml(config.endpoint || '')}" placeholder="https://...">
+                    <input type="text" class="llm-model" value="${escapeHtml(config.model || '')}" placeholder="openai/gpt-4o">
                 </div>
                 <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 15px;">
                     <div>
@@ -2320,7 +2343,7 @@ function addLLMConfig() {
         settings.llmConfigs = [];
     }
 
-    settings.llmConfigs.push({ model: '', apiKey: '', endpoint: '', contextLength: 128000, inputTokenPrice: 0, outputTokenPrice: 0, temperature: 0.2, strengths: '', weaknesses: '' });
+    settings.llmConfigs.push({ model: '', contextLength: 128000, inputTokenPrice: 0, outputTokenPrice: 0, temperature: 0.2, strengths: '', weaknesses: '' });
     renderLLMConfigs();
 }
 
@@ -2337,8 +2360,6 @@ function collectLLMConfigs() {
     document.querySelectorAll('.llm-config').forEach(configEl => {
         configs.push({
             model: configEl.querySelector('.llm-model').value,
-            apiKey: configEl.querySelector('.llm-apikey').value,
-            endpoint: configEl.querySelector('.llm-endpoint').value || null,
             contextLength: parseInt(configEl.querySelector('.llm-context-length').value, 10) || 128000,
             inputTokenPrice: parseFloat(configEl.querySelector('.llm-input-price').value) || 0,
             outputTokenPrice: parseFloat(configEl.querySelector('.llm-output-price').value) || 0,
@@ -2361,6 +2382,8 @@ async function handleSaveSettings(e) {
 async function saveSettings() {
     const updatedSettings = {
         file: {
+            endpoint: document.getElementById('providerEndpoint').value || 'https://openrouter.ai/api/v1',
+            apiKey: document.getElementById('providerApiKey').value || '',
             llmConfigs: collectLLMConfigs(),
             gitConfig: {
                 repositoryUrl: document.getElementById('gitUrl').value,
@@ -2375,7 +2398,6 @@ async function saveSettings() {
                 contextSizePercent: parseInt(document.getElementById('contextPercent').value, 10) / 100
             },
             webSearch: {
-                apiKey: document.getElementById('webSearchApiKey').value || null,
                 model: document.getElementById('webSearchModel').value || 'openai/gpt-4.1-nano',
                 engine: document.getElementById('webSearchEngine').value || 'auto'
             }

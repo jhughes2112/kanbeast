@@ -23,6 +23,9 @@ public class ToolContext
 	public LlmService? LlmService { get; internal set; }
 	public LlmService? SubAgentService { get; internal set; }
 
+	// CRC32 -> count. Detects repetitive identical actions from the model.
+	public Dictionary<uint, int> ActionFingerprints { get; }
+
 	// Derived from the LlmService for code that needs the config ID string.
 	public string? LlmConfigId => LlmService?.Config.Id;
 
@@ -45,6 +48,7 @@ public class ToolContext
 	public ToolContext(string? currentTaskId, string? currentSubtaskId, LlmService? llmService, LlmService? subAgentService)
 	{
 		ReadFiles = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
+		ActionFingerprints = new Dictionary<uint, int>();
 		CurrentTaskId = currentTaskId;
 		CurrentSubtaskId = currentSubtaskId;
 		LlmService = llmService;

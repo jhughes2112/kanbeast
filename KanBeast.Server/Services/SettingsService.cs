@@ -58,6 +58,16 @@ public class SettingsService : ISettingsService
             SettingsFile settingsFile = LoadSettingsFile();
 
             // Merge incoming settings with current - only overwrite fields that were actually provided
+            if (!string.IsNullOrEmpty(incomingSettings.File.Endpoint))
+            {
+                settingsFile.Endpoint = incomingSettings.File.Endpoint;
+            }
+
+            if (!string.IsNullOrEmpty(incomingSettings.File.ApiKey))
+            {
+                settingsFile.ApiKey = incomingSettings.File.ApiKey;
+            }
+
             if (incomingSettings.File.LLMConfigs.Count > 0)
             {
                 settingsFile.LLMConfigs = incomingSettings.File.LLMConfigs;

@@ -31,7 +31,7 @@ public static class SubAgentTools
 	public static async Task<ToolResult> StartSubAgentAsync(
 		[Description("Brief summary of the sub-agent's mission (logged to activity feed and shown to the sub-agent as context).")] string taskSummary,
 		[Description("Detailed, self-contained instructions and expectations for the sub-agent's response.")] string instructions,
-		[Description("The LLM config id to use for this sub-agent. Choose from the available LLMs listed in your prompt.")] string llmConfigId,
+		[Description("The guid of the LLM to use for this developer sub-agent. Choose from the available LLMs listed by list_available_llms.")] string id,
 		ToolContext context)
 	{
 		ToolResult result;
@@ -44,7 +44,7 @@ public static class SubAgentTools
 		{
 			result = new ToolResult("Error: instructions cannot be empty", false, false);
 		}
-		else if (string.IsNullOrWhiteSpace(llmConfigId))
+		else if (string.IsNullOrWhiteSpace(id))
 		{
 			result = new ToolResult("Error: llmConfigId cannot be empty", false, false);
 		}
@@ -53,7 +53,7 @@ public static class SubAgentTools
 			try
 			{
 				string continueMessage = "Continue working. You must use tools to make progress and call agent_task_complete when finished ({messagesRemaining} turns remaining). Do NOT respond with only text.";
-				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.DeveloperSubagent, "Sub-agent", llmConfigId, continueMessage, context);
+				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.DeveloperSubagent, "Sub-agent", id, continueMessage, context);
 				result = new ToolResult(content, false, false);
 			}
 			catch (OperationCanceledException)
@@ -97,6 +97,7 @@ public static class SubAgentTools
 	public static async Task<ToolResult> StartInspectionAgentAsync(
 		[Description("Brief summary of what to investigate (logged to activity feed).")] string taskSummary,
 		[Description("Detailed question or investigation instructions. Be specific about what information to return.")] string instructions,
+		[Description("The guid of the LLM to use for this inspection sub-agent. Choose from the available LLMs listed by list_available_llms.")] string id,
 		ToolContext context)
 	{
 		ToolResult result;
@@ -114,7 +115,7 @@ public static class SubAgentTools
 			try
 			{
 				string continueMessage = "Continue investigating. Use tools to gather information and call agent_task_complete with your findings when done ({messagesRemaining} turns remaining). Do NOT respond with only text.";
-				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.PlanningSubagent, "Inspection", context.LlmConfigId, continueMessage, context);
+				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.PlanningSubagent, "Inspection", id, continueMessage, context);
 				result = new ToolResult(content, false, false);
 			}
 			catch (OperationCanceledException)

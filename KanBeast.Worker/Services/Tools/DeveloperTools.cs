@@ -32,7 +32,7 @@ public static class DeveloperTools
 		[Description("Full description and acceptance criteria for the subtask")] string subtaskDescription,
 		[Description("The task ID from the ticket")] string taskId,
 		[Description("The subtask ID from the ticket")] string subtaskId,
-		[Description("The LLM config id to use for this developer session, from get_next_work_item")] string llmConfigId,
+		[Description("The guid of the LLM to use for this developer session, from get_next_work_item")] string id,
 		ToolContext context)
 	{
 		ToolResult result;
@@ -49,14 +49,14 @@ public static class DeveloperTools
 
 				string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
-				LlmService? service = WorkerSession.LlmProxy.GetService(llmConfigId);
+				LlmService? service = WorkerSession.LlmProxy.GetService(id);
 				if (service == null)
 				{
-					result = new ToolResult($"Error: LLM config '{llmConfigId}' not found", false, false);
+					result = new ToolResult($"Error: LLM config '{id}' not found", false, false);
 					return result;
 				}
 
-				string modelTag = $"{llmConfigId[..4]}:{service.Model}";
+				string modelTag = $"{id[..4]}:{service.Model}";
 				await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Started subtask [{modelTag}]: {subtaskName}", WorkerSession.CancellationToken);
 
 				ToolContext devContext = new ToolContext(taskId, subtaskId, service, null);

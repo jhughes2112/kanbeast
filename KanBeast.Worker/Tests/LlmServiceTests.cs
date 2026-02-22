@@ -16,11 +16,9 @@ public static class LlmServiceTests
 
 		LLMConfig config = new LLMConfig
 		{
-			ApiKey = "test-key",
-			Model = "test-model",
-			Endpoint = "https://test.example.com/v1"
+			Model = "test-model"
 		};
-		LlmService service = new LlmService(config);
+		LlmService service = new LlmService(config, "https://test.example.com/v1", "test-key");
 		List<Tool> tools = BuildTestTools();
 
 		TestEpochToSecondsFromNow(ctx);
@@ -239,11 +237,9 @@ public static class LlmServiceTests
 		// Fresh instance so _toolChoiceMode starts at Required.
 		LLMConfig config = new LLMConfig
 		{
-			ApiKey = "test-key",
-			Model = "test-model",
-			Endpoint = "https://test.example.com/v1"
+			Model = "test-model"
 		};
-		LlmService freshService = new LlmService(config);
+		LlmService freshService = new LlmService(config, "https://test.example.com/v1", "test-key");
 		Type[] types = [typeof(HttpResponseMessage), typeof(string)];
 
 		HttpResponseMessage r400 = new HttpResponseMessage(HttpStatusCode.BadRequest);
@@ -263,7 +259,7 @@ public static class LlmServiceTests
 
 		// 500 status is out of range.
 		HttpResponseMessage r500 = new HttpResponseMessage(HttpStatusCode.InternalServerError);
-		LlmService freshService2 = new LlmService(config);
+		LlmService freshService2 = new LlmService(config, "https://test.example.com/v1", "test-key");
 		bool serverErr = (bool)Reflect.Instance(freshService2, "TryAdaptToError", types, [r500, toolChoiceBody])!;
 		ctx.Assert(!serverErr, "TryAdaptToError: 500 status returns false");
 

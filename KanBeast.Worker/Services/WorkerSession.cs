@@ -15,6 +15,8 @@ public static class WorkerSession
 	public static string WorkDir { get; private set; } = string.Empty;
 	public static CancellationToken CancellationToken { get; private set; }
 	public static WorkerHubClient HubClient { get; private set; } = null!;
+	public static string Endpoint { get; private set; } = string.Empty;
+	public static string ApiKey { get; private set; } = string.Empty;
 	public static WebSearchConfig WebSearch { get; private set; } = new();
 	public static CompactionSettings Compaction { get; private set; } = new();
 
@@ -31,6 +33,8 @@ public static class WorkerSession
 		string workDir,
 		CancellationToken cancellationToken,
 		WorkerHubClient hubClient,
+		string endpoint,
+		string apiKey,
 		WebSearchConfig webSearch,
 		CompactionSettings compaction)
 	{
@@ -41,6 +45,8 @@ public static class WorkerSession
 		WorkDir = workDir;
 		CancellationToken = cancellationToken;
 		HubClient = hubClient;
+		Endpoint = endpoint;
+		ApiKey = apiKey;
 		WebSearch = webSearch;
 		Compaction = compaction;
 	}
@@ -48,6 +54,12 @@ public static class WorkerSession
 	public static void UpdateCancellationToken(CancellationToken cancellationToken)
 	{
 		CancellationToken = cancellationToken;
+	}
+
+	public static void UpdateProviderCredentials(string endpoint, string apiKey)
+	{
+		Endpoint = endpoint;
+		ApiKey = apiKey;
 	}
 
 	public static void Stop()
@@ -59,6 +71,8 @@ public static class WorkerSession
 		WorkDir = string.Empty;
 		CancellationToken = default;
 		HubClient = null!;
+		Endpoint = string.Empty;
+		ApiKey = string.Empty;
 		WebSearch = new();
 		Compaction = new();
 	}

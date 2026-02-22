@@ -87,9 +87,9 @@ public static class WebTools
         CancellationToken cancellationToken = WorkerSession.CancellationToken;
         ToolResult result;
 
-        if (string.IsNullOrWhiteSpace(WorkerSession.WebSearch.ApiKey))
+        if (string.IsNullOrWhiteSpace(WorkerSession.ApiKey))
         {
-            result = new ToolResult("Error: Web search is not configured. Set an OpenRouter API key in Settings → Web Search.", false, false);
+            result = new ToolResult("Error: Web search is not configured. Set an OpenRouter API key in Settings.", false, false);
         }
         else if (string.IsNullOrWhiteSpace(query))
         {
@@ -136,7 +136,7 @@ public static class WebTools
 
     private static async Task<string> SearchViaOpenRouterAsync(string query, int maxResults, CancellationToken cancellationToken)
     {
-        string apiKey = WorkerSession.WebSearch.ApiKey!;
+        string apiKey = WorkerSession.ApiKey;
         string model = WorkerSession.WebSearch.Model;
         string engine = WorkerSession.WebSearch.Engine;
 
@@ -153,7 +153,8 @@ public static class WebTools
 
         string requestJson = $"{{\"model\":\"{model}\",\"messages\":[{{\"role\":\"user\",\"content\":{JsonSerializer.Serialize(query)}}}],\"plugins\":[{pluginJson}],\"temperature\":0,\"max_tokens\":1024}}";
 
-        HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions");
+        string endpoint = WorkerSession.Endpoint.TrimEnd('/');
+        HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, $"{endpoint}/chat/completions");
         request.Headers.Add("Authorization", $"Bearer {apiKey}");
         request.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
 

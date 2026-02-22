@@ -16,6 +16,7 @@ public class AgentOrchestrator
 	private List<LLMConfig> _llmConfigs;
 
 	private ILlmConversation? _planningConversation;
+	private DateTimeOffset _nextPlannerRetry = DateTimeOffset.MinValue;
 
 	public AgentOrchestrator(
 		ILogger<AgentOrchestrator> logger,
@@ -34,7 +35,7 @@ public class AgentOrchestrator
 		_logger.LogInformation("Entering reactive loop");
 
 		Console.WriteLine("Orchestrator: Starting main loop");
-		ConcurrentQueue<List<LLMConfig>> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
+		ConcurrentQueue<SettingsFile> settingsQueue = WorkerSession.HubClient.GetSettingsQueue();
 		ConcurrentQueue<Ticket> ticketQueue = WorkerSession.HubClient.GetTicketUpdateQueue();
 		DateTimeOffset lastHeartbeat = DateTimeOffset.UtcNow;
 		bool interrupted = false;
@@ -92,14 +93,17 @@ public class AgentOrchestrator
 			}
 
 			List<LLMConfig>? latestConfigs = null;
-			while (settingsQueue.TryDequeue(out List<LLMConfig>? configs))
+			SettingsFile? latestSettingsFile = null;
+			while (settingsQueue.TryDequeue(out SettingsFile? sf))
 			{
-				latestConfigs = configs;
+				latestSettingsFile = sf;
+				latestConfigs = sf.LLMConfigs;
 			}
-			if (latestConfigs != null && latestConfigs.Count > 0)
+			if (latestSettingsFile != null && latestConfigs != null && latestConfigs.Count > 0)
 			{
-				_logger.LogInformation("Applying updated LLM configs ({Count} endpoint(s))", latestConfigs.Count);
-				WorkerSession.LlmProxy.UpdateConfigs(latestConfigs);
+				_logger.LogInformation("Applying updated LLM configs ({Count} model(s))", latestConfigs.Count);
+				WorkerSession.LlmProxy.UpdateConfigs(latestSettingsFile.Endpoint, latestSettingsFile.ApiKey, latestConfigs);
+				WorkerSession.UpdateProviderCredentials(latestSettingsFile.Endpoint, latestSettingsFile.ApiKey);
 				_llmConfigs = latestConfigs;
 			}
 
@@ -140,6 +144,12 @@ public class AgentOrchestrator
 			return;
 		}
 
+		// Throttle retries so we don't hammer the server every 250ms when no LLM is available.
+		if (DateTimeOffset.UtcNow < _nextPlannerRetry)
+		{
+			return;
+		}
+
 		string ticketId = ticketHolder.Ticket.Id;
 
 		// Fetch all non-finalized conversations so child agents can be found by ID during tool replay.
@@ -159,8 +169,20 @@ public class AgentOrchestrator
 			}
 		}
 
+		// Look up the planner LLM by ID. If the ID is stale (configs regenerated), fall back
+		// to the first available service so the worker isn't permanently stuck.
 		LlmService? plannerService = WorkerSession.LlmProxy.GetService(ticketHolder.Ticket.PlannerLlmId!);
-		if (plannerService!=null)
+		if (plannerService == null)
+		{
+			plannerService = WorkerSession.LlmProxy.GetFirstAvailableService();
+			if (plannerService != null)
+			{
+				_logger.LogWarning("Planner LLM ID {OldId} not found, falling back to {Model} ({NewId})",
+					ticketHolder.Ticket.PlannerLlmId, plannerService.Model, plannerService.Config.Id);
+			}
+		}
+
+		if (plannerService != null)
 		{
 			if (planningData != null)
 			{
@@ -198,7 +220,9 @@ public class AgentOrchestrator
 		}
 		else
 		{
-			_logger.LogError(ticketId + ": Planner LLM service not found for ID " + ticketHolder.Ticket.PlannerLlmId);
+			_logger.LogError("No available LLM service for ticket {TicketId} (planner ID: {PlannerId}). Retrying in 10s.",
+				ticketId, ticketHolder.Ticket.PlannerLlmId);
+			_nextPlannerRetry = DateTimeOffset.UtcNow.AddSeconds(10);
 		}
 	}
 

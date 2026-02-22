@@ -158,6 +158,16 @@
 						<span class="accordion-icon">▼</span>
 					</div>
 					<div class="accordion-content" id="llm-section">
+						<div class="form-group">
+							<label for="providerEndpoint">Provider Endpoint</label>
+							<input type="text" id="providerEndpoint" value="https://openrouter.ai/api/v1" placeholder="https://openrouter.ai/api/v1">
+							<small style="color: var(--gray-500);">Shared by all LLMs and web search.</small>
+						</div>
+						<div class="form-group">
+							<label for="providerApiKey">API Key</label>
+							<input type="password" id="providerApiKey" placeholder="sk-or-v1-...">
+							<small style="color: var(--gray-500);">Shared by all LLMs and web search.</small>
+						</div>
 						<div id="llmConfigs"></div>
 						<button id="addLLMBtn" class="btn-secondary" type="button">+ Add LLM Configuration</button>
 					</div>
@@ -236,12 +246,8 @@
 									<div class="accordion-content" id="websearch-section">
 										<small style="color: var(--gray-500); display: block; margin-bottom: 12px;">
 											Powered by <a href="https://openrouter.ai/docs/guides/features/plugins/web-search" target="_blank" style="color: var(--primary);">OpenRouter Web Search</a>.
-											Requires an OpenRouter API key with credits.
+											Uses the shared API key from LLM Configurations above.
 										</small>
-										<div class="form-group">
-											<label for="webSearchApiKey">OpenRouter API Key</label>
-											<input type="password" id="webSearchApiKey" placeholder="sk-or-v1-...">
-										</div>
 										<div class="form-group">
 											<label for="webSearchModel">Model (used to summarize results)</label>
 											<input type="text" id="webSearchModel" placeholder="openai/gpt-4.1-nano">

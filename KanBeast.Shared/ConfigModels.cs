@@ -1,12 +1,10 @@
 namespace KanBeast.Shared;
 
-// Describes a single LLM endpoint.
+// Describes a single LLM model configuration.
 public class LLMConfig
 {
 	public string Id { get; set; } = Guid.NewGuid().ToString();
-	public string ApiKey { get; set; } = string.Empty;
 	public string Model { get; set; } = string.Empty;
-	public string? Endpoint { get; set; }
 	public int ContextLength { get; set; } = 128000;
 	public decimal InputTokenPrice { get; set; } = 0m;
 	public decimal OutputTokenPrice { get; set; } = 0m;
@@ -40,7 +38,6 @@ public class CompactionSettings
 // Engine selects how results are fetched: "auto" (default), "native", or "exa".
 public class WebSearchConfig
 {
-	public string? ApiKey { get; set; }
 	public string Model { get; set; } = "openai/gpt-4.1-nano";
 	public string Engine { get; set; } = "auto";
 }
@@ -48,6 +45,10 @@ public class WebSearchConfig
 // Defines settings persisted in settings.json. Shared by server and worker.
 public class SettingsFile
 {
+	// Shared provider endpoint and API key used by all LLMs and web search.
+	public string Endpoint { get; set; } = "https://openrouter.ai/api/v1";
+	public string ApiKey { get; set; } = string.Empty;
+
 	public List<LLMConfig> LLMConfigs { get; set; } = new();
 	public GitConfig GitConfig { get; set; } = new();
 	public CompactionSettings Compaction { get; set; } = new();
