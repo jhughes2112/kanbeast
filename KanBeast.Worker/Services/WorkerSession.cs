@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using KanBeast.Shared;
-using KanBeast.Worker.Services.Tools;
 
 namespace KanBeast.Worker.Services;
 
@@ -60,6 +59,29 @@ public static class WorkerSession
 	{
 		Endpoint = endpoint;
 		ApiKey = apiKey;
+	}
+
+	// Drains pending settings from the hub queue and updates the LLM registry.
+	// Called from both the orchestrator's idle loop and the inner LLM loop so
+	// newly added models are visible before a model-change lookup.
+	public static bool ApplyPendingSettings()
+	{
+		ConcurrentQueue<SettingsFile> settingsQueue = HubClient.GetSettingsQueue();
+		SettingsFile? latestSettingsFile = null;
+		while (settingsQueue.TryDequeue(out SettingsFile? sf))
+		{
+			latestSettingsFile = sf;
+		}
+
+		if (latestSettingsFile == null || latestSettingsFile.LLMConfigs.Count == 0)
+		{
+			return false;
+		}
+
+		LlmProxy.UpdateConfigs(latestSettingsFile.Endpoint, latestSettingsFile.ApiKey, latestSettingsFile.LLMConfigs);
+		UpdateProviderCredentials(latestSettingsFile.Endpoint, latestSettingsFile.ApiKey);
+		Console.WriteLine($"WorkerSession: Applied updated LLM configs ({latestSettingsFile.LLMConfigs.Count} model(s))");
+		return true;
 	}
 
 	public static void Stop()

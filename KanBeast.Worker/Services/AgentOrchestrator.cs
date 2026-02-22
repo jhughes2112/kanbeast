@@ -66,22 +66,6 @@ public class AgentOrchestrator
 						interrupted = true;
 					}
 				}
-				else
-				{
-					// While idle, check for model changes so the dropdown stays in sync
-					// even when the LLM loop isn't running.
-					string? pendingModelChange = WorkerSession.HubClient.TryConsumeModelChange(_planningConversation.Id);
-					if (pendingModelChange != null)
-					{
-						LlmService? newService = WorkerSession.LlmProxy.GetService(pendingModelChange);
-						if (newService != null)
-						{
-							_planningConversation.ToolContext.LlmService = newService;
-							await _planningConversation.ForceFlushAsync();
-							_logger.LogInformation("Switched idle planning LLM to {Model}", newService.Model);
-						}
-					}
-				}
 			}
 
 			// Housekeeping while idle.
@@ -92,19 +76,24 @@ public class AgentOrchestrator
 				await WorkerSession.HubClient.SendHeartbeatAsync();
 			}
 
-			List<LLMConfig>? latestConfigs = null;
-			SettingsFile? latestSettingsFile = null;
-			while (settingsQueue.TryDequeue(out SettingsFile? sf))
+			// Apply settings updates before processing model changes so newly added
+			// LLMs are registered before the switch lookup runs.
+			WorkerSession.ApplyPendingSettings();
+
+			// Process model changes after settings are applied so new LLMs are in the registry.
+			if (_planningConversation != null)
 			{
-				latestSettingsFile = sf;
-				latestConfigs = sf.LLMConfigs;
-			}
-			if (latestSettingsFile != null && latestConfigs != null && latestConfigs.Count > 0)
-			{
-				_logger.LogInformation("Applying updated LLM configs ({Count} model(s))", latestConfigs.Count);
-				WorkerSession.LlmProxy.UpdateConfigs(latestSettingsFile.Endpoint, latestSettingsFile.ApiKey, latestConfigs);
-				WorkerSession.UpdateProviderCredentials(latestSettingsFile.Endpoint, latestSettingsFile.ApiKey);
-				_llmConfigs = latestConfigs;
+				string? pendingModelChange = WorkerSession.HubClient.TryConsumeModelChange(_planningConversation.Id);
+				if (pendingModelChange != null)
+				{
+					LlmService? newService = WorkerSession.LlmProxy.GetService(pendingModelChange);
+					if (newService != null)
+					{
+						_planningConversation.ToolContext.LlmService = newService;
+						await _planningConversation.ForceFlushAsync();
+						_logger.LogInformation("Switched idle planning LLM to {Model}", newService.Model);
+					}
+				}
 			}
 
 			Ticket? latestTicket = null;

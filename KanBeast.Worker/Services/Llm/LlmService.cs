@@ -309,6 +309,11 @@ public class LlmService
 				string? newLlmConfigId = WorkerSession.HubClient.TryConsumeModelChange(conversation.Id);
 				if (newLlmConfigId != null)
 				{
+					// Apply any pending settings so newly added LLMs are in the registry
+					// before the lookup. Settings and model-change events often arrive
+					// together, but settings are normally only applied in the outer loop.
+					WorkerSession.ApplyPendingSettings();
+
 					LlmService? newService = WorkerSession.LlmProxy.GetService(newLlmConfigId);
 					if (newService != null)
 					{
