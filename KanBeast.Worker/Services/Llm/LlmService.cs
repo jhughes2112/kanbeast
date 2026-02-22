@@ -250,6 +250,10 @@ public class LlmService
 		using CancellationTokenSource toolCts = CancellationTokenSource.CreateLinkedTokenSource(conversationToken);
 		conversation.ToolContext.CancellationToken = toolCts.Token;
 
+		// Reset repetition tracking so a previously terminated conversation can make progress
+		// after the user sends a new message or context changes.
+		conversation.ToolContext.ActionFingerprints.Clear();
+
 		decimal accumulatedCost = 0m;
 		LlmResult finalResult = new LlmResult(LlmExitReason.Completed, string.Empty, string.Empty, null, null);
 
@@ -579,6 +583,13 @@ public class LlmService
 		{
 			Console.WriteLine($"[{_config.Model}] Skipping empty assistant message");
 			return null;
+		}
+
+		// Some providers require "content" on assistant messages even when only tool calls are present.
+		// Use empty string so the field serializes instead of being omitted by WhenWritingNull.
+		if (hasToolCalls && assistantMessage.Content == null)
+		{
+			assistantMessage.Content = string.Empty;
 		}
 
 		// Trim whitespace from function names and argument keys that some models produce.
@@ -978,6 +989,13 @@ public class LlmService
 		{
 			tc.Id = Guid.NewGuid().ToString();
 			tc.Function.Name = tc.Function.Name.Trim();
+
+			// Some models return tool calls with null or missing arguments.
+			// Ensure it is always a valid JSON object so providers don't reject the request.
+			if (string.IsNullOrWhiteSpace(tc.Function.Arguments))
+			{
+				tc.Function.Arguments = "{}";
+			}
 
 			try
 			{
