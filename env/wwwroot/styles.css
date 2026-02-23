@@ -1598,7 +1598,6 @@ nav {
 @media (min-width: 900px) {
     .detail-main-content {
         flex-direction: row;
-        padding-bottom: 52px;
     }
 
     .detail-left-pane {
@@ -1610,14 +1609,6 @@ nav {
     .detail-right-pane {
         flex: 1;
         min-width: 350px;
-    }
-
-    /* Chat input at bottom of screen */
-    .detail-chat-input-area {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
     }
 }
 
@@ -1637,13 +1628,7 @@ nav {
     }
 
     .detail-right-pane {
-        flex: 1;
-        min-height: 300px;
-    }
-
-    .detail-chat-input-area {
-        position: sticky;
-        bottom: 0;
+        min-height: 75vh;
     }
 }
 

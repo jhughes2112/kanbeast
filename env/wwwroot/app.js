@@ -975,14 +975,13 @@ async function showTicketDetails(ticketId) {
                 <div class="detail-chat-messages" id="detailChatMessages">
                     <div class="chat-msg chat-msg-system">Select a conversation above.</div>
                 </div>
+                <div class="detail-chat-input-area">
+                    <textarea id="detailChatInput" class="detail-chat-input" placeholder="Type a message…" rows="1" disabled></textarea>
+                    <button id="detailChatStopBtn" class="btn-danger detail-chat-btn inactive" title="Stop generation" onclick="interruptConversation()">■</button>
+                    <button id="detailClearConvoBtn" class="btn-secondary detail-chat-btn" title="Clear conversation" onclick="clearConversation('${ticketId}')">🔄</button>
+                    <button id="detailChatSendBtn" class="btn-primary detail-chat-btn" title="Send message" disabled>→</button>
+                </div>
             </div>
-        </div>
-
-        <div class="detail-chat-input-area">
-            <textarea id="detailChatInput" class="detail-chat-input" placeholder="Type a message…" rows="1" disabled></textarea>
-            <button id="detailChatStopBtn" class="btn-danger detail-chat-btn inactive" title="Stop generation" onclick="interruptConversation()">■</button>
-            <button id="detailClearConvoBtn" class="btn-secondary detail-chat-btn" title="Clear conversation" onclick="clearConversation('${ticketId}')">🔄</button>
-            <button id="detailChatSendBtn" class="btn-primary detail-chat-btn" title="Send message" disabled>→</button>
         </div>
     `;
 
