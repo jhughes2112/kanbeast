@@ -94,7 +94,7 @@ public static class DeveloperTools
 				await WorkerSession.HubClient.SetConversationBusyAsync(conversation.Id, true);
 				try
 				{
-					llmResult = await service.RunToCompletionAsync(conversation, "Continue working. Call end_subtask when done ({messagesRemaining} turns remaining).", false, true, context.CancellationToken);
+					llmResult = await service.RunToCompletionAsync(conversation, "Are you done? If so, call end_subtask to report the task status ({messagesRemaining} turns remaining).", false, true, context.CancellationToken);
 				}
 				finally
 				{

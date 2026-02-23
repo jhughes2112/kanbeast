@@ -52,7 +52,7 @@ public static class SubAgentTools
 		{
 			try
 			{
-				string continueMessage = "Continue working. You must use tools to make progress and call agent_task_complete when finished ({messagesRemaining} turns remaining). Do NOT respond with only text.";
+				string continueMessage = "Do not guess, follow the exact instructions provided in this conversation. Are you done? If so, call agent_task_complete to report status or use other tools to make progress on the task ({messagesRemaining} turns remaining). Do NOT respond with only text.";
 				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.DeveloperSubagent, "Sub-agent", id, continueMessage, context);
 				result = new ToolResult(content, false, false);
 			}

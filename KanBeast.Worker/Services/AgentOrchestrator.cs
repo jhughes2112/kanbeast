@@ -293,7 +293,7 @@ public class AgentOrchestrator
 		await WorkerSession.HubClient.SetConversationBusyAsync(_planningConversation!.Id, true);
 		try
 			{
-					string? continueMessage = isActive ? "Continue working. Call get_next_work_item for the next subtask ({messagesRemaining} turns remaining)." : null;
+					string? continueMessage = isActive ? "Are you done? If you are finished, call get_next_work_item for the next subtask ({messagesRemaining} turns remaining)." : null;
 					LlmResult result = await service.RunToCompletionAsync(_planningConversation!, continueMessage, true, false, effectiveToken);
 					exitReason = result.ExitReason;
 
