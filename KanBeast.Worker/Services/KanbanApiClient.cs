@@ -12,6 +12,7 @@ public interface IKanbanApiClient
     Task<Ticket?> AddTaskToTicketAsync(string ticketId, KanbanTask task, CancellationToken cancellationToken);
     Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask, CancellationToken cancellationToken);
     Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status, CancellationToken cancellationToken);
+    Task<Ticket?> UpdateTaskStatusAsync(string ticketId, string taskId, SubtaskStatus status, CancellationToken cancellationToken);
     Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskId, CancellationToken cancellationToken);
     Task<Ticket?> DeleteAllTasksAsync(string ticketId, CancellationToken cancellationToken);
     Task AddActivityLogAsync(string ticketId, string message, CancellationToken cancellationToken);
@@ -105,6 +106,20 @@ public class KanbanApiClient : IKanbanApiClient
         string encodedTaskId = Uri.EscapeDataString(taskId);
         string encodedSubtaskId = Uri.EscapeDataString(subtaskId);
         HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/subtasks/{encodedSubtaskId}", new { status }, _jsonOptions, cancellationToken);
+
+        if (response.IsSuccessStatusCode)
+        {
+            ticket = await response.Content.ReadFromJsonAsync<Ticket>(_jsonOptions, cancellationToken);
+        }
+
+        return ticket;
+    }
+
+    public async Task<Ticket?> UpdateTaskStatusAsync(string ticketId, string taskId, SubtaskStatus status, CancellationToken cancellationToken)
+    {
+        Ticket? ticket = null;
+        string encodedTaskId = Uri.EscapeDataString(taskId);
+        HttpResponseMessage response = await _httpClient.PatchAsJsonAsync($"/api/tickets/{ticketId}/tasks/{encodedTaskId}/status", new { status }, _jsonOptions, cancellationToken);
 
         if (response.IsSuccessStatusCode)
         {

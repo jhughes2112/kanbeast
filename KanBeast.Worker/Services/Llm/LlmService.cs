@@ -504,7 +504,7 @@ public class LlmService
 		}
 		finally
 		{
-			await conversation.RecordCostAsync(accumulatedCost, CancellationToken.None);
+			await conversation.RecordCostAsync(accumulatedCost, cancellationToken);
 			await conversation.ForceFlushAsync();
 			WorkerSession.HubClient.UnregisterConversation(conversation.Id);
 		}

@@ -18,6 +18,7 @@ public interface ITicketService
     Task<Ticket?> AddTaskToTicketAsync(string id, KanbanTask task);
     Task<Ticket?> AddSubtaskToTaskAsync(string ticketId, string taskId, KanbanSubtask subtask);
     Task<Ticket?> UpdateSubtaskStatusAsync(string ticketId, string taskId, string subtaskId, SubtaskStatus status);
+    Task<Ticket?> UpdateTaskStatusAsync(string ticketId, string taskId, SubtaskStatus status);
     Task<Ticket?> MarkTaskCompleteAsync(string ticketId, string taskId);
     Task<Ticket?> AddActivityLogAsync(string id, string activity);
     Task<Ticket?> SetBranchNameAsync(string id, string branchName);
@@ -182,6 +183,7 @@ public class TicketService : ITicketService
 
                 if (allComplete)
                 {
+                    task.Status = SubtaskStatus.Complete;
                     task.LastUpdatedAt = DateTime.UtcNow;
                     ticket.UpdatedAt = DateTime.UtcNow;
                     await SaveTicketToDiskAsync(ticket);
@@ -371,6 +373,36 @@ public class TicketService : ITicketService
 
         subtask.Status = status;
         subtask.LastUpdatedAt = DateTime.UtcNow;
+        task.LastUpdatedAt = DateTime.UtcNow;
+        ticket.UpdatedAt = DateTime.UtcNow;
+        await SaveTicketToDiskAsync(ticket);
+        return ticket;
+    }
+
+    public async Task<Ticket?> UpdateTaskStatusAsync(string ticketId, string taskId, SubtaskStatus status)
+    {
+        if (!_tickets.TryGetValue(ticketId, out Ticket? ticket))
+        {
+            return null;
+        }
+
+        KanbanTask? task = null;
+        foreach (KanbanTask candidate in ticket.Tasks)
+        {
+            if (string.Equals(candidate.Name, taskId, StringComparison.Ordinal) ||
+                string.Equals(candidate.Id, taskId, StringComparison.Ordinal))
+            {
+                task = candidate;
+                break;
+            }
+        }
+
+        if (task == null)
+        {
+            return null;
+        }
+
+        task.Status = status;
         task.LastUpdatedAt = DateTime.UtcNow;
         ticket.UpdatedAt = DateTime.UtcNow;
         await SaveTicketToDiskAsync(ticket);

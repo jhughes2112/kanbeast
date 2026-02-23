@@ -294,6 +294,26 @@ public class TicketsController : ControllerBase
         return result;
     }
 
+    [HttpPatch("{ticketId}/tasks/{taskId}/status")]
+    public async Task<ActionResult<Ticket>> UpdateTaskStatus(string ticketId, string taskId, [FromBody] SubtaskStatusUpdate update)
+    {
+        ActionResult<Ticket> result;
+        Ticket? ticket = await _ticketService.UpdateTaskStatusAsync(ticketId, taskId, update.Status);
+
+        if (ticket == null)
+        {
+            result = NotFound();
+        }
+        else
+        {
+            await _hubContext.Clients.Group($"ticket-{ticketId}").TicketUpdated(ticket);
+            await _hubContext.Clients.All.TicketUpdated(ticket);
+            result = Ok(ticket);
+        }
+
+        return result;
+    }
+
     [HttpPost("{id}/activity")]
     public async Task<ActionResult<Ticket>> AddActivity(string id, [FromBody] ActivityUpdate activity)
     {

@@ -48,10 +48,17 @@ public class Ticket
 			sb.AppendLine("Tasks:");
 			foreach (KanbanTask task in Tasks)
 			{
-				sb.AppendLine($"  - {task.Name}");
-				foreach (KanbanSubtask subtask in task.Subtasks)
+				if (task.Subtasks.Count == 0)
 				{
-					sb.AppendLine($"      [{subtask.Status}] {subtask.Name}");
+					sb.AppendLine($"  - [{task.Status}] {task.Name}");
+				}
+				else
+				{
+					sb.AppendLine($"  - {task.Name}");
+					foreach (KanbanSubtask subtask in task.Subtasks)
+					{
+						sb.AppendLine($"      [{subtask.Status}] {subtask.Name}");
+					}
 				}
 			}
 		}
@@ -65,6 +72,7 @@ public class KanbanTask
 	public string Id { get; set; } = Guid.NewGuid().ToString();
 	public string Name { get; set; } = string.Empty;
 	public string Description { get; set; } = string.Empty;
+	public SubtaskStatus Status { get; set; } = SubtaskStatus.Incomplete;
 	public DateTime LastUpdatedAt { get; set; } = DateTime.UtcNow;
 	public List<KanbanSubtask> Subtasks { get; set; } = new();
 }

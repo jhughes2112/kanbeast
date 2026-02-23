@@ -46,7 +46,12 @@ function countCompletions(ticket) {
     for (let t = 0; t < ticket.tasks.length; t++) {
         const task = ticket.tasks[t];
         const subs = task.subtasks || [];
-        if (subs.length === 0) continue;
+        if (subs.length === 0) {
+            if (task.status === 'Complete' || task.status === 3) {
+                tasks++;
+            }
+            continue;
+        }
         let allDone = true;
         for (let s = 0; s < subs.length; s++) {
             if (subs[s].status === 'Complete' || subs[s].status === 3) {
@@ -335,6 +340,9 @@ function normalizeTicket(ticket) {
     }
     if (ticket.tasks) {
         for (let t = 0; t < ticket.tasks.length; t++) {
+            if (typeof ticket.tasks[t].status === 'number') {
+                ticket.tasks[t].status = SUBTASK_INT_TO_STRING[ticket.tasks[t].status] || 'Incomplete';
+            }
             if (ticket.tasks[t].subtasks) {
                 for (let s = 0; s < ticket.tasks[t].subtasks.length; s++) {
                     let st = ticket.tasks[t].subtasks[s];
@@ -537,20 +545,32 @@ function createTicketElement(ticket) {
     const isDraggable = canMoveFrom(status);
 
     // Statuses: Incomplete=0, InProgress=1, AwaitingReview=2, Complete=3, Rejected=4
-    const subtasks = (ticket.tasks || []).flatMap(task => task.subtasks || []);
 
-    // Build pip progress bar HTML (each subtask gets a colored pip)
+    // Build pip progress bar HTML (each subtask gets a colored pip; tasks without subtasks get a pip from the task status)
     let pipProgressHtml = '';
-    if (subtasks.length > 0) {
-        const pips = subtasks.map(st => {
+    const allTasks = ticket.tasks || [];
+    let pipItems = [];
+    for (let t = 0; t < allTasks.length; t++) {
+        const task = allTasks[t];
+        const subs = task.subtasks || [];
+        if (subs.length > 0) {
+            for (let s = 0; s < subs.length; s++) {
+                pipItems.push(subs[s].status);
+            }
+        } else {
+            pipItems.push(task.status);
+        }
+    }
+    if (pipItems.length > 0) {
+        const pips = pipItems.map(st => {
             let pipClass = 'pip-incomplete';
-            if (st.status === 'Complete' || st.status === 3) {
+            if (st === 'Complete' || st === 3) {
                 pipClass = 'pip-complete';
-            } else if (st.status === 'InProgress' || st.status === 1) {
+            } else if (st === 'InProgress' || st === 1) {
                 pipClass = 'pip-inprogress';
-            } else if (st.status === 'AwaitingReview' || st.status === 2) {
+            } else if (st === 'AwaitingReview' || st === 2) {
                 pipClass = 'pip-review';
-            } else if (st.status === 'Rejected' || st.status === 4) {
+            } else if (st === 'Rejected' || st === 4) {
                 pipClass = 'pip-rejected';
             }
             return `<div class="pip ${pipClass}"></div>`;
@@ -562,15 +582,22 @@ function createTicketElement(ticket) {
     let currentTaskName = '';
     let currentSubtaskName = '';
 
-    for (let taskIdx = 0; taskIdx < (ticket.tasks || []).length; taskIdx++) {
-        const task = ticket.tasks[taskIdx];
-        const incompleteSubtask = (task.subtasks || []).find(s => {
-            return s.status !== 'Complete' && s.status !== 3;
-        });
-        if (incompleteSubtask) {
-            currentTaskName = task.name || '';
-            currentSubtaskName = incompleteSubtask.name || '';
-            break;
+    for (let taskIdx = 0; taskIdx < allTasks.length; taskIdx++) {
+        const task = allTasks[taskIdx];
+        const subs = task.subtasks || [];
+        if (subs.length > 0) {
+            const incompleteSubtask = subs.find(s => s.status !== 'Complete' && s.status !== 3);
+            if (incompleteSubtask) {
+                currentTaskName = task.name || '';
+                currentSubtaskName = incompleteSubtask.name || '';
+                break;
+            }
+        } else {
+            const taskStatus = task.status;
+            if (taskStatus !== 'Complete' && taskStatus !== 3) {
+                currentTaskName = task.name || '';
+                break;
+            }
         }
     }
 
@@ -786,8 +813,10 @@ async function showTicketDetails(ticketId) {
                 s.status === 'InProgress' || s.status === 1 ||
                 s.status === 'AwaitingReview' || s.status === 2
             ).length;
-            const isComplete = subtasks.length > 0 && completedSubtasks === subtasks.length;
-            const isInProgress = inProgressSubtasks > 0 && status === 'Active';
+            const taskStatus = task.status;
+            const isComplete = (subtasks.length > 0 && completedSubtasks === subtasks.length) ||
+                               (subtasks.length === 0 && (taskStatus === 'Complete' || taskStatus === 3));
+            const isInProgress = (inProgressSubtasks > 0 || (subtasks.length === 0 && (taskStatus === 'InProgress' || taskStatus === 1))) && status === 'Active';
 
             let taskIcon = '<span class="task-icon task-icon-incomplete">☐</span>';
             if (isComplete) {

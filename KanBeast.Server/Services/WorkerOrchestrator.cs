@@ -20,16 +20,19 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
     private readonly ITicketService _ticketService;
     private readonly ILogger<WorkerOrchestrator> _logger;
     private readonly ContainerContext _containerContext;
+    private readonly IHostApplicationLifetime _lifetime;
     private readonly DockerClient _dockerClient;
 
     public WorkerOrchestrator(
         ITicketService ticketService,
         ILogger<WorkerOrchestrator> logger,
-        ContainerContext containerContext)
+        ContainerContext containerContext,
+        IHostApplicationLifetime lifetime)
     {
         _ticketService = ticketService;
         _logger = logger;
         _containerContext = containerContext;
+        _lifetime = lifetime;
         _dockerClient = new DockerClientConfiguration().CreateClient();
     }
 
@@ -141,9 +144,17 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
         return Task.FromResult(activeWorkers);
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public Task StartAsync(CancellationToken cancellationToken)
     {
-        await RestartWorkersForExistingTicketsAsync(cancellationToken);
+        // Defer worker restarts until Kestrel and SignalR are fully listening.
+        // IHostedService.StartAsync runs before the server accepts connections,
+        // so launching workers here would cause them to fail to connect.
+        _lifetime.ApplicationStarted.Register(() =>
+        {
+            _ = RestartWorkersForExistingTicketsAsync(cancellationToken);
+        });
+
+        return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)

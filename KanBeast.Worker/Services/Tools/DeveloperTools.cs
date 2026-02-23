@@ -28,11 +28,11 @@ public static class DeveloperTools
 		""")]
 	public static async Task<ToolResult> StartDeveloperAsync(
 		[Description("The name of the parent task")] string taskName,
-		[Description("The name of the subtask to implement")] string subtaskName,
-		[Description("Full description and acceptance criteria for the subtask")] string subtaskDescription,
+		[Description("The name of the subtask to implement, or the task name if there are no subtasks")] string subtaskName,
+		[Description("Full description and acceptance criteria for the subtask or task")] string subtaskDescription,
 		[Description("The task ID from the ticket")] string taskId,
-		[Description("The subtask ID from the ticket")] string subtaskId,
-		[Description("The guid of the LLM to use for this developer session, from get_next_work_item")] string id,
+		[Description("The subtask ID from the ticket, or empty string if the task has no subtasks")] string subtaskId,
+		[Description("The LLM config id to use for this developer session")] string id,
 		ToolContext context)
 	{
 		ToolResult result;
@@ -45,7 +45,18 @@ public static class DeveloperTools
 		{
 			try
 			{
-				await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(WorkerSession.TicketHolder.Ticket.Id, taskId, subtaskId, SubtaskStatus.InProgress, WorkerSession.CancellationToken);
+				bool hasSubtask = !string.IsNullOrWhiteSpace(subtaskId);
+				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
+
+				// Mark the work item as in-progress.
+				if (hasSubtask)
+				{
+					await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(ticketId, taskId, subtaskId, SubtaskStatus.InProgress, WorkerSession.CancellationToken);
+				}
+				else
+				{
+					await WorkerSession.ApiClient.UpdateTaskStatusAsync(ticketId, taskId, SubtaskStatus.InProgress, WorkerSession.CancellationToken);
+				}
 
 				string initialPrompt = BuildDeveloperPrompt(taskName, subtaskName, subtaskDescription);
 
@@ -57,9 +68,7 @@ public static class DeveloperTools
 				}
 
 				string modelTag = $"{id[..4]}:{service.Model}";
-				await WorkerSession.ApiClient.AddActivityLogAsync(WorkerSession.TicketHolder.Ticket.Id, $"Started subtask [{modelTag}]: {subtaskName}", WorkerSession.CancellationToken);
-
-				string ticketId = WorkerSession.TicketHolder.Ticket.Id;
+				await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, $"Started work [{modelTag}]: {subtaskName}", WorkerSession.CancellationToken);
 
 				// Check for a prior conversation from a crashed run.
 				ILlmConversation conversation;
@@ -79,7 +88,7 @@ public static class DeveloperTools
 					conversation = new CompactingConversation(null, LlmRole.Developer, service, null, initialPrompt, $"Developer - {subtaskName}", toolCallId, taskId, subtaskId);
 				}
 
-				bool subtaskComplete = false;
+				bool workComplete = false;
 
 				LlmResult llmResult;
 				await WorkerSession.HubClient.SetConversationBusyAsync(conversation.Id, true);
@@ -94,24 +103,33 @@ public static class DeveloperTools
 
 				if (llmResult.ExitReason == LlmExitReason.ToolRequestedExit && llmResult.FinalToolCalled == "end_subtask")
 				{
-					Ticket? subtaskUpdate = await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(ticketId, taskId, subtaskId, SubtaskStatus.Complete, WorkerSession.CancellationToken);
+					Ticket? statusUpdate;
 
-					if (subtaskUpdate != null)
+					if (hasSubtask)
 					{
-						WorkerSession.TicketHolder.Update(subtaskUpdate);
+						statusUpdate = await WorkerSession.ApiClient.UpdateSubtaskStatusAsync(ticketId, taskId, subtaskId, SubtaskStatus.Complete, WorkerSession.CancellationToken);
+					}
+					else
+					{
+						statusUpdate = await WorkerSession.ApiClient.UpdateTaskStatusAsync(ticketId, taskId, SubtaskStatus.Complete, WorkerSession.CancellationToken);
 					}
 
-					await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, $"Subtask completed: {llmResult.Content}", WorkerSession.CancellationToken);
-					subtaskComplete = true;
+					if (statusUpdate != null)
+					{
+						WorkerSession.TicketHolder.Update(statusUpdate);
+					}
+
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, $"Work completed: {llmResult.Content}", WorkerSession.CancellationToken);
+					workComplete = true;
 				}
 
-				if (subtaskComplete)
+				if (workComplete)
 				{
-					result = new ToolResult($"Developer completed subtask '{subtaskName}': {llmResult.Content}", false, false);
+					result = new ToolResult($"Developer completed '{subtaskName}': {llmResult.Content}", false, false);
 				}
 				else
 				{
-					result = new ToolResult($"Developer could not complete subtask '{subtaskName}': {llmResult.Content}", false, false);
+					result = new ToolResult($"Developer could not complete '{subtaskName}': {llmResult.Content}", false, false);
 				}
 			}
 			catch (OperationCanceledException)
@@ -127,30 +145,13 @@ public static class DeveloperTools
 		return result;
 	}
 
-	// Builds the user prompt for a developer conversation with full ticket context.
+	// Builds the user prompt scoped to just the assigned task and subtask.
 	private static string BuildDeveloperPrompt(string taskName, string subtaskName, string subtaskDescription)
 	{
-		Ticket ticket = WorkerSession.TicketHolder.Ticket;
-
 		StringBuilder sb = new StringBuilder();
-		sb.AppendLine($"# Ticket: {ticket.Title}");
+		sb.AppendLine($"# Task: {taskName}");
 		sb.AppendLine();
-		sb.AppendLine(ticket.Description);
-		sb.AppendLine();
-
-		sb.AppendLine("# Task Overview");
-		foreach (KanbanTask task in ticket.Tasks)
-		{
-			sb.AppendLine($"- {task.Name}");
-			foreach (KanbanSubtask subtask in task.Subtasks)
-			{
-				string marker = subtask.Status == SubtaskStatus.Complete ? "✓" : " ";
-				sb.AppendLine($"  [{marker}] {subtask.Name}");
-			}
-		}
-		sb.AppendLine();
-
-		sb.AppendLine($"# Your Assignment: {subtaskName} (in task '{taskName}')");
+		sb.AppendLine($"# Your Assignment: {subtaskName}");
 		sb.AppendLine();
 		sb.AppendLine(subtaskDescription);
 		sb.AppendLine();

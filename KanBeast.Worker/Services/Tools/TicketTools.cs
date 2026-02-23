@@ -356,15 +356,11 @@ public static class TicketTools
     }
 
     [Description("""
-        Get the next subtask (or task without subtasks) that needs work, along with the list of available LLMs you can delegate to.
+        Get the next subtask (or task without subtasks) that needs work.
         Call this to find what to work on next.
-        The response includes:
-        - The next work item details (task name, subtask name, IDs, description)
-        - A list of available LLM configurations with their strengths, weaknesses, and relative cost (cost_per_1m_tokens)
-        - Paid models are automatically filtered out when the ticket has no remaining budget
-        Use cost ranking to choose inexpensive models for straightforward work and reserve expensive models for complex planning or reasoning tasks.
+        The response includes the next work item details (task name, subtask name, IDs, description).
         If there is no remaining work, the response will indicate all work is complete.
-        If no LLMs are available, the response will indicate the work is blocked.
+        Use list_available_llms to see which LLM to delegate to via start_developer.
         """)]
     public static Task<ToolResult> GetNextWorkItemAsync(ToolContext context)
     {
@@ -382,10 +378,13 @@ public static class TicketTools
         {
             if (task.Subtasks.Count == 0)
             {
-                // Task with no subtasks — treat the task itself as a work item.
-                nextTaskId = task.Id;
-                nextTaskName = task.Name;
-                nextTaskDescription = task.Description;
+                if (task.Status != SubtaskStatus.Complete)
+                {
+                    // Task with no subtasks — treat the task itself as a work item.
+                    nextTaskId = task.Id;
+                    nextTaskName = task.Name;
+                    nextTaskDescription = task.Description;
+                }
                 break;
             }
 
@@ -430,60 +429,7 @@ public static class TicketTools
         }
         else
         {
-            sb.AppendLine("  (This task has no subtasks — delegate it directly as a single work item)");
-        }
-
-        sb.AppendLine();
-
-        // Build available LLM list, excluding models too expensive for the remaining budget.
-        decimal remainingBudget = ticket.MaxCost <= 0 ? 0m : Math.Max(0m, ticket.MaxCost - ticket.LlmCost);
-        List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> llms =
-            WorkerSession.LlmProxy.GetAvailableLlmSummaries(remainingBudget);
-
-        // Filter to only available LLMs.
-        List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> availableLlms = new();
-        foreach ((string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable) llm in llms)
-        {
-            if (llm.isAvailable)
-            {
-                availableLlms.Add(llm);
-            }
-        }
-
-        if (availableLlms.Count == 0)
-        {
-            sb.AppendLine("BLOCKED: No LLMs are available to perform this work.");
-
-            if (remainingBudget > 0)
-            {
-                sb.AppendLine($"  Reason: Remaining budget (${remainingBudget:F2}) cannot afford 1M tokens from any configured model.");
-            }
-            else
-            {
-                sb.AppendLine("  Reason: All configured LLMs are permanently down or unavailable.");
-            }
-
-            ToolResult blockedResult = new ToolResult(sb.ToString(), false, false);
-            return Task.FromResult(blockedResult);
-        }
-
-        sb.AppendLine("AVAILABLE LLMs (choose one to delegate this work to via start_developer; prefer cheaper models for straightforward work):");
-
-        foreach ((string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable) llm in availableLlms)
-        {
-            sb.AppendLine($"  - id: {llm.id}");
-            sb.AppendLine($"    model: {llm.model}");
-            sb.AppendLine($"    cost_per_1m_tokens: ${llm.costPer1MTokens:F2}");
-
-            if (!string.IsNullOrWhiteSpace(llm.strengths))
-            {
-                sb.AppendLine($"    strengths: {llm.strengths}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(llm.weaknesses))
-            {
-                sb.AppendLine($"    weaknesses: {llm.weaknesses}");
-            }
+            sb.AppendLine("  (This task has no subtasks — pass empty string for subtaskId to start_developer)");
         }
 
         ToolResult result = new ToolResult(sb.ToString(), false, false);

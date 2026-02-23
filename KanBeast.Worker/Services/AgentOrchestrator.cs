@@ -60,11 +60,23 @@ public class AgentOrchestrator
 					if (hasPendingWork || (!interrupted && NeedsLlmAttention(_planningConversation)))
 					{
 						interrupted = false;
-						LlmExitReason exitReason = await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
-						if (exitReason == LlmExitReason.Interrupted)
-						{
-							interrupted = true;
-						}
+							LlmExitReason exitReason = await RunLlmUntilIdleAsync(ticketHolder, cancellationToken);
+							if (exitReason == LlmExitReason.Interrupted)
+							{
+								interrupted = true;
+							}
+							else if (exitReason == LlmExitReason.RepetitionDetected ||
+									 exitReason == LlmExitReason.MaxIterationsReached ||
+									 exitReason == LlmExitReason.LlmCallFailed)
+							{
+								// Terminal planning failure. Set the ticket to Failed so the
+								// human can inspect and retry, but keep the worker alive.
+								string reason = exitReason.ToString();
+								_logger.LogWarning("Planning agent terminated: {Reason}", reason);
+								await WorkerSession.ApiClient.UpdateTicketStatusAsync(ticketHolder.Ticket.Id, "Failed", cancellationToken);
+								await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Planning: Failed - {reason}", cancellationToken);
+								interrupted = true;
+							}
 					}
 				}
 
@@ -125,14 +137,14 @@ public class AgentOrchestrator
 				// Conversation-level cancellation (user interrupt, ticket status change).
 				// Log and continue the main loop.
 				_logger.LogInformation("Conversation cancelled, continuing main loop");
-				await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Worker: Conversation cancelled, standing by", CancellationToken.None);
+				await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Worker: Conversation cancelled, standing by", cancellationToken);
 				interrupted = true;
 			}
 			catch (Exception ex)
 			{
 				// Any other exception should not kill the worker. Log it and continue.
 				_logger.LogError(ex, "Exception in main loop: {Message}", ex.Message);
-				await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Worker: Error - {ex.Message}", CancellationToken.None);
+				await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Worker: Error - {ex.Message}", cancellationToken);
 
 				if (_planningConversation != null)
 				{
@@ -293,7 +305,7 @@ public class AgentOrchestrator
 				catch (OperationCanceledException) when (isActive && !cancellationToken.IsCancellationRequested)
 				{
 					_logger.LogInformation("Planning: Work cancelled (ticket left Active)");
-					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Work cancelled", CancellationToken.None);
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, "Planning: Work cancelled", cancellationToken);
 					exitReason = LlmExitReason.Interrupted;
 				}
 				catch (OperationCanceledException)
@@ -303,7 +315,7 @@ public class AgentOrchestrator
 				catch (Exception ex)
 				{
 					_logger.LogError(ex, "Error during LLM execution: {Message}", ex.Message);
-					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Planning: Error - {ex.Message}", CancellationToken.None);
+					await WorkerSession.ApiClient.AddActivityLogAsync(ticketHolder.Ticket.Id, $"Planning: Error - {ex.Message}", cancellationToken);
 
 					if (_planningConversation != null)
 					{
