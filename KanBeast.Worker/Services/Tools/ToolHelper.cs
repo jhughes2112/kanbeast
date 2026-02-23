@@ -28,6 +28,7 @@ public static class ToolHelper
         string toolName = ToSnakeCase(methodName.Replace("Async", ""));
         DescriptionAttribute? descAttr = method.GetCustomAttribute<DescriptionAttribute>();
         string description = descAttr?.Description ?? methodName;
+        bool isSequential = method.GetCustomAttribute<SequentialAttribute>() != null;
 
         JsonObject parameters = BuildParametersSchema(method);
 
@@ -72,7 +73,8 @@ public static class ToolHelper
                     Parameters = parameters
                 }
             },
-            Handler = handler
+            Handler = handler,
+            MustRunSequentially = isSequential
         });
     }
 

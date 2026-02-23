@@ -144,7 +144,7 @@ public static class TicketTools
 		Tasks do NOT require subtasks. Simple, atomic work should be a task without subtasks. Only add subtasks when a task genuinely needs decomposition into multiple sequential or parallel steps.
 		
 		The developer will work through tasks in order. For tasks with subtasks, all subtasks are completed before the task itself is visited, allowing the task to serve as a final integration/verification step if needed.
-		
+
 		Guidelines:
 		- Use clear, descriptive task names that communicate the work area to the user
 		- Task descriptions should outline the overall goal and scope
@@ -152,7 +152,8 @@ public static class TicketTools
 		- Balance granularity: too few tasks hide progress, too many tasks create noise
 		- Tasks are your primary organizational tool for decomposing the ticket requirements
 		""")]
-    public static async Task<ToolResult> CreateTaskAsync(
+	[Sequential]
+	public static async Task<ToolResult> CreateTaskAsync(
         [Description("Name of the task")] string taskName,
         [Description("Description of the task")] string taskDescription,
         ToolContext context)
@@ -229,7 +230,8 @@ public static class TicketTools
 		- Include enough detail that the developer can work autonomously
 		- Consider the developer's context: they can read files, search code, run commands, but need clear direction on the goal
 		""")]
-    public static async Task<ToolResult> CreateSubtaskAsync(
+	[Sequential]
+	public static async Task<ToolResult> CreateSubtaskAsync(
         [Description("Name of the task to add the subtask to")] string taskName,
         [Description("Short name for the subtask")] string subtaskName,
         [Description("Detailed description including acceptance criteria")] string subtaskDescription,

@@ -76,9 +76,16 @@ public readonly struct ToolResult
 	}
 }
 
+// Marks a tool method as requiring sequential execution within a batch.
+// When an LLM returns multiple tool calls in a single message, tools with
+// this attribute run in their original order rather than in parallel.
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class SequentialAttribute : Attribute { }
+
 // A tool with its definition and invocation handler.
 public class Tool
 {
 	public required ToolDefinition Definition { get; init; }
 	public required Func<JsonObject, ToolContext, Task<ToolResult>> Handler { get; init; }
+	public bool MustRunSequentially { get; init; }
 }

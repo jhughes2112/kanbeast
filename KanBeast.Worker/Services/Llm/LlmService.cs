@@ -557,7 +557,7 @@ public class LlmService
 		return result;
 	}
 
-	// Processes the assistant's response: normalizes tool calls, executes them, and determines next action.
+	// Processes the assistant's response
 	// Returns null to continue the loop, or an LlmResult to break out.
 	private async Task<LlmResult?> ProcessAssistantResponseAsync(ConversationMessage assistantMessage, List<Tool> tools, ILlmConversation conversation, string? continueMessage, bool continueOnToolExit, CancellationToken conversationToken)
 	{
@@ -639,10 +639,17 @@ public class LlmService
 		}
 		else
 		{
-			// Concurrent tool execution. All tool calls from the same assistant
-			// message run as parallel Tasks. Results are collected in order.
+			// Tool execution. Tools marked [Sequential] are awaited immediately to preserve
+			// order. All others fire in parallel. WhenAll at the end ensures everything completes.
 			List<ConversationToolCall> toolCalls = assistantMessage.ToolCalls!;
 			(string toolName, ToolResult toolResult)[] completedTools = new (string, ToolResult)[toolCalls.Count];
+
+			// Build a name→Tool lookup for MustRunSequentially checks.
+			Dictionary<string, Tool> toolLookup = new Dictionary<string, Tool>(tools.Count, StringComparer.Ordinal);
+			foreach (Tool t in tools)
+			{
+				toolLookup[t.Definition.Function.Name] = t;
+			}
 
 			Task[] tasks = new Task[toolCalls.Count];
 			for (int i = 0; i < toolCalls.Count; i++)
@@ -654,6 +661,13 @@ public class LlmService
 					ToolResult toolResult = await ExecuteTool(toolCall, tools, conversation.ToolContext);
 					completedTools[index] = (toolCall.Function.Name, toolResult);
 				}, conversationToken);
+
+				// This allows us to block until completion of any tool that makes modifications that should happen in declared order.  CreateTask and CreateSubtask, in particular, should be sequential.
+				bool isSequential = toolLookup.TryGetValue(toolCall.Function.Name, out Tool? matchedTool) && matchedTool.MustRunSequentially;
+				if (isSequential)
+				{
+					await tasks[index];
+				}
 			}
 
 			await Task.WhenAll(tasks);
