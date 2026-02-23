@@ -56,7 +56,7 @@ Never mark a task complete without proving it works.
 - Diff behavior between main and your changes when relevant
 
 ### 5. COMMIT
-All work must be committed to git and pushed before returning. No exceptions.
+All work MUST be committed to git and pushed before completing a Task. No exceptions.
 
 ### 6. REPORT
 Call `update_llm_notes` to record sub-agent performance, then call `end_subtask`.

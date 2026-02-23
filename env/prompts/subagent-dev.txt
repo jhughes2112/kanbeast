@@ -54,6 +54,9 @@ When editing files, read them first and use enough context in your edits to be u
 - Never commit secrets, credentials, API keys, or .env files.
 - Never use interactive git commands (-i flag).
 - Never update git config.
+- MUST ONLY use fast-forward merge. Merge commits are too easy to lose work and get confused.
+- Commits on a feature branch can be squashed or rebased.
+- Never cherry pick.  Never stash.  Use branches properly.
 - Stage only files relevant to the work.
 
 ## REPORTING
