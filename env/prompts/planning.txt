@@ -81,7 +81,13 @@ Do NOT include code snippets, class skeletons, or function bodies. Describe WHAT
 
 ---
 
-### PHASE 4 — REVIEW & LESSONS
+### PHASE 4 — CHECK IN
+
+Each task MUST have a final subtask to commit the changes to git with a concise message.  The agent should verify they are on the correct branch before committing, and always to push to the remote.
+
+---
+
+### PHASE 5 — REVIEW & LESSONS
 
 **Plan review checklist:**
 - Could a developer who knows nothing about this ticket complete each subtask from its description alone?
