@@ -92,15 +92,25 @@ public class LlmRegistry
 	}
 
 	// Updates the strengths and weaknesses notes on a specific LLM config in memory.
-	public bool UpdateLlmNotes(string configId, string strengths, string weaknesses)
+    public bool UpdateLlmNotes(string configId, string strengths, string weaknesses)
 	{
 		List<LlmService> services = _services;
-		foreach (LlmService service in services)
+		for (int i = 0; i < services.Count; i++)
 		{
-			if (service.Config.Id == configId)
+			LlmService service = services[i];
+			LLMConfig config = service.Config;
+			if (config.Id == configId)
 			{
-				service.Config.Strengths = strengths;
-				service.Config.Weaknesses = weaknesses;
+				LLMConfig updated = new LLMConfig(
+					config.Id,
+					config.Model,
+					config.ContextLength,
+					config.InputTokenPrice,
+					config.OutputTokenPrice,
+					config.Temperature,
+					strengths,
+					weaknesses);
+				services[i] = new LlmService(updated, _endpoint, _apiKey);
 				return true;
 			}
 		}

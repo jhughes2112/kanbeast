@@ -1,3 +1,5 @@
+using System.Text.Json.Serialization;
+
 namespace KanBeast.Shared;
 
 // Describes a single LLM model configuration.

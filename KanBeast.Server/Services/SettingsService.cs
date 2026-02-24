@@ -70,29 +70,6 @@ public class SettingsService : ISettingsService
 
             if (incomingSettings.File.LLMConfigs.Count > 0)
             {
-                // Preserve existing IDs when incoming configs lack them (e.g. hand-edited JSON
-                // or older UI that didn't send ids). Match by model name as a stable key.
-                Dictionary<string, string> existingIdsByModel = new Dictionary<string, string>(StringComparer.Ordinal);
-                foreach (LLMConfig existing in settingsFile.LLMConfigs)
-                {
-                    if (!string.IsNullOrEmpty(existing.Id) && !string.IsNullOrEmpty(existing.Model))
-                    {
-                        existingIdsByModel[existing.Model] = existing.Id;
-                    }
-                }
-
-                foreach (LLMConfig incoming in incomingSettings.File.LLMConfigs)
-                {
-                    if (string.IsNullOrEmpty(incoming.Id) || !IsValidGuid(incoming.Id))
-                    {
-                        if (!string.IsNullOrEmpty(incoming.Model) && existingIdsByModel.TryGetValue(incoming.Model, out string? preservedId))
-                        {
-                            incoming.Id = preservedId;
-                            existingIdsByModel.Remove(incoming.Model);
-                        }
-                    }
-                }
-
                 settingsFile.LLMConfigs = incomingSettings.File.LLMConfigs;
             }
 
@@ -187,26 +164,37 @@ public class SettingsService : ISettingsService
         {
             SettingsFile settingsFile = LoadSettingsFile();
 
-            LLMConfig? config = null;
-            foreach (LLMConfig candidate in settingsFile.LLMConfigs)
+            int foundIndex = -1;
+            for (int i = 0; i < settingsFile.LLMConfigs.Count; i++)
             {
+                LLMConfig candidate = settingsFile.LLMConfigs[i];
                 if (string.Equals(candidate.Id, id, StringComparison.Ordinal))
                 {
-                    config = candidate;
+                    foundIndex = i;
                     break;
                 }
             }
 
-            if (config == null)
+            if (foundIndex == -1)
             {
+                _fileLock.Release();
                 return null;
             }
 
-            config.Strengths = strengths;
-            config.Weaknesses = weaknesses;
+            LLMConfig oldConfig = settingsFile.LLMConfigs[foundIndex];
+            LLMConfig updated = new LLMConfig(
+                oldConfig.Id,
+                oldConfig.Model,
+                oldConfig.ContextLength,
+                oldConfig.InputTokenPrice,
+                oldConfig.OutputTokenPrice,
+                oldConfig.Temperature,
+                strengths,
+                weaknesses);
+            settingsFile.LLMConfigs[foundIndex] = updated;
             SaveSettingsFile(settingsFile);
 
-            return config;
+            return updated;
         }
         finally
         {

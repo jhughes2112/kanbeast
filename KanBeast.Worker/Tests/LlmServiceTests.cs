@@ -14,10 +14,15 @@ public static class LlmServiceTests
 	{
 		Console.WriteLine("  LlmServiceTests");
 
-		LLMConfig config = new LLMConfig
-		{
-			Model = "test-model"
-		};
+        LLMConfig config = new LLMConfig(
+			"test-model", // model
+			128000,        // contextLength
+			0m,            // inputTokenPrice
+			0m,            // outputTokenPrice
+			0.2,           // temperature
+			string.Empty,  // strengths
+			string.Empty   // weaknesses
+		);
 		LlmService service = new LlmService(config, "https://test.example.com/v1", "test-key");
 		List<Tool> tools = BuildTestTools();
 
@@ -235,10 +240,15 @@ public static class LlmServiceTests
 	private static void TestTryAdaptToError(TestContext ctx)
 	{
 		// Fresh instance so _toolChoiceMode starts at Required.
-		LLMConfig config = new LLMConfig
-		{
-			Model = "test-model"
-		};
+        LLMConfig config = new LLMConfig(
+			"test-model", // model
+			128000,        // contextLength
+			0m,            // inputTokenPrice
+			0m,            // outputTokenPrice
+			0.2,           // temperature
+			string.Empty,  // strengths
+			string.Empty   // weaknesses
+		);
 		LlmService freshService = new LlmService(config, "https://test.example.com/v1", "test-key");
 		Type[] types = [typeof(HttpResponseMessage), typeof(string)];
 
