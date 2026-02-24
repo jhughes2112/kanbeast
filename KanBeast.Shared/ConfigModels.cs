@@ -3,17 +3,43 @@ namespace KanBeast.Shared;
 // Describes a single LLM model configuration.
 public class LLMConfig
 {
-	public string Id { get; set; } = Guid.NewGuid().ToString();
-	public string Model { get; set; } = string.Empty;
-	public int ContextLength { get; set; } = 128000;
-	public decimal InputTokenPrice { get; set; } = 0m;
-	public decimal OutputTokenPrice { get; set; } = 0m;
-	public double Temperature { get; set; } = 0.2;
-	public string Strengths { get; set; } = string.Empty;
-	public string Weaknesses { get; set; } = string.Empty;
+	public string Id { get; }
+	public string Model { get; }
+	public int ContextLength { get; }
+	public decimal InputTokenPrice { get; }
+	public decimal OutputTokenPrice { get; }
+	public double Temperature { get; }
+	public string Strengths { get; }
+	public string Weaknesses { get; }
 
 	// Combined cost per 1M tokens (input + output) for relative cost ranking.
 	public decimal CostPer1MTokens => InputTokenPrice + OutputTokenPrice;
+
+	[JsonConstructor]
+	public LLMConfig(
+		string? id,
+		string model,
+		int contextLength,
+		decimal inputTokenPrice,
+		decimal outputTokenPrice,
+		double temperature,
+		string strengths,
+		string weaknesses)
+	{
+		Id = string.IsNullOrWhiteSpace(id) ? Guid.NewGuid().ToString() : id;
+		Model = model ?? string.Empty;
+		ContextLength = contextLength;
+		InputTokenPrice = inputTokenPrice;
+		OutputTokenPrice = outputTokenPrice;
+		Temperature = temperature;
+		Strengths = strengths ?? string.Empty;
+		Weaknesses = weaknesses ?? string.Empty;
+	}
+
+	public LLMConfig(string model, int contextLength, decimal inputTokenPrice, decimal outputTokenPrice, double temperature, string strengths, string weaknesses)
+		: this(null, model, contextLength, inputTokenPrice, outputTokenPrice, temperature, strengths, weaknesses)
+	{
+	}
 }
 
 // Git integration settings.
