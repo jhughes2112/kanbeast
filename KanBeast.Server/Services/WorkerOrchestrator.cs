@@ -265,8 +265,31 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
 
                 if (nameMatch)
                 {
-                    _logger.LogInformation("Removing stale container {Name} ({Id})", containerName, container.ID);
+                    // If running, prefer reattach.
+                    if (container.State == "running")
+                    {
+                        _logger.LogInformation("Found existing running container {Name} ({Id}), will reattach instead of removing.", containerName, container.ID);
+                        return;
+                    }
 
+                    // If stopped, try to start it.
+                    if (container.State == "exited" || container.State == "created")
+                    {
+                        _logger.LogInformation("Found stopped container {Name} ({Id}), attempting to start.", containerName, container.ID);
+                        try
+                        {
+                            await _dockerClient.Containers.StartContainerAsync(container.ID, new ContainerStartParameters());
+                            _logger.LogInformation("Successfully started existing container {Name} ({Id}).", containerName, container.ID);
+                            return;
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning("Failed to start existing container {Name} ({Id}): {Message}. Will remove and recreate.", containerName, container.ID, ex.Message);
+                        }
+                    }
+
+                    // If dead, cannot be started, or in an unrecoverable state, remove.
+                    _logger.LogInformation("Removing unrecoverable container {Name} ({Id})", containerName, container.ID);
                     try
                     {
                         await _dockerClient.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 5 });
@@ -277,13 +300,13 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
                     }
 
                     await _dockerClient.Containers.RemoveContainerAsync(container.ID, new ContainerRemoveParameters { Force = true });
-                    break;
+                    return;
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning("Failed to remove stale container {Name}: {Message}", containerName, ex.Message);
+            _logger.LogWarning("Failed to inspect or remove container {Name}: {Message}", containerName, ex.Message);
         }
     }
 
