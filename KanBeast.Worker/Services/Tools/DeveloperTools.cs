@@ -63,29 +63,36 @@ public static class DeveloperTools
 				LlmService? service = WorkerSession.LlmProxy.GetService(id);
 				if (service == null)
 				{
-					result = new ToolResult($"Error: LLM config '{id}' not found", false, false);
+					result = new ToolResult($"Error: LLM config '{id}' not found. You must use an id from the list below.\n\n{TicketTools.FormatAvailableLlms()}", false, false);
 					return result;
 				}
 
 				string modelTag = $"{id[..4]}:{service.Model}";
 				await WorkerSession.ApiClient.AddActivityLogAsync(ticketId, $"Started work [{modelTag}]: {subtaskName}", WorkerSession.CancellationToken);
 
-				// Check for a prior conversation from a crashed run.
+				// Conversation ID is derived from task/subtask so the parent can retry
+				// with a different LLM and resume the same conversation.
+				string conversationId = hasSubtask ? $"{taskId}:{subtaskId}" : taskId;
+
 				ILlmConversation conversation;
-				string? toolCallId = ToolContext.ActiveToolCallId;
+				ConversationData? existing = await WorkerSession.ApiClient.GetConversationAsync(ticketId, conversationId, WorkerSession.CancellationToken);
 
-				ConversationData? existing = toolCallId != null
-					? await WorkerSession.ApiClient.GetConversationAsync(ticketId, toolCallId, WorkerSession.CancellationToken)
-					: null;
-
-				if (existing != null)
+				if (existing != null && !existing.IsFinished)
 				{
 					conversation = new CompactingConversation(existing, LlmRole.Developer, service, null, null, null, null, taskId, subtaskId);
-					Console.WriteLine($"[Developer] Reconstituted conversation {toolCallId}");
+					Console.WriteLine($"[Developer] Resuming unfinished conversation {conversationId} ({existing.Messages.Count} messages)");
 				}
 				else
 				{
-					conversation = new CompactingConversation(null, LlmRole.Developer, service, null, initialPrompt, $"Developer - {subtaskName}", toolCallId, taskId, subtaskId);
+					if (existing != null)
+					{
+						Console.WriteLine($"[Developer] Previous conversation {conversationId} was finalized, creating fresh conversation for '{subtaskName}'");
+					}
+					else
+					{
+						Console.WriteLine($"[Developer] New conversation {conversationId} for '{subtaskName}'");
+					}
+					conversation = new CompactingConversation(null, LlmRole.Developer, service, null, initialPrompt, $"Developer - {subtaskName}", conversationId, taskId, subtaskId);
 				}
 
 				bool workComplete = false;
@@ -129,7 +136,8 @@ public static class DeveloperTools
 				}
 				else
 				{
-					result = new ToolResult($"Developer could not complete '{subtaskName}': {llmResult.Content}", false, false);
+					string reason = !string.IsNullOrWhiteSpace(llmResult.ErrorMessage) ? $" ({llmResult.ErrorMessage})" : "";
+					result = new ToolResult($"Developer could not complete '{subtaskName}'{reason}: {llmResult.Content}\n\nThe conversation is still open. Calling start_developer again for the same task/subtask with a different LLM will resume where it left off.", false, false);
 				}
 			}
 			catch (OperationCanceledException)

@@ -1728,10 +1728,16 @@ nav {
     font-size: 0.625rem;
     transition: transform 0.2s ease;
     flex-shrink: 0;
+    color: var(--primary-light);
 }
 
 .chat-tool-icon.open {
     transform: rotate(90deg);
+}
+
+.chat-tool-error .chat-tool-icon,
+.chat-tool-error .chat-tool-name {
+    color: var(--danger);
 }
 
 .chat-tool-name {
@@ -1758,6 +1764,7 @@ nav {
 
 .chat-tool-body.open {
     display: block;
+    max-width: 90%;
 }
 
 .chat-tool-section {
@@ -1795,6 +1802,34 @@ nav {
     overflow-y: auto;
     font-size: 0.6875rem;
     color: var(--gray-600);
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.chat-tool-pending {
+    align-self: flex-start;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    color: var(--gray-600);
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+    font-size: 0.75rem;
+}
+
+.chat-tool-pending .chat-tool-icon {
+    color: var(--primary-light);
+}
+
+.chat-tool-pending .chat-tool-name {
+    color: var(--primary-light);
+    font-weight: 600;
+}
+
+.chat-tool-pending .spinner-dots {
+    font-size: 1.25rem;
+    line-height: 1;
+    color: var(--gray-400);
 }
 
 .chat-busy-spinner {

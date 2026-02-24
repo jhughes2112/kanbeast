@@ -509,7 +509,13 @@ public class LlmService
 			WorkerSession.HubClient.UnregisterConversation(conversation.Id);
 		}
 
-		if (finalizeOnExit && finalResult.ExitReason != LlmExitReason.ModelChanged)
+		// RateLimited and LlmCallFailed are transient — the conversation can resume
+		// with the same or a different LLM. Do not finalize.
+		bool canResume = finalResult.ExitReason == LlmExitReason.ModelChanged
+			|| finalResult.ExitReason == LlmExitReason.RateLimited
+			|| finalResult.ExitReason == LlmExitReason.LlmCallFailed;
+
+		if (finalizeOnExit && !canResume)
 		{
 			string finalContent = await conversation.FinalizeAsync(finalResult, cancellationToken);
 			finalResult = new LlmResult(finalResult.ExitReason, finalContent, finalResult.ErrorMessage, finalResult.FinalToolCalled, finalResult.RetryAfter);

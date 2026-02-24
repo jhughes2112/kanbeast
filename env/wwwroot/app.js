@@ -1397,7 +1397,11 @@ function renderDetailChatMessage(messages, index, container) {
                         break;
                     }
                 }
-                appendDetailToolCall(container, tc.function.name, tc.function.arguments, result);
+                if (result !== null) {
+                    appendDetailToolCall(container, tc.function.name, tc.function.arguments, result);
+                } else {
+                    appendPendingToolCall(container, tc.function.name, tc.function.arguments);
+                }
             }
         }
     } else if (msg.role === 'system') {
@@ -1408,8 +1412,9 @@ function renderDetailChatMessage(messages, index, container) {
 
 function appendDetailToolCall(container, name, argsJson, result) {
     const args = formatToolCallParams(argsJson);
+    const isError = result && result.startsWith('Error:');
     const el = document.createElement('div');
-    el.className = 'chat-tool-accordion';
+    el.className = 'chat-tool-accordion' + (isError ? ' chat-tool-error' : '');
 
     const resultHtml = result ? `
         <div class="chat-tool-section chat-tool-result">
@@ -1441,13 +1446,29 @@ function appendDetailToolCall(container, name, argsJson, result) {
     container.appendChild(el);
 }
 
+function appendPendingToolCall(container, name, argsJson) {
+    const args = formatToolCallParams(argsJson);
+    const el = document.createElement('div');
+    el.className = 'chat-tool-pending';
+    el.innerHTML = `
+        <span class="chat-tool-icon">▶</span>
+        <span class="chat-tool-name">${escapeHtml(name)}</span>
+        <span class="chat-tool-params">${escapeHtml(args)}</span>
+        <span class="spinner-dots"><span>.</span><span>.</span><span>.</span></span>
+    `;
+    container.appendChild(el);
+}
+
 function formatToolCallParams(argsJson) {
     try {
         const obj = JSON.parse(argsJson);
         const parts = [];
         for (const key in obj) {
             let val = String(obj[key]);
-            if (val.length > 40) {
+            // Shorten GUID-like values (32 hex or 8-4-4-4-12) to first 4 chars
+            if (/^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i.test(val)) {
+                val = val.substring(0, 4) + '…';
+            } else if (val.length > 40) {
                 val = val.substring(0, 40) + '…';
             }
             parts.push(val);

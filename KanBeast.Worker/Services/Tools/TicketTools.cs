@@ -301,6 +301,12 @@ public static class TicketTools
         """)]
     public static Task<ToolResult> ListAvailableLlmsAsync(ToolContext context)
     {
+        return Task.FromResult(new ToolResult(FormatAvailableLlms(), false, false));
+    }
+
+    // Builds the available-LLM listing text, shared by the tool and error messages.
+    public static string FormatAvailableLlms()
+    {
         Ticket ticket = WorkerSession.TicketHolder.Ticket;
         decimal remainingBudget = ticket.MaxCost <= 0 ? 0m : Math.Max(0m, ticket.MaxCost - ticket.LlmCost);
         List<(string id, string model, string strengths, string weaknesses, decimal costPer1MTokens, bool isAvailable)> llms =
@@ -352,7 +358,7 @@ public static class TicketTools
             }
         }
 
-        return Task.FromResult(new ToolResult(sb.ToString(), false, false));
+        return sb.ToString();
     }
 
     [Description("""
@@ -380,12 +386,13 @@ public static class TicketTools
             {
                 if (task.Status != SubtaskStatus.Complete)
                 {
-                    // Task with no subtasks — treat the task itself as a work item.
                     nextTaskId = task.Id;
                     nextTaskName = task.Name;
                     nextTaskDescription = task.Description;
+                    break;
                 }
-                break;
+
+                continue;
             }
 
             foreach (KanbanSubtask subtask in task.Subtasks)

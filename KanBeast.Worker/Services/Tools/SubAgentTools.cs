@@ -114,7 +114,7 @@ public static class SubAgentTools
 		{
 			try
 			{
-				string continueMessage = "Continue investigating. Use tools to gather information and call agent_task_complete with your findings when done ({messagesRemaining} turns remaining). Do NOT respond with only text.";
+				string continueMessage = "Do not guess, follow the exact instructions provided in this conversation. Are you done? If so, call agent_task_complete with your findings or use other tools to make progress on the investigation ({messagesRemaining} turns remaining). Do NOT respond with only text.";
 				string content = await RunAgentConversationAsync(taskSummary, instructions, LlmRole.PlanningSubagent, "Inspection", id, continueMessage, context);
 				result = new ToolResult(content, false, false);
 			}
@@ -145,7 +145,7 @@ public static class SubAgentTools
 		LlmService? service = !string.IsNullOrWhiteSpace(llmConfigId) ? WorkerSession.LlmProxy.GetService(llmConfigId) : null;
 		if (service == null)
 		{
-			return $"{displayPrefix} failed: LLM config '{llmConfigId}' not found";
+			return $"{displayPrefix} failed: LLM config '{llmConfigId}' not found. You must use an id from the list below.\n\n{TicketTools.FormatAvailableLlms()}";
 		}
 
 		string modelTag = $"{llmConfigId![..4]}:{service.Model}";
@@ -153,18 +153,20 @@ public static class SubAgentTools
 
 		string fullInstructions = $"{taskSummary}\n\n{instructions}";
 
-		// Check for a prior conversation from a crashed run. If found, reconstitute it.
+		// Use the tool call ID as the conversation ID for crash recovery.
+		// Subagents are ad-hoc (no stable task/subtask key), so the tool call ID is the only anchor.
 		ILlmConversation conversation;
 		string? toolCallId = ToolContext.ActiveToolCallId;
+		string ticketId = WorkerSession.TicketHolder.Ticket.Id;
 
 		ConversationData? existing = toolCallId != null
-			? await WorkerSession.ApiClient.GetConversationAsync(WorkerSession.TicketHolder.Ticket.Id, toolCallId, WorkerSession.CancellationToken)
+			? await WorkerSession.ApiClient.GetConversationAsync(ticketId, toolCallId, WorkerSession.CancellationToken)
 			: null;
 
-		if (existing != null)
+		if (existing != null && !existing.IsFinished)
 		{
 			conversation = new CompactingConversation(existing, role, service, null, null, null, null, context.Conversation?.CurrentTaskId, context.Conversation?.CurrentSubtaskId);
-			Console.WriteLine($"[{displayPrefix}] Reconstituted conversation {toolCallId}");
+			Console.WriteLine($"[{displayPrefix}] Resuming conversation {toolCallId}");
 		}
 		else
 		{
@@ -184,7 +186,12 @@ public static class SubAgentTools
 
 		if (!llmResult.Success)
 		{
-			return $"{displayPrefix} failed: {llmResult.Content}";
+			string reason = !string.IsNullOrWhiteSpace(llmResult.ErrorMessage) ? llmResult.ErrorMessage : "unknown";
+			string content = !string.IsNullOrWhiteSpace(llmResult.Content) ? $"\n\nLast output:\n{llmResult.Content}" : "";
+			string resumeHint = llmResult.ExitReason == LlmExitReason.RateLimited || llmResult.ExitReason == LlmExitReason.LlmCallFailed
+				? "\n\nThe conversation is still open. Calling the same tool with a different LLM (but same tool_call_id) will resume where it left off."
+				: "";
+			return $"{displayPrefix} failed ({reason}){content}{resumeHint}";
 		}
 
 		return llmResult.Content;
