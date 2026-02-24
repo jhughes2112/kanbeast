@@ -16,6 +16,7 @@ public static class ShellTools
 		Reserve for: builds, tests, git, package management, system utilities.
 		Use absolute paths. Prefer start_shell for stateful use or long running processes time out.
 		""")]
+	[SlowCall]
 	public static async Task<ToolResult> RunCommandAsync(
 		[Description("The bash command to execute. Use && to chain dependent commands (stops on failure). Use ; to chain independent commands. Do not use newlines; keep the command on one line.")] string command,
 		[Description("Absolute path to the working directory for this command. Pass empty string to use the repository root.")] string workDir,

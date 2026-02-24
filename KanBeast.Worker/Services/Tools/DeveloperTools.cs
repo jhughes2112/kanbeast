@@ -26,6 +26,7 @@ public static class DeveloperTools
 		4. After the developer returns, review its report and decide the next step.
 		5. If the developer fails, call get_next_work_item again to try with a different LLM.
 		""")]
+	[SlowCall]
 	public static async Task<ToolResult> StartDeveloperAsync(
 		[Description("The name of the parent task")] string taskName,
 		[Description("The name of the subtask to implement, or the task name if there are no subtasks")] string subtaskName,

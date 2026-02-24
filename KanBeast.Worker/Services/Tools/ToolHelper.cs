@@ -29,6 +29,7 @@ public static class ToolHelper
         DescriptionAttribute? descAttr = method.GetCustomAttribute<DescriptionAttribute>();
         string description = descAttr?.Description ?? methodName;
         bool isSequential = method.GetCustomAttribute<SequentialAttribute>() != null;
+        bool isSlowCall = method.GetCustomAttribute<SlowCallAttribute>() != null;
 
         JsonObject parameters = BuildParametersSchema(method);
 
@@ -74,7 +75,8 @@ public static class ToolHelper
                 }
             },
             Handler = handler,
-            MustRunSequentially = isSequential
+            MustRunSequentially = isSequential,
+            IsSlowCall = isSlowCall
         });
     }
 

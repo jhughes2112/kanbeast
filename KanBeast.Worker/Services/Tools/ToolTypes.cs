@@ -82,10 +82,17 @@ public readonly struct ToolResult
 [AttributeUsage(AttributeTargets.Method)]
 public sealed class SequentialAttribute : Attribute { }
 
+// Marks a tool method as potentially long-running.
+// When a batch contains any slow tool call, the assistant message is flushed
+// to the client before execution so the UI can show pending tool names.
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class SlowCallAttribute : Attribute { }
+
 // A tool with its definition and invocation handler.
 public class Tool
 {
 	public required ToolDefinition Definition { get; init; }
 	public required Func<JsonObject, ToolContext, Task<ToolResult>> Handler { get; init; }
 	public bool MustRunSequentially { get; init; }
+	public bool IsSlowCall { get; init; }
 }

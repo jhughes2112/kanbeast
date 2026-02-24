@@ -657,6 +657,24 @@ public class LlmService
 				toolLookup[t.Definition.Function.Name] = t;
 			}
 
+			// Flush the assistant message to the client BEFORE executing tools so
+			// the UI can show pending tool call names with animated dots.
+			// Only flush when the batch contains a slow tool to avoid unnecessary syncs.
+			bool hasSlowCall = false;
+			foreach (ConversationToolCall tc in toolCalls)
+			{
+				if (toolLookup.TryGetValue(tc.Function.Name, out Tool? matched) && matched.IsSlowCall)
+				{
+					hasSlowCall = true;
+					break;
+				}
+			}
+
+			if (hasSlowCall)
+			{
+				await conversation.ForceFlushAsync();
+			}
+
 			Task[] tasks = new Task[toolCalls.Count];
 			for (int i = 0; i < toolCalls.Count; i++)
 			{

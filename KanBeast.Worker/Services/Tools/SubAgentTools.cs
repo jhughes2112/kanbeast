@@ -28,6 +28,7 @@ public static class SubAgentTools
 		5. Clearly tell the agent whether you expect it to write code, learn (and explain) how something works, research and make recommendations about something, etc.
 		6. After each sub-agent returns, evaluate its performance in your end_subtask summary (25 words max per sub-agent). Note what it did well and what it struggled with.  If you didn't use any subagents, don't mention them.
 		""")]
+	[SlowCall]
 	public static async Task<ToolResult> StartSubAgentAsync(
 		[Description("Brief summary of the sub-agent's mission (logged to activity feed and shown to the sub-agent as context).")] string taskSummary,
 		[Description("Detailed, self-contained instructions and expectations for the sub-agent's response.")] string instructions,
@@ -94,6 +95,7 @@ public static class SubAgentTools
 		2. The agent works autonomously and returns its findings. You cannot send follow-up messages.
 		3. Launch multiple inspection agents concurrently for different questions by issuing multiple tool calls in one message.
 		""")]
+	[SlowCall]
 	public static async Task<ToolResult> StartInspectionAgentAsync(
 		[Description("Brief summary of what to investigate (logged to activity feed).")] string taskSummary,
 		[Description("Detailed question or investigation instructions. Be specific about what information to return.")] string instructions,
