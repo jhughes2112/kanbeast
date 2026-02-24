@@ -351,7 +351,7 @@ public class LlmService
 					TopP = 1.0,
 					FrequencyPenalty = 0.1,
 					Seed = SeedRandom.Next(),
-					MaxCompletionTokens = null,
+					MaxCompletionTokens = ComputeMaxCompletionTokens(requestMessages),
 					MaxTokens = null
 				};
 
@@ -1195,4 +1195,58 @@ public class LlmService
 			return null;
 		}
 	}
+
+		// Estimate and compute a safe max completion token size based on the
+		// model's context length and current message size so we avoid requests
+		// that exceed the provider's maximum context window.
+		private int? ComputeMaxCompletionTokens(List<ConversationMessage> messages)
+		{
+			// Default completion token target used historically.
+			const int DefaultCompletion = 65536;
+
+			// Model's maximum context (tokens).
+			int modelMax = _config.ContextLength;
+
+			// Very rough token estimation: chars / 4. This is a heuristic and
+			// intentionally conservative to avoid exceeding provider limits.
+			long totalChars = 0;
+			foreach (ConversationMessage m in messages)
+			{
+				if (!string.IsNullOrEmpty(m.Content))
+				{
+					totalChars += m.Content.Length;
+				}
+				if (m.ToolCalls != null)
+				{
+					foreach (ConversationToolCall tc in m.ToolCalls)
+					{
+						if (!string.IsNullOrEmpty(tc.Function.Arguments))
+						{
+							totalChars += tc.Function.Arguments.Length;
+						}
+					}
+				}
+			}
+
+			long estimatedTokens = totalChars / 4;
+
+			long available = modelMax - estimatedTokens;
+			if (available <= 0)
+			{
+				return 0;
+			}
+
+			// Reserve a small safety margin.
+			long safe = available - 64;
+			if (safe <= 0)
+			{
+				return 0;
+			}
+
+			// Cap to the historical default to avoid very large completions.
+			int cap = DefaultCompletion;
+			int result = (int)Math.Min(safe, cap);
+			return result;
+		}
+
 }
