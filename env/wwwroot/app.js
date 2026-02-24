@@ -2137,6 +2137,7 @@ function renderLLMConfigs() {
     llmConfigs.forEach((config, index) => {
         const configEl = document.createElement('div');
         configEl.className = 'llm-config accordion collapsed';
+        configEl.dataset.llmId = config.id || '';
         configEl.style.marginBottom = '8px';
         configEl.style.padding = '0';
         const modelName = config.model || `LLM ${index + 1}`;
@@ -2219,6 +2220,7 @@ function collectLLMConfigs() {
 
     document.querySelectorAll('.llm-config').forEach(configEl => {
         configs.push({
+            id: configEl.dataset.llmId || '',
             model: configEl.querySelector('.llm-model').value,
             contextLength: parseInt(configEl.querySelector('.llm-context-length').value, 10) || 128000,
             inputTokenPrice: parseFloat(configEl.querySelector('.llm-input-price').value) || 0,

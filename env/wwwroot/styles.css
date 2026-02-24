@@ -1764,7 +1764,6 @@ nav {
 
 .chat-tool-body.open {
     display: block;
-    max-width: 90%;
 }
 
 .chat-tool-section {

@@ -70,6 +70,29 @@ public class SettingsService : ISettingsService
 
             if (incomingSettings.File.LLMConfigs.Count > 0)
             {
+                // Preserve existing IDs when incoming configs lack them (e.g. hand-edited JSON
+                // or older UI that didn't send ids). Match by model name as a stable key.
+                Dictionary<string, string> existingIdsByModel = new Dictionary<string, string>(StringComparer.Ordinal);
+                foreach (LLMConfig existing in settingsFile.LLMConfigs)
+                {
+                    if (!string.IsNullOrEmpty(existing.Id) && !string.IsNullOrEmpty(existing.Model))
+                    {
+                        existingIdsByModel[existing.Model] = existing.Id;
+                    }
+                }
+
+                foreach (LLMConfig incoming in incomingSettings.File.LLMConfigs)
+                {
+                    if (string.IsNullOrEmpty(incoming.Id) || !IsValidGuid(incoming.Id))
+                    {
+                        if (!string.IsNullOrEmpty(incoming.Model) && existingIdsByModel.TryGetValue(incoming.Model, out string? preservedId))
+                        {
+                            incoming.Id = preservedId;
+                            existingIdsByModel.Remove(incoming.Model);
+                        }
+                    }
+                }
+
                 settingsFile.LLMConfigs = incomingSettings.File.LLMConfigs;
             }
 
@@ -262,6 +285,11 @@ public class SettingsService : ISettingsService
         }
 
         return updatedPrompts;
+    }
+
+    private static bool IsValidGuid(string value)
+    {
+        return Guid.TryParse(value, out _);
     }
 
     private SettingsFile LoadSettingsFile()
