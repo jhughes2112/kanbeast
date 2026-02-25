@@ -1,3 +1,4 @@
+using KanBeast.Worker.Models;
 using System.Reflection;
 
 namespace KanBeast.Worker.Tests;
@@ -61,7 +62,7 @@ public static class Reflect
 
 public static class TestRunner
 {
-	public static int RunAll()
+	public static int RunAll(WorkerConfig wc)
 	{
 		Console.WriteLine("=== Running Tests ===");
 		TestContext ctx = new TestContext();
@@ -70,7 +71,7 @@ public static class TestRunner
 		ToolHelperTests.Test(ctx);
 		FileToolsTests.Test(ctx);
 		ShellToolsTests.Test(ctx);
-		WebToolsTests.Test(ctx);
+		WebToolsTests.Test(ctx, wc);
 		SearchToolsTests.Test(ctx);
 
 		Console.WriteLine($"=== Tests Complete: {ctx.Passed} passed, {ctx.Failed} failed ===");

@@ -12,11 +12,6 @@ public class Program
 {
 	public static async Task<int> Main(string[] args)
 	{
-		if (args.Length > 0 && args[0] == "--test")
-		{
-			return TestRunner.RunAll();
-		}
-
 		using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
 		{
 			builder.AddConsole();
@@ -66,6 +61,14 @@ public class Program
 
 			WorkerConfig config = BuildConfiguration(options);
 			string repoDir = ResolveRepoPath(options.RepoPath);
+
+			// Always run unit tests on startup to ensure changes are exercised.
+			int startupTestExit = TestRunner.RunAll(config);
+			if (startupTestExit != 0)
+			{
+				Console.WriteLine($"Tests failed.  Aborting.");
+				return startupTestExit;
+			}
 
 			await RunAsync(logger, apiClient, config, repoDir, hubClient, cts.Token);
 

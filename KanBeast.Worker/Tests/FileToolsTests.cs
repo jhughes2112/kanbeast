@@ -22,8 +22,8 @@ public static class FileToolsTests
 			TestWriteAndRead(ctx, tc, tempDir);
 			TestCatNFormat(ctx, tc, tempDir);
 			TestReadWithOffsetLines(ctx, tc, tempDir);
-			TestEditFile(ctx, tc, tempDir);
-			TestMultiEditFile(ctx, tc, tempDir);
+         TestEditFile(ctx, tc, tempDir);
+			TestEditToolVarious(ctx, tc, tempDir);
 			TestReadFirstGuard(ctx, tc, tempDir);
 			TestEdgeErrors(ctx, tc, tempDir);
 		}
@@ -44,9 +44,11 @@ public static class FileToolsTests
 		ToolResult writeResult = FileTools.WriteFileAsync(testFile, "hello world", tc).GetAwaiter().GetResult();
 		ctx.Assert(writeResult.Response.Contains("File written"), "FileTools: write succeeds");
 
-		// Read it back — always cat -n format.
-		ToolResult readResult = FileTools.ReadFileAsync(testFile, "", "", tc).GetAwaiter().GetResult();
-		ctx.Assert(readResult.Response.Contains("1\thello world"), "FileTools: read returns cat -n numbered content");
+         // Read it back — always cat -n format. It now includes a per-line anchor after the number.
+			ToolResult readResult = FileTools.ReadFileAsync(testFile, "", "", tc).GetAwaiter().GetResult();
+			ctx.Assert(readResult.Response.Contains("hello world"), "FileTools: read returns content");
+			ctx.Assert(readResult.Response.Contains("1:"), "FileTools: read includes line anchor");
+			ctx.Assert(readResult.Response.Contains("\thello world"), "FileTools: read includes tab followed by content");
 
 		// Relative path is rejected.
 		ToolResult relativePath = FileTools.ReadFileAsync("test.txt", "", "", tc).GetAwaiter().GetResult();
@@ -61,10 +63,14 @@ public static class FileToolsTests
 		FileTools.WriteFileAsync(catFile, "first\n\nthird\nfourth", tc).GetAwaiter().GetResult();
 
 		ToolResult readResult = FileTools.ReadFileAsync(catFile, "", "", tc).GetAwaiter().GetResult();
-		ctx.Assert(readResult.Response.Contains("1\tfirst"), "CatN: line 1 present");
-		ctx.Assert(readResult.Response.Contains("2\t"), "CatN: blank line 2 preserved");
-		ctx.Assert(readResult.Response.Contains("3\tthird"), "CatN: line 3 present");
-		ctx.Assert(readResult.Response.Contains("4\tfourth"), "CatN: line 4 present");
+           ctx.Assert(readResult.Response.Contains("1:"), "CatN: line 1 present with anchor");
+			ctx.Assert(readResult.Response.Contains("\tfirst"), "CatN: line 1 content present");
+			ctx.Assert(readResult.Response.Contains("2:"), "CatN: blank line 2 preserved with anchor");
+			ctx.Assert(readResult.Response.Contains("\t"), "CatN: blank line preserved");
+			ctx.Assert(readResult.Response.Contains("3:"), "CatN: line 3 present with anchor");
+			ctx.Assert(readResult.Response.Contains("\tthird"), "CatN: line 3 content present");
+			ctx.Assert(readResult.Response.Contains("4:"), "CatN: line 4 present with anchor");
+			ctx.Assert(readResult.Response.Contains("\tfourth"), "CatN: line 4 content present");
 		ctx.Assert(!readResult.Response.Contains("Showing"), "CatN: full file has no header");
 	}
 
@@ -77,33 +83,41 @@ public static class FileToolsTests
 		FileTools.WriteFileAsync(multiFile, multiLine, tc).GetAwaiter().GetResult();
 
 		// offset=3, lines=4 → 1-based: start at line 3, read 4 lines → lines 3-6.
-		ToolResult windowed = FileTools.ReadFileAsync(multiFile, "3", "4", tc).GetAwaiter().GetResult();
-		ctx.Assert(windowed.Response.Contains("3\tline3"), "FileTools: windowed read starts at correct offset");
-		ctx.Assert(windowed.Response.Contains("6\tline6"), "FileTools: windowed read ends at correct line");
-		ctx.Assert(!windowed.Response.Contains("2\tline2"), "FileTools: windowed read excludes line before offset");
-		ctx.Assert(!windowed.Response.Contains("7\tline7"), "FileTools: windowed read excludes line after range");
-		ctx.Assert(windowed.Response.Contains("Showing lines 3-6"), "FileTools: windowed read has correct header");
+            ToolResult windowed = FileTools.ReadFileAsync(multiFile, "3", "4", tc).GetAwaiter().GetResult();
+			ctx.Assert(windowed.Response.Contains("3:"), "FileTools: windowed read starts at correct offset (anchor present)");
+			ctx.Assert(windowed.Response.Contains("\tline3"), "FileTools: windowed read includes line3 content");
+			ctx.Assert(windowed.Response.Contains("6:"), "FileTools: windowed read ends at correct line (anchor present)");
+			ctx.Assert(windowed.Response.Contains("\tline6"), "FileTools: windowed read includes line6 content");
+			ctx.Assert(!windowed.Response.Contains("2:\tline2"), "FileTools: windowed read excludes line before offset");
+			ctx.Assert(!windowed.Response.Contains("7:\tline7"), "FileTools: windowed read excludes line after range");
+			ctx.Assert(windowed.Response.Contains("Showing lines 3-6"), "FileTools: windowed read has correct header");
 
 		// Blank offset defaults to 1, lines=3 → lines 1-3.
 		ToolResult blankOffset = FileTools.ReadFileAsync(multiFile, "", "3", tc).GetAwaiter().GetResult();
-		ctx.Assert(blankOffset.Response.Contains("1\tline1"), "FileTools: blank offset defaults to start");
+         ctx.Assert(blankOffset.Response.Contains("1:"), "FileTools: blank offset defaults to start (anchor)");
+			ctx.Assert(blankOffset.Response.Contains("\tline1"), "FileTools: blank offset content present");
 		ctx.Assert(blankOffset.Response.Contains("Showing lines 1-3"), "FileTools: blank offset header correct");
 
 		// offset=7, blank lines → read up to MaxLines from line 7 → lines 7-10.
-		ToolResult blankLines = FileTools.ReadFileAsync(multiFile, "7", "", tc).GetAwaiter().GetResult();
-		ctx.Assert(blankLines.Response.Contains("7\tline7"), "FileTools: 1-based offset reads correct line");
-		ctx.Assert(blankLines.Response.Contains("10\tline10"), "FileTools: blank lines includes last line");
+           ToolResult blankLines = FileTools.ReadFileAsync(multiFile, "7", "", tc).GetAwaiter().GetResult();
+			ctx.Assert(blankLines.Response.Contains("7:"), "FileTools: 1-based offset reads correct line (anchor)");
+			ctx.Assert(blankLines.Response.Contains("\tline7"), "FileTools: 1-based offset reads correct line (content)");
+			ctx.Assert(blankLines.Response.Contains("10:"), "FileTools: blank lines includes last line (anchor)");
+			ctx.Assert(blankLines.Response.Contains("\tline10"), "FileTools: blank lines includes last line (content)");
 		ctx.Assert(blankLines.Response.Contains("Showing lines 7-10"), "FileTools: blank lines header correct");
 
 		// Both blank → up to 10,000 lines, no header.
 		ToolResult fullFile = FileTools.ReadFileAsync(multiFile, "", "", tc).GetAwaiter().GetResult();
-		ctx.Assert(fullFile.Response.Contains("1\tline1"), "FileTools: full read starts at line 1");
-		ctx.Assert(fullFile.Response.Contains("10\tline10"), "FileTools: full read includes last line");
+            ctx.Assert(fullFile.Response.Contains("1:"), "FileTools: full read starts at line 1 anchor");
+			ctx.Assert(fullFile.Response.Contains("\tline1"), "FileTools: full read starts at line 1 content");
+			ctx.Assert(fullFile.Response.Contains("10:"), "FileTools: full read includes last line anchor");
+			ctx.Assert(fullFile.Response.Contains("\tline10"), "FileTools: full read includes last line content");
 		ctx.Assert(!fullFile.Response.Contains("Showing"), "FileTools: full read has no header");
 
 		// offset=0, lines=0 → same as both blank (0 treated as 1).
 		ToolResult zeros = FileTools.ReadFileAsync(multiFile, "0", "0", tc).GetAwaiter().GetResult();
-		ctx.Assert(zeros.Response.Contains("1\tline1"), "FileTools: explicit zeros returns full file");
+         ctx.Assert(zeros.Response.Contains("1:"), "FileTools: explicit zeros returns full file anchor");
+			ctx.Assert(zeros.Response.Contains("\tline1"), "FileTools: explicit zeros returns full file content");
 		ctx.Assert(!zeros.Response.Contains("Showing"), "FileTools: explicit zeros has no header");
 
 		// Invalid offset value.
@@ -120,8 +134,10 @@ public static class FileToolsTests
 
 		// Lines exceeding file length still returns available lines.
 		ToolResult beyondLines = FileTools.ReadFileAsync(multiFile, "8", "50", tc).GetAwaiter().GetResult();
-		ctx.Assert(beyondLines.Response.Contains("8\tline8"), "FileTools: lines beyond file starts correct");
-		ctx.Assert(beyondLines.Response.Contains("10\tline10"), "FileTools: lines beyond file includes last line");
+           ctx.Assert(beyondLines.Response.Contains("8:"), "FileTools: lines beyond file starts correct (anchor)");
+			ctx.Assert(beyondLines.Response.Contains("\tline8"), "FileTools: lines beyond file starts correct (content)");
+			ctx.Assert(beyondLines.Response.Contains("10:"), "FileTools: lines beyond file includes last line (anchor)");
+			ctx.Assert(beyondLines.Response.Contains("\tline10"), "FileTools: lines beyond file includes last line (content)");
 	}
 
 	private static void TestEditFile(TestContext ctx, ToolContext tc, string tempDir)
@@ -131,104 +147,103 @@ public static class FileToolsTests
 		// Write initial content (new file — tracked by write).
 		FileTools.WriteFileAsync(editFile, "alpha beta gamma", tc).GetAwaiter().GetResult();
 
-		// Replace single occurrence (write tracked the file, so edit is allowed).
-		ToolResult editResult = FileTools.EditFileAsync(editFile, "beta", "delta", false, tc).GetAwaiter().GetResult();
-		ctx.Assert(editResult.Response.Contains("File edited"), "FileTools: edit succeeds");
+          // New Edit API: replace the entire line using anchors. Read back to obtain anchor for line 1.
+			ToolResult initialRead = FileTools.ReadFileAsync(editFile, "", "", tc).GetAwaiter().GetResult();
+			string? anchorLine1 = null;
+			{
+				string[] parts = initialRead.Response.Split('\n');
+				foreach (string ln in parts)
+				{
+					if (ln.Contains("alpha beta gamma"))
+					{
+						string prefix = ln.Split('\t')[0].Trim();
+						anchorLine1 = prefix;
+						break;
+					}
+				}
+			}
+			ctx.Assert(!string.IsNullOrEmpty(anchorLine1), "Test setup: obtained anchor for line 1");
 
-		// Verify content changed.
-		ToolResult verifyResult = FileTools.ReadFileAsync(editFile, "", "", tc).GetAwaiter().GetResult();
-		ctx.Assert(verifyResult.Response.Contains("alpha delta gamma"), "FileTools: edit applied correctly");
+			JsonArray replaceOp = new JsonArray
+			{
+				new JsonObject { ["replace_lines"] = new JsonObject { ["start_anchor"] = anchorLine1, ["end_anchor"] = anchorLine1, ["new_text"] = "alpha delta gamma" } }
+			};
+			ToolResult editResult = FileTools.EditFileAsync(editFile, replaceOp.ToJsonString(), tc).GetAwaiter().GetResult();
+			ctx.Assert(editResult.Response.Contains("File edited"), "FileTools: edit succeeds using replace_lines");
 
-		// Non-existent content.
-		ToolResult notFound = FileTools.EditFileAsync(editFile, "zzzzz", "yyy", false, tc).GetAwaiter().GetResult();
-		ctx.Assert(notFound.Response.Contains("Error") && notFound.Response.Contains("not found"), "FileTools: edit non-existent content returns error");
+			ToolResult verifyResult = FileTools.ReadFileAsync(editFile, "", "", tc).GetAwaiter().GetResult();
+			ctx.Assert(verifyResult.Response.Contains("alpha delta gamma"), "FileTools: edit applied correctly (line replacement)");
 
-		// Duplicate content matched multiple times.
-		string dupeFile = Path.Combine(tempDir, "dupe.txt");
-		FileTools.WriteFileAsync(dupeFile, "aaa bbb aaa", tc).GetAwaiter().GetResult();
-		ToolResult dupeResult = FileTools.EditFileAsync(dupeFile, "aaa", "ccc", false, tc).GetAwaiter().GetResult();
-		ctx.Assert(dupeResult.Response.Contains("Error") && dupeResult.Response.Contains("multiple"), "FileTools: edit duplicate content returns error");
+			// Mismatched anchor should fail atomically.
+			string badAnchor = anchorLine1!.Split(':')[0] + ":00"; // change hex to 00
+			JsonArray badEdits = new JsonArray
+			{
+				new JsonObject { ["replace_lines"] = new JsonObject { ["start_anchor"] = badAnchor, ["end_anchor"] = badAnchor, ["new_text"] = "will not apply" } }
+			};
+			ToolResult badResult = FileTools.EditFileAsync(editFile, badEdits.ToJsonString(), tc).GetAwaiter().GetResult();
+			ctx.Assert(badResult.Response.Contains("Error: One or more anchor hashes did not match"), "FileTools: mismatched anchor returns informative error");
 	}
 
-	private static void TestMultiEditFile(TestContext ctx, ToolContext tc, string tempDir)
+  private static void TestEditToolVarious(TestContext ctx, ToolContext tc, string tempDir)
 	{
 		// Write initial content.
 		string multiEditFile = Path.Combine(tempDir, "multi_edit.txt");
 		FileTools.WriteFileAsync(multiEditFile, "alpha beta gamma delta", tc).GetAwaiter().GetResult();
 
-		// Apply two edits in sequence.
-		JsonArray edits = new JsonArray
+         // Now test insert_after and multiple operations behavior.
+			string insertFile = Path.Combine(tempDir, "insert_test.txt");
+			FileTools.WriteFileAsync(insertFile, "one\ntwo\nthree", tc).GetAwaiter().GetResult();
+			ToolResult readInsert = FileTools.ReadFileAsync(insertFile, "", "", tc).GetAwaiter().GetResult();
+          string? anchorLine2 = null;
 		{
-			new JsonObject { ["oldContent"] = "alpha", ["newContent"] = "AAA" },
-			new JsonObject { ["oldContent"] = "gamma", ["newContent"] = "GGG" }
-		};
-		ToolResult multiResult = FileTools.MultiEditFileAsync(multiEditFile, edits, tc).GetAwaiter().GetResult();
-		ctx.Assert(multiResult.Response.Contains("2 edit(s) applied"), "MultiEdit: two edits applied");
+				string[] parts = readInsert.Response.Split('\n');
+				foreach (string ln in parts)
+				{
+					if (ln.Contains("two"))
+					{
+						anchorLine2 = ln.Split('\t')[0].Trim();
+						break;
+					}
+				}
+			}
+			ctx.Assert(!string.IsNullOrEmpty(anchorLine2), "Test setup: obtained anchor for line 2");
 
-		// Verify both edits took effect.
-		ToolResult verify = FileTools.ReadFileAsync(multiEditFile, "", "", tc).GetAwaiter().GetResult();
-		ctx.Assert(verify.Response.Contains("AAA beta GGG delta"), "MultiEdit: both replacements applied correctly");
+			JsonArray insOps = new JsonArray
+			{
+				new JsonObject { ["insert_after"] = new JsonObject { ["anchor"] = anchorLine2, ["new_text"] = "inserted" } }
+			};
+			ToolResult insResult = FileTools.EditFileAsync(insertFile, insOps.ToJsonString(), tc).GetAwaiter().GetResult();
+			ctx.Assert(insResult.Response.Contains("File edited"), "EditFile: insert_after applied");
+			ToolResult insVerify = FileTools.ReadFileAsync(insertFile, "", "", tc).GetAwaiter().GetResult();
+			ctx.Assert(insVerify.Response.Contains("two"), "Insert verify: original line present");
+			ctx.Assert(insVerify.Response.Contains("inserted"), "Insert verify: new line present");
 
-		// Second edit operates on result of first edit.
-		string chainFile = Path.Combine(tempDir, "chain_edit.txt");
-		FileTools.WriteFileAsync(chainFile, "foo bar", tc).GetAwaiter().GetResult();
-		JsonArray chainEdits = new JsonArray
-		{
-			new JsonObject { ["oldContent"] = "foo", ["newContent"] = "baz" },
-			new JsonObject { ["oldContent"] = "baz bar", ["newContent"] = "result" }
-		};
-		ToolResult chainResult = FileTools.MultiEditFileAsync(chainFile, chainEdits, tc).GetAwaiter().GetResult();
-		ctx.Assert(chainResult.Response.Contains("2 edit(s) applied"), "MultiEdit: chained edits applied");
-		ToolResult chainVerify = FileTools.ReadFileAsync(chainFile, "", "", tc).GetAwaiter().GetResult();
-		ctx.Assert(chainVerify.Response.Contains("result"), "MultiEdit: chained edits produce correct content");
-
-		// Atomic failure - second edit fails, no edits applied.
-		string atomicFile = Path.Combine(tempDir, "atomic_edit.txt");
-		FileTools.WriteFileAsync(atomicFile, "one two three", tc).GetAwaiter().GetResult();
-		JsonArray atomicEdits = new JsonArray
-		{
-			new JsonObject { ["oldContent"] = "one", ["newContent"] = "1" },
-			new JsonObject { ["oldContent"] = "NOTFOUND", ["newContent"] = "X" }
-		};
-		ToolResult atomicResult = FileTools.MultiEditFileAsync(atomicFile, atomicEdits, tc).GetAwaiter().GetResult();
-		ctx.Assert(atomicResult.Response.Contains("Error") && atomicResult.Response.Contains("Edit 2"), "MultiEdit: failure reports which edit failed");
-		ctx.Assert(atomicResult.Response.Contains("No edits were applied"), "MultiEdit: failure is atomic");
-		ToolResult atomicVerify = FileTools.ReadFileAsync(atomicFile, "", "", tc).GetAwaiter().GetResult();
-		ctx.Assert(atomicVerify.Response.Contains("one two three"), "MultiEdit: file unchanged after atomic failure");
-
-		// Duplicate match fails atomically.
-		string dupeFile = Path.Combine(tempDir, "multi_dupe.txt");
-		FileTools.WriteFileAsync(dupeFile, "aaa bbb aaa", tc).GetAwaiter().GetResult();
-		JsonArray dupeEdits = new JsonArray
-		{
-			new JsonObject { ["oldContent"] = "aaa", ["newContent"] = "ccc" }
-		};
-		ToolResult dupeResult = FileTools.MultiEditFileAsync(dupeFile, dupeEdits, tc).GetAwaiter().GetResult();
-		ctx.Assert(dupeResult.Response.Contains("Error") && dupeResult.Response.Contains("multiple"), "MultiEdit: duplicate match returns error");
-
-		// Empty edits array.
-		ToolResult emptyEdits = FileTools.MultiEditFileAsync(multiEditFile, new JsonArray(), tc).GetAwaiter().GetResult();
-		ctx.Assert(emptyEdits.Response.Contains("Error"), "MultiEdit: empty edits returns error");
-
-		// Read-first guard.
-		string unreadFile = Path.Combine(tempDir, "unread_multi.txt");
-		File.WriteAllText(unreadFile, "content");
-		JsonArray unreadEdits = new JsonArray
-		{
-			new JsonObject { ["oldContent"] = "content", ["newContent"] = "changed" }
-		};
-		ToolResult unreadResult = FileTools.MultiEditFileAsync(unreadFile, unreadEdits, tc).GetAwaiter().GetResult();
-		ctx.Assert(unreadResult.Response.Contains("Error") && unreadResult.Response.Contains("read_file"), "MultiEdit: unread file returns read-first error");
-
-		// Supports snake_case property names from LLM.
-		string snakeFile = Path.Combine(tempDir, "snake_edit.txt");
-		FileTools.WriteFileAsync(snakeFile, "hello world", tc).GetAwaiter().GetResult();
-		JsonArray snakeEdits = new JsonArray
-		{
-			new JsonObject { ["old_content"] = "hello", ["new_content"] = "hi" }
-		};
-		ToolResult snakeResult = FileTools.MultiEditFileAsync(snakeFile, snakeEdits, tc).GetAwaiter().GetResult();
-		ctx.Assert(snakeResult.Response.Contains("1 edit(s) applied"), "MultiEdit: snake_case property names work");
+			// Atomic failure with multiple ops: first op would replace line1, second op has bad anchor → expect no change
+			string atomicFile = Path.Combine(tempDir, "atomic_edit.txt");
+			FileTools.WriteFileAsync(atomicFile, "one two three", tc).GetAwaiter().GetResult();
+			ToolResult atomicRead = FileTools.ReadFileAsync(atomicFile, "", "", tc).GetAwaiter().GetResult();
+			string? anchor1 = null;
+			{
+				string[] parts = atomicRead.Response.Split('\n');
+				foreach (string ln in parts)
+				{
+					if (ln.Contains("one two three"))
+					{
+						anchor1 = ln.Split('\t')[0].Trim();
+						break;
+					}
+				}
+			}
+			string badAnchor2 = "2:00";
+			JsonArray atomicOps = new JsonArray
+			{
+				new JsonObject { ["replace_lines"] = new JsonObject { ["start_anchor"] = anchor1, ["end_anchor"] = anchor1, ["new_text"] = "ONE" } },
+				new JsonObject { ["replace_lines"] = new JsonObject { ["start_anchor"] = badAnchor2, ["end_anchor"] = badAnchor2, ["new_text"] = "BAD" } }
+			};
+			ToolResult atomicResult = FileTools.EditFileAsync(atomicFile, atomicOps.ToJsonString(), tc).GetAwaiter().GetResult();
+			ctx.Assert(atomicResult.Response.Contains("Error"), "EditFile: atomic failure returns error");
+			ToolResult atomicVerify = FileTools.ReadFileAsync(atomicFile, "", "", tc).GetAwaiter().GetResult();
+			ctx.Assert(atomicVerify.Response.Contains("one two three"), "EditFile: file unchanged after atomic failure");
 	}
 
 	private static void TestReadFirstGuard(TestContext ctx, ToolContext tc, string tempDir)
@@ -244,11 +259,15 @@ public static class FileToolsTests
 		ToolResult overwriteAfterRead = FileTools.WriteFileAsync(guardFile, "replaced", tc).GetAwaiter().GetResult();
 		ctx.Assert(overwriteAfterRead.Response.Contains("File written"), "FileTools: overwrite after read succeeds");
 
-		// Editing a file that was never read is an error.
-		string unreadFile = Path.Combine(tempDir, "unread.txt");
-		File.WriteAllText(unreadFile, "some content");
-		ToolResult editNoRead = FileTools.EditFileAsync(unreadFile, "some", "other", false, tc).GetAwaiter().GetResult();
-		ctx.Assert(editNoRead.Response.Contains("Error") && editNoRead.Response.Contains("read_file"), "FileTools: edit without read returns error");
+          // Editing a file that was never read is an error using new EditFileAsync signature.
+			string unreadFile = Path.Combine(tempDir, "unread.txt");
+			File.WriteAllText(unreadFile, "some content");
+			JsonArray unreadEd = new JsonArray
+			{
+				new JsonObject { ["replace_lines"] = new JsonObject { ["start_anchor"] = "1:00", ["end_anchor"] = "1:00", ["new_text"] = "other" } }
+			};
+			ToolResult editNoRead = FileTools.EditFileAsync(unreadFile, unreadEd.ToJsonString(), tc).GetAwaiter().GetResult();
+			ctx.Assert(editNoRead.Response.Contains("Error") && editNoRead.Response.Contains("read_file"), "FileTools: edit without read returns error");
 	}
 
 	private static void TestEdgeErrors(TestContext ctx, ToolContext tc, string tempDir)
@@ -262,16 +281,20 @@ public static class FileToolsTests
 		ToolResult noFile = FileTools.ReadFileAsync(ghostFile, "", "", tc).GetAwaiter().GetResult();
 		ctx.Assert(noFile.Response.Contains("Error") && noFile.Response.Contains("not found"), "FileTools: read non-existent returns error");
 
-		// Edit with empty oldContent.
-		string edgeFile = Path.Combine(tempDir, "edit_edge.txt");
-		FileTools.WriteFileAsync(edgeFile, "content", tc).GetAwaiter().GetResult();
-		ToolResult emptyOld = FileTools.EditFileAsync(edgeFile, "", "new", false, tc).GetAwaiter().GetResult();
-		ctx.Assert(emptyOld.Response.Contains("Error"), "FileTools: edit empty oldContent returns error");
+          // Edit with empty edits array should return error.
+			string edgeFile = Path.Combine(tempDir, "edit_edge.txt");
+			FileTools.WriteFileAsync(edgeFile, "content", tc).GetAwaiter().GetResult();
+			ToolResult emptyEdits = FileTools.EditFileAsync(edgeFile, "[]", tc).GetAwaiter().GetResult();
+			ctx.Assert(emptyEdits.Response.Contains("Error"), "FileTools: empty edits returns error");
 
-		// Edit non-existent file (never read → read-first error).
-		string missingFile = Path.Combine(tempDir, "ghost.txt");
-		ToolResult editMissing = FileTools.EditFileAsync(missingFile, "old", "new", false, tc).GetAwaiter().GetResult();
-		ctx.Assert(editMissing.Response.Contains("Error") && editMissing.Response.Contains("read_file"), "FileTools: edit unread file returns read-first error");
+			// Edit non-existent file (never read → read-first error) using new signature.
+			string missingFile = Path.Combine(tempDir, "ghost.txt");
+			JsonArray missingEdits = new JsonArray
+			{
+				new JsonObject { ["replace_lines"] = new JsonObject { ["start_anchor"] = "1:00", ["end_anchor"] = "1:00", ["new_text"] = "new" } }
+			};
+			ToolResult editMissing = FileTools.EditFileAsync(missingFile, missingEdits.ToJsonString(), tc).GetAwaiter().GetResult();
+			ctx.Assert(editMissing.Response.Contains("Error") && editMissing.Response.Contains("read_file"), "FileTools: edit unread file returns read-first error");
 
 		// Write creates subdirectory automatically.
 		string nestedFile = Path.Combine(tempDir, "newdir", "nested.txt");

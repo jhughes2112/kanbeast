@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace KanBeast.Worker.Services.Tools;
@@ -9,6 +10,106 @@ public static class FileTools
 {
 	private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(30);
 	private static readonly SemaphoreSlim FileLock = new SemaphoreSlim(1, 1);
+
+   // Compute a simple non-cryptographic hash for a line after stripping all whitespace.
+	// Returns the low-order byte of an FNV-1a 32-bit hash as the anchor byte.
+	private static byte ComputeLineHashByte(string? line)
+	{
+		if (line == null)
+		{
+			return 0;
+		}
+
+		uint hash = 2166136261u; // FNV offset basis
+
+		for (int i = 0; i < line.Length; i++)
+		{
+			char c = line[i];
+			if (char.IsWhiteSpace(c))
+			{
+				continue;
+			}
+
+			// Mix low byte then high byte of the UTF-16 code unit
+			byte low = (byte)(c & 0xFF);
+			hash ^= low;
+			hash *= 16777619u;
+
+			byte high = (byte)(c >> 8);
+			hash ^= high;
+			hash *= 16777619u;
+		}
+
+		return (byte)(hash & 0xFFu);
+	}
+
+	private enum OpType { ReplaceLines, InsertAfter }
+
+	private class Operation
+	{
+		public OpType Type { get; set; }
+		// For ReplaceLines
+		public int StartLine { get; set; }
+		public int EndLine { get; set; }
+		public byte StartHash { get; set; }
+		public byte EndHash { get; set; }
+		// For InsertAfter
+		public int AnchorLine { get; set; }
+		public byte AnchorHash { get; set; }
+		public string NewText { get; set; } = string.Empty;
+		public int OriginalIndex { get; set; }
+
+		public int PrimaryLine
+		{
+			get
+			{
+				if (Type == OpType.ReplaceLines) return StartLine;
+				return AnchorLine;
+			}
+		}
+	}
+
+	private static bool TryParseAnchor(string anchor, out int lineNumber, out byte hashByte, out string hexString)
+	{
+		lineNumber = 0;
+		hashByte = 0;
+		hexString = string.Empty;
+		if (string.IsNullOrEmpty(anchor))
+		{
+			return false;
+		}
+
+		int colon = anchor.IndexOf(':');
+		if (colon <= 0)
+		{
+			return false;
+		}
+		string linePart = anchor.Substring(0, colon);
+		string hexPart = anchor.Substring(colon + 1);
+		if (!int.TryParse(linePart, NumberStyles.None, CultureInfo.InvariantCulture, out lineNumber))
+		{
+			return false;
+		}
+		if (hexPart.Length == 0 || hexPart.Length > 2)
+		{
+			return false;
+		}
+		if (!byte.TryParse(hexPart, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out hashByte))
+		{
+			return false;
+		}
+		hexString = hexPart.ToLowerInvariant();
+		return true;
+	}
+
+	private static string[] SplitLinesPreserveEmpty(string text)
+	{
+		if (text == null)
+		{
+			return new string[0];
+		}
+		return text.Replace("\r\n", "\n").Split('\n');
+	}
 
 	[Description("""
 		Reads a file from the local filesystem. You can access any file directly by using this tool.
@@ -23,16 +124,6 @@ public static class FileTools
 		Use offset and lines to page through large files. Do not use cat, head, or tail via run_command; use this tool instead.
 		""")]
 	public static async Task<ToolResult> ReadFileAsync(
-		[Description("Absolute path to the file to read.")] string filePath,
-		[Description("The line number to start reading from (1 based). Only provide if the file is too large to read at once")] string offset,
-		[Description("The number of lines to read. Only provide if the file is too large to read at once")] string lines,
-		ToolContext context)
-	{
-		return await ReadFileContentAsync(filePath, offset, lines, context);
-	}
-
-	[Description("Alias for read_file.")]
-	public static async Task<ToolResult> GetFileAsync(
 		[Description("Absolute path to the file to read.")] string filePath,
 		[Description("The line number to start reading from (1 based). Only provide if the file is too large to read at once")] string offset,
 		[Description("The number of lines to read. Only provide if the file is too large to read at once")] string lines,
@@ -169,7 +260,8 @@ public static class FileTools
 
 								for (int i = 0; i < readLines.Count; i++)
 								{
-									sb.AppendLine($"{startLine + i,6}\t{readLines[i]}");
+                                    byte hash = ComputeLineHashByte(readLines[i]);
+									sb.AppendLine($"{startLine + i,6}:{hash:x2}\t{readLines[i]}");
 								}
 
 								if (hitMaxLines)
@@ -271,12 +363,24 @@ public static class FileTools
 		return result;
 	}
 
-	[Description("Performs an exact find-and-replace in a file. Locates oldContent in the file and replaces it with newContent.\n\nRules:\n- You must use read_file at least once before editing. This tool will error if you attempt an edit without reading the file first.\n- oldContent must appear exactly once in the file. The edit fails if it matches zero times or more than once.\n- Matching is byte-exact including all whitespace, indentation, and line endings.\n- If oldContent is not unique, include more surrounding lines of context to disambiguate.")]
+
+
+    [Description("""
+		Apply multiple line-anchored edits to a file. The edits parameter is a JSON string representing an ordered array of operations. Each operation is one of:
+		- { "replace_lines": { "start_anchor": "<line>:<hh>", "end_anchor": "<line>:<hh>", "new_text": "..." } }
+		- { "insert_after": { "anchor": "<line>:<hh>", "new_text": "..." } }
+
+		Anchors are produced by the read_file tool and are of the form "<line>:<hh>" where hh is the low-order byte of a fast non-cryptographic hash (two-digit lowercase hex) computed over the line with all whitespace removed.
+
+		Behavior:
+		- The edits array must be provided as a JSON string.
+		- Operations are applied in the provided order conceptually, but to avoid disturbing subsequent anchors they are validated and then executed in reverse order (last-to-first).
+		- Before applying any changes, all anchors mentioned are verified against the current file. If any anchor does not match, no edits are applied and the tool returns an error. The error output includes the non-matching lines in the same format as read_file (with anchors).
+		- Replacements and inserts are treated uniformly as operations addressing line ranges or insertion points and are applied last-to-first by line number.
+		""")]
 	public static async Task<ToolResult> EditFileAsync(
 		[Description("Absolute path to the file to modify.")] string filePath,
-		[Description("The exact text to find in the file. Must match exactly once including all whitespace and indentation. Include surrounding context lines if needed to make the match unique.")] string oldContent,
-		[Description("The text that replaces oldContent. Can be empty to delete the matched text.")] string newContent,
-		[Description("Replace all occurrences of oldContent (default false)")] bool replaceAll,
+		[Description("A JSON string encoding an ordered array of edit operations (see tool description)." )] string edits,
 		ToolContext context)
 	{
 		ToolResult result;
@@ -286,13 +390,13 @@ public static class FileTools
 		{
 			result = new ToolResult("Error: Path cannot be empty", false, false);
 		}
-		else if (string.IsNullOrEmpty(oldContent))
-		{
-			result = new ToolResult("Error: oldContent cannot be empty", false, false);
-		}
 		else if (!Path.IsPathRooted(filePath))
 		{
 			result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
+		}
+		else if (string.IsNullOrWhiteSpace(edits))
+		{
+			result = new ToolResult("Error: edits JSON cannot be empty", false, false);
 		}
 		else
 		{
@@ -320,148 +424,219 @@ public static class FileTools
 						{
 							string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
 
-							int firstIndex = fileContent.IndexOf(oldContent, StringComparison.Ordinal);
-							if (firstIndex < 0)
+							JsonNode? rootNode;
+							try
 							{
-								result = new ToolResult($"Error: oldContent not found in file: {filePath}", false, false);
+								rootNode = JsonNode.Parse(edits);
 							}
-							else
+							catch (Exception ex)
 							{
-								int secondIndex = fileContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
-								if (secondIndex >= 0)
-								{
-									result = new ToolResult("Error: oldContent matched multiple times in file. Include more context to make it unique.", false, false);
-								}
-								else
-								{
-									string updatedContent = fileContent[..firstIndex] + (newContent ?? string.Empty) + fileContent[(firstIndex + oldContent.Length)..];
-									await File.WriteAllTextAsync(fullPath, updatedContent, cts.Token);
-									result = new ToolResult($"File edited: {filePath}", false, false);
-								}
+								result = new ToolResult($"Error: Failed to parse edits JSON: {ex.Message}", false, false);
+								return result;
 							}
-						}
-						finally
-						{
-							FileLock.Release();
-						}
-					}
-				}
-				catch (OperationCanceledException)
-				{
-					result = new ToolResult($"Error: Timed out or cancelled editing file: {filePath}", false, false);
-				}
-				catch (Exception ex)
-				{
-					result = new ToolResult($"Error: Failed to edit file: {ex.Message}", false, false);
-				}
-			}
-		}
 
-		return result;
-	}
-
-	[Description("""
-		Performs multiple find-and-replace edits on a single file in one atomic operation.
-		All edits are applied in sequence, each operating on the result of the previous edit.
-		If any edit fails (oldContent not found or matches multiple times), none of the edits are applied.
-		You must use read_file at least once before editing. This tool will error if you attempt edits without reading the file first.
-		Prefer this tool over edit_file when you need to make multiple edits to the same file.
-		""")]
-	public static async Task<ToolResult> MultiEditFileAsync(
-		[Description("Absolute path to the file to modify.")] string filePath,
-		[Description("Array of edit operations to apply sequentially. Each edit has: oldContent (exact text to find), newContent (replacement text), and optionally replaceAll (boolean, default false).")] JsonArray edits,
-		ToolContext context)
-	{
-		ToolResult result;
-		CancellationToken cancellationToken = WorkerSession.CancellationToken;
-
-		if (string.IsNullOrWhiteSpace(filePath))
-		{
-			result = new ToolResult("Error: Path cannot be empty", false, false);
-		}
-		else if (!Path.IsPathRooted(filePath))
-		{
-			result = new ToolResult($"Error: Path must be absolute: {filePath}", false, false);
-		}
-		else if (edits == null || edits.Count == 0)
-		{
-			result = new ToolResult("Error: edits array cannot be empty", false, false);
-		}
-		else
-		{
-			string fullPath = Path.GetFullPath(filePath);
-
-			if (!context.ReadFiles.ContainsKey(fullPath))
-			{
-				result = new ToolResult($"Error: You must use read_file on {filePath} before editing it.", false, false);
-			}
-			else
-			{
-				try
-				{
-					if (!File.Exists(fullPath))
-					{
-						result = new ToolResult($"Error: File not found: {filePath}", false, false);
-					}
-					else
-					{
-						using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-						cts.CancelAfter(DefaultTimeout);
-
-						await FileLock.WaitAsync(cts.Token);
-						try
-						{
-							string fileContent = await File.ReadAllTextAsync(fullPath, cts.Token);
-
-							string workingContent = fileContent;
-							int editIndex = 0;
-
-							foreach (JsonNode? editNode in edits)
+							if (rootNode is not JsonArray opsArray)
 							{
-								editIndex++;
+								result = new ToolResult("Error: edits JSON must be an array of operations.", false, false);
+								return result;
+							}
 
-								if (editNode is not JsonObject editObj)
+							if (opsArray.Count == 0)
+							{
+								result = new ToolResult("Error: edits array is empty.", false, false);
+								return result;
+							}
+
+							string[] fileLines = await File.ReadAllLinesAsync(fullPath, cts.Token);
+							List<string> linesList = new List<string>(fileLines);
+
+                            // Build operations list preserving input order. Collect parse errors instead of returning early.
+							List<Operation> operations = new List<Operation>();
+							List<string> parseErrors = new List<string>();
+							int idx = 0;
+							foreach (JsonNode? node in opsArray)
+							{
+								idx++;
+								if (node is not JsonObject obj)
 								{
-									result = new ToolResult($"Error: Edit {editIndex} is not a valid object.", false, false);
-									return result;
+									parseErrors.Add($"Operation {idx} is not an object.");
+									continue;
 								}
 
-								string? oldContent = editObj["oldContent"]?.ToString() ?? editObj["old_content"]?.ToString();
-								string? newContent = editObj["newContent"]?.ToString() ?? editObj["new_content"]?.ToString();
-								bool replaceAll = editObj["replaceAll"]?.GetValue<bool>() ?? editObj["replace_all"]?.GetValue<bool>() ?? false;
-
-								if (string.IsNullOrEmpty(oldContent))
+								if (obj["replace_lines"] is JsonObject rep)
 								{
-									result = new ToolResult($"Error: Edit {editIndex}: oldContent cannot be empty.", false, false);
-									return result;
-								}
-
-								int firstIndex = workingContent.IndexOf(oldContent, StringComparison.Ordinal);
-								if (firstIndex < 0)
-								{
-									result = new ToolResult($"Error: Edit {editIndex}: oldContent not found in file. No edits were applied.", false, false);
-									return result;
-								}
-
-								if (replaceAll)
-								{
-									workingContent = workingContent.Replace(oldContent, newContent ?? string.Empty, StringComparison.Ordinal);
-								}
-								else
-								{
-									int secondIndex = workingContent.IndexOf(oldContent, firstIndex + oldContent.Length, StringComparison.Ordinal);
-									if (secondIndex >= 0)
+									string? startAnchor = rep["start_anchor"]?.ToString() ?? rep["startAnchor"]?.ToString();
+									string? endAnchor = rep["end_anchor"]?.ToString() ?? rep["endAnchor"]?.ToString();
+									string? newText = rep["new_text"]?.ToString() ?? rep["newText"]?.ToString();
+									if (string.IsNullOrEmpty(startAnchor) || string.IsNullOrEmpty(endAnchor))
 									{
-										result = new ToolResult($"Error: Edit {editIndex}: oldContent matched multiple times. Include more context to make it unique. No edits were applied.", false, false);
+										parseErrors.Add($"Operation {idx}: replace_lines requires start_anchor and end_anchor.");
+										continue;
+									}
+									if (!TryParseAnchor(startAnchor, out int sLine, out byte sHash, out string sHex))
+									{
+										parseErrors.Add($"Operation {idx}: invalid start_anchor format: {startAnchor}");
+										continue;
+									}
+									if (!TryParseAnchor(endAnchor, out int eLine, out byte eHash, out string eHex))
+									{
+										parseErrors.Add($"Operation {idx}: invalid end_anchor format: {endAnchor}");
+										continue;
+									}
+									Operation op = new Operation();
+									op.Type = OpType.ReplaceLines;
+									op.StartLine = sLine;
+									op.EndLine = eLine;
+									op.StartHash = sHash;
+									op.EndHash = eHash;
+									op.NewText = newText ?? string.Empty;
+									op.OriginalIndex = idx;
+									operations.Add(op);
+								}
+								else if (obj["insert_after"] is JsonObject ins)
+								{
+									string? anchor = ins["anchor"]?.ToString();
+									string? newText = ins["new_text"]?.ToString() ?? ins["newText"]?.ToString();
+									if (string.IsNullOrEmpty(anchor))
+									{
+										parseErrors.Add($"Operation {idx}: insert_after requires anchor.");
+										continue;
+									}
+									if (!TryParseAnchor(anchor, out int aLine, out byte aHash, out string aHex))
+									{
+										parseErrors.Add($"Operation {idx}: invalid anchor format: {anchor}");
+										continue;
+									}
+									Operation op = new Operation();
+									op.Type = OpType.InsertAfter;
+									op.AnchorLine = aLine;
+									op.AnchorHash = aHash;
+									op.NewText = newText ?? string.Empty;
+									op.OriginalIndex = idx;
+									operations.Add(op);
+								}
+								else
+								{
+									parseErrors.Add($"Operation {idx}: unknown operation type.");
+									continue;
+								}
+							}
+
+							if (parseErrors.Count > 0)
+							{
+								StringBuilder sbErrors = new StringBuilder();
+								sbErrors.AppendLine("Error: Failed to parse one or more operations:");
+								foreach (string pe in parseErrors)
+								{
+									sbErrors.AppendLine(pe);
+								}
+								result = new ToolResult(sbErrors.ToString(), false, false);
+								return result;
+							}
+
+							// Error if no operations were provided
+							if (operations.Count == 0)
+							{
+								result = new ToolResult("Error: edits array contains no valid operations.", false, false);
+								return result;
+							}
+
+							// Order operations by smallest relevant line number ascending
+							operations.Sort((Operation a, Operation b) => a.PrimaryLine.CompareTo(b.PrimaryLine));
+
+							// Verify all anchors against the original file lines by iterating operations in reverse order
+							List<int> mismatchedLines = new List<int>();
+							for (int v = operations.Count - 1; v >= 0; v--)
+							{
+								Operation op = operations[v];
+								if (op.Type == OpType.ReplaceLines)
+								{
+									if (op.StartLine < 1 || op.EndLine < op.StartLine || op.EndLine > linesList.Count)
+									{
+										result = new ToolResult($"Error: Operation {op.OriginalIndex}: anchor line numbers out of range.", false, false);
 										return result;
 									}
-
-									workingContent = workingContent[..firstIndex] + (newContent ?? string.Empty) + workingContent[(firstIndex + oldContent.Length)..];
+									byte actualStart = ComputeLineHashByte(linesList[op.StartLine - 1]);
+									byte actualEnd = ComputeLineHashByte(linesList[op.EndLine - 1]);
+									if (actualStart != op.StartHash)
+									{
+										mismatchedLines.Add(op.StartLine);
+									}
+									if (actualEnd != op.EndHash)
+									{
+										mismatchedLines.Add(op.EndLine);
+									}
+								}
+								else if (op.Type == OpType.InsertAfter)
+								{
+									if (op.AnchorLine < 1 || op.AnchorLine > linesList.Count)
+									{
+										result = new ToolResult($"Error: Operation {op.OriginalIndex}: anchor line number out of range.", false, false);
+										return result;
+									}
+									byte actual = ComputeLineHashByte(linesList[op.AnchorLine - 1]);
+									if (actual != op.AnchorHash)
+									{
+										mismatchedLines.Add(op.AnchorLine);
+									}
 								}
 							}
 
-							await File.WriteAllTextAsync(fullPath, workingContent, cts.Token);
-							result = new ToolResult($"File edited: {filePath} ({edits.Count} edit(s) applied)", false, false);
+							if (mismatchedLines.Count > 0)
+							{
+								// Build error output listing mismatched lines in read_file format
+								StringBuilder sbErr = new StringBuilder();
+								sbErr.AppendLine("Error: One or more anchor hashes did not match. No edits were applied.");
+								mismatchedLines.Sort();
+								foreach (int lineNo in mismatchedLines)
+								{
+									int idx0 = lineNo - 1;
+									if (idx0 >= 0 && idx0 < linesList.Count)
+									{
+										byte h = ComputeLineHashByte(linesList[idx0]);
+										sbErr.AppendLine($"{lineNo,6}:{h:x2}\t{linesList[idx0]}");
+									}
+								}
+								result = new ToolResult(sbErr.ToString(), false, false);
+								return result;
+							}
+
+							// No mismatches: apply operations in reverse order (last-to-first)
+							for (int opIndex = operations.Count - 1; opIndex >= 0; opIndex--)
+							{
+								Operation op = operations[opIndex];
+								if (op.Type == OpType.ReplaceLines)
+								{
+									int start = op.StartLine - 1;
+									int removeCount = op.EndLine - op.StartLine + 1;
+									if (start >= 0 && start + removeCount <= linesList.Count)
+									{
+										linesList.RemoveRange(start, removeCount);
+										if (!string.IsNullOrEmpty(op.NewText))
+										{
+											string[] newLines = SplitLinesPreserveEmpty(op.NewText);
+											linesList.InsertRange(start, newLines);
+										}
+									}
+								}
+								else if (op.Type == OpType.InsertAfter)
+								{
+									int insertIndex = op.AnchorLine; // after anchor
+									if (insertIndex < 0) insertIndex = 0;
+									if (insertIndex > linesList.Count) insertIndex = linesList.Count;
+									if (!string.IsNullOrEmpty(op.NewText))
+									{
+										string[] newLines = SplitLinesPreserveEmpty(op.NewText);
+										linesList.InsertRange(insertIndex, newLines);
+									}
+								}
+							}
+
+							// Rebuild and write
+							string newWorking = string.Join(Environment.NewLine, linesList);
+							if (fileContent.EndsWith("\n") && !newWorking.EndsWith("\n")) newWorking += Environment.NewLine;
+							await File.WriteAllTextAsync(fullPath, newWorking, cts.Token);
+							result = new ToolResult($"File edited: {filePath} ({operations.Count} operation(s) applied)", false, false);
 						}
 						finally
 						{
