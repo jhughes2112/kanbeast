@@ -9,7 +9,6 @@ echo "Building KanBeast..."
 docker build -t "$IMAGE_NAME" -f Dockerfile .
 
 echo "Cleaning up old containers..."
-docker rm -f "$CONTAINER_NAME" 2>/dev/null || true
 docker network rm "$NETWORK_NAME" 2>/dev/null || true
 
 echo "Creating network..."

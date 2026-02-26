@@ -3,6 +3,9 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using KanBeast.Shared;
 using Microsoft.AspNetCore.SignalR.Client;
+using System;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace KanBeast.Worker.Services;
 

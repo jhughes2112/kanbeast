@@ -3,14 +3,24 @@ using KanBeast.Server;
 using KanBeast.Server.Services;
 using KanBeast.Server.Hubs;
 using Microsoft.Extensions.Logging.Console;
+using System.Threading.Tasks;
+using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Builder;
+using System.Linq;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using System;
+using System.IO;
 
 namespace KanBeast.Server;
 
-public class Program
+public class Server
 {
-    public static async Task Main(string[] args)
+    public static async Task Run()
     {
-        WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+        WebApplicationBuilder builder = WebApplication.CreateBuilder();
+		Environment.CurrentDirectory = "/workspace";  // for some reason, Visual Studio forces the working directory to /app when in debug mode, so I have to force it back to /workspace.
 
         // Configure clean console logging - just timestamp and message
         builder.Logging.ClearProviders();

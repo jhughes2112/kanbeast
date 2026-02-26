@@ -4,6 +4,7 @@ using KanBeast.Server.Hubs;
 using KanBeast.Server.Models;
 using KanBeast.Server.Services;
 using KanBeast.Shared;
+using System.Threading.Tasks;
 
 namespace KanBeast.Server.Controllers;
 

@@ -3,6 +3,9 @@ using Microsoft.AspNetCore.SignalR;
 using KanBeast.Server.Models;
 using KanBeast.Server.Services;
 using KanBeast.Shared;
+using System.Collections.Generic;
+using System.Threading.Tasks;
+using System;
 
 namespace KanBeast.Server.Hubs;
 

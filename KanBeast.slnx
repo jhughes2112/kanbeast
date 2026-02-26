@@ -4,6 +4,7 @@
       <Build Solution="Debug|*" Project="false" />
     </Project>
   </Folder>
+  <Project Path="Entrypoint/Entrypoint.csproj" Id="f6014b82-17ed-46b6-9701-cd9707cf45e0" />
   <Project Path="KanBeast.Server/KanBeast.Server.csproj" />
   <Project Path="KanBeast.Shared/KanBeast.Shared.csproj" />
   <Project Path="KanBeast.Worker/KanBeast.Worker.csproj" />

@@ -1,0 +1,15 @@
+{
+  "profiles": {
+    "Server (Dockerfile)": {
+      "commandName": "Docker",
+      "containerName": "kanbeast-server",
+      "containerRunArguments": "-v /var/run/docker.sock:/var/run/docker.sock -v D:\\Github\\kanbeast\\env:/workspace/ -p 8080:8080 --network kanbeast-network"
+    },
+    "Worker (Dockerfile)": {
+      "commandName": "Docker",
+      "commandLineArgs": "--ticket-id 8 --server-url http://kanbeast-server:8080/ --repo /repo",
+      "containerName": "newkanbeast-worker",
+      "containerRunArguments": "-v /var/run/docker.sock:/var/run/docker.sock -v D:\\Github\\kanbeast\\env:/workspace/ --network kanbeast-network"
+    }
+  }
+}

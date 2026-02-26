@@ -2,9 +2,12 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Text.Json.Nodes;
 using KanBeast.Shared;
-using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
 using KanBeast.Worker.Services.Tools;
+using System;
+using System.Collections.Generic;
+using System.Net.Http;
+using System.Threading.Tasks;
 
 namespace KanBeast.Worker.Tests;
 

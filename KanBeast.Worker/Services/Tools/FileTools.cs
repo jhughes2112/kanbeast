@@ -2,6 +2,11 @@ using System.ComponentModel;
 using System.Text;
 using System.Globalization;
 using System.Text.Json.Nodes;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using System.IO;
 
 namespace KanBeast.Worker.Services.Tools;
 
@@ -208,7 +213,7 @@ public static class FileTools
 							int currentLine = 0;
 							bool hitMaxLines = false;
 
-							while (!sr.EndOfStream)
+							for (;;)
 							{
 								currentLine++;
 

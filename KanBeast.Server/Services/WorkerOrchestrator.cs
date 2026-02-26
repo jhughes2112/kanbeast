@@ -2,6 +2,12 @@ using Docker.DotNet;
 using Docker.DotNet.Models;
 using KanBeast.Server.Models;
 using KanBeast.Shared;
+using System.Threading.Tasks;
+using System.Collections.Generic;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using System;
+using System.Threading;
 
 namespace KanBeast.Server.Services;
 
@@ -230,8 +236,8 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
 
             try
             {
-                // Remove any stale container from a previous run.
-                await RemoveStaleContainerAsync(ticket.ContainerName!);
+                // Restart any containers that are stopped from a previous run.
+                await RestartContainerAsync(ticket.ContainerName!);
 
                 string containerName = await StartWorkerAsync(ticket.Id);
                 _logger.LogInformation("Startup: restarted worker {Container} for ticket #{TicketId}", containerName, ticket.Id);
@@ -243,8 +249,8 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
         }
     }
 
-    // Tries to stop and remove a container by name if it still exists from a previous server run.
-    private async Task RemoveStaleContainerAsync(string containerName)
+    // Tries to restart a container by name if it still exists from a previous server run.
+    private async Task RestartContainerAsync(string containerName)
     {
         try
         {
@@ -272,10 +278,12 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
                         return;
                     }
 
-                    // If stopped, try to start it.
-                    if (container.State == "exited" || container.State == "created")
+
+
+                    // If stopped, paused, or restarting, try to start it.
+                    if (container.State == "exited" || container.State == "created" || container.State == "paused" || container.State == "restarting")
                     {
-                        _logger.LogInformation("Found stopped container {Name} ({Id}), attempting to start.", containerName, container.ID);
+                        _logger.LogInformation("Found container in state {State} {Name} ({Id}), attempting to start.", container.State, containerName, container.ID);
                         try
                         {
                             await _dockerClient.Containers.StartContainerAsync(container.ID, new ContainerStartParameters());
@@ -289,18 +297,21 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
                     }
 
                     // If dead, cannot be started, or in an unrecoverable state, remove.
-                    _logger.LogInformation("Removing unrecoverable container {Name} ({Id})", containerName, container.ID);
-                    try
+                    if (container.State == "dead")
                     {
-                        await _dockerClient.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 5 });
-                    }
-                    catch
-                    {
-                        // May already be stopped.
-                    }
+                        _logger.LogInformation("Removing dead container {Name} ({Id})", containerName, container.ID);
+                        try
+                        {
+                            await _dockerClient.Containers.StopContainerAsync(container.ID, new ContainerStopParameters { WaitBeforeKillSeconds = 5 });
+                        }
+                        catch
+                        {
+                            // May already be stopped.
+                        }
 
-                    await _dockerClient.Containers.RemoveContainerAsync(container.ID, new ContainerRemoveParameters { Force = true });
-                    return;
+                        await _dockerClient.Containers.RemoveContainerAsync(container.ID, new ContainerRemoveParameters { Force = true });
+                        return;
+                    }
                 }
             }
         }

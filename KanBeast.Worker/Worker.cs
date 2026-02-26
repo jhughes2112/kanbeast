@@ -1,66 +1,75 @@
 using System.Text.Json;
-using CommandLine;
 using KanBeast.Shared;
 using KanBeast.Worker.Models;
 using KanBeast.Worker.Services;
 using KanBeast.Worker.Tests;
 using Microsoft.Extensions.Logging;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
+using System.IO;
 
 namespace KanBeast.Worker;
 
-public class Program
+public static class Worker
 {
-	public static async Task<int> Main(string[] args)
+	public static async Task<int> RunAsync(string ticketId, string serverUrl, string repoPath, ILogger logger, CancellationToken cancellationToken)
 	{
-		using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
-		{
-			builder.AddConsole();
-			builder.SetMinimumLevel(LogLevel.Information);
-		});
-
-		ILogger<Program> logger = loggerFactory.CreateLogger<Program>();
 		logger.LogInformation("KanBeast Worker Starting...");
 
-		using CancellationTokenSource cts = new CancellationTokenSource();
-
-		Console.CancelKeyPress += (sender, e) =>
-		{
-			e.Cancel = true;
-			logger.LogWarning("Shutdown requested via Ctrl+C");
-			cts.Cancel();
-		};
-
-		WorkerOptions? options = null;
-		try
-		{
-			options = Parser.Default.ParseArguments<WorkerOptions>(args)
-				.MapResult(
-					opt => opt,
-					errors =>
-					{
-						logger.LogError("Failed to parse command line arguments");
-						throw new InvalidOperationException("Failed to parse command line arguments.");
-					});
-		}
-		catch (Exception ex)
-		{
-			logger.LogError(ex, "Command line parsing error: {Message}", ex.Message);
-			logger.LogInformation("Usage: KanBeast.Worker --ticket-id <id> --server-url <url> [--repo <path>]");
-			logger.LogInformation("Sleeping 100 seconds before exit to allow log inspection...");
-			await Task.Delay(TimeSpan.FromSeconds(100));
-			return 1;
-		}
-
-		KanbanApiClient apiClient = new KanbanApiClient(options.ServerUrl);
-		WorkerHubClient hubClient = new WorkerHubClient(options.ServerUrl, options.TicketId);
+		KanbanApiClient apiClient = new KanbanApiClient(serverUrl);
+		WorkerHubClient hubClient = new WorkerHubClient(serverUrl, ticketId);
 
 		try
 		{
-			await hubClient.ConnectAsync(cts.Token);
-			logger.LogInformation("Connected to server hub for ticket {TicketId}", options.TicketId);
+			await hubClient.ConnectAsync(cancellationToken);
+			logger.LogInformation("Connected to server hub for ticket {TicketId}", ticketId);
 
-			WorkerConfig config = BuildConfiguration(options);
-			string repoDir = ResolveRepoPath(options.RepoPath);
+			SettingsFile settings = LoadWorkerSettings();
+
+			string resolvedPromptDirectory = ResolvePromptDirectory();
+
+			if (!Directory.Exists(resolvedPromptDirectory))
+			{
+				Console.WriteLine($"Error: Prompt directory not found: {resolvedPromptDirectory}");
+				throw new DirectoryNotFoundException($"Prompt directory not found: {resolvedPromptDirectory}");
+			}
+
+			string[] requiredPrompts = new string[] { "planning", "planning-active", "developer", "subagent-dev", "subagent-planning", "compaction" };
+
+			Dictionary<string, string> prompts = new Dictionary<string, string>();
+			string[] promptFiles = Directory.GetFiles(resolvedPromptDirectory, "*.txt");
+
+			foreach (string filePath in promptFiles)
+			{
+				string key = Path.GetFileNameWithoutExtension(filePath);
+				string content = File.ReadAllText(filePath);
+				prompts[key] = content;
+				Console.WriteLine($"Loaded prompt: {key}");
+			}
+
+			foreach (string required in requiredPrompts)
+			{
+				if (!prompts.ContainsKey(required))
+				{
+					Console.WriteLine($"Error: Required prompt file not found: {required}.txt");
+					throw new FileNotFoundException($"Required prompt file not found: {required}.txt", Path.Combine(resolvedPromptDirectory, $"{required}.txt"));
+				}
+			}
+
+			WorkerConfig config = new WorkerConfig
+			{
+				TicketId = ticketId,
+				ServerUrl = serverUrl,
+				Settings = settings,
+				Prompts = prompts,
+				PromptDirectory = resolvedPromptDirectory
+			};
+
+           // Make provider credentials available to tests so they can decide to
+			// run or skip integration tests that depend on settings.
+			WorkerSession.UpdateProviderCredentials(config.Settings.Endpoint, config.Settings.ApiKey);
 
 			// Always run unit tests on startup to ensure changes are exercised.
 			int startupTestExit = TestRunner.RunAll(config);
@@ -70,7 +79,9 @@ public class Program
 				return startupTestExit;
 			}
 
-			await RunAsync(logger, apiClient, config, repoDir, hubClient, cts.Token);
+			string repoDir = ResolveRepoPath(repoPath);
+
+			await RunAsync(logger, apiClient, config, repoDir, hubClient, cancellationToken);
 
 			logger.LogInformation("Worker exiting cleanly");
 			return 0;
@@ -83,7 +94,7 @@ public class Program
 		catch (Exception ex)
 		{
 			logger.LogError(ex, "Worker failed: {Message}", ex.Message);
-			await apiClient.AddActivityLogAsync(options.TicketId, $"Worker: Failed with error - {ex.Message}", cts.Token);
+			await apiClient.AddActivityLogAsync(ticketId, $"Worker: Failed with error - {ex.Message}", cancellationToken);
 			return 1;
 		}
 		finally
@@ -92,8 +103,8 @@ public class Program
 		}
 	}
 
-	private static async Task RunAsync(
-		ILogger<Program> logger,
+ private static async Task RunAsync(
+		ILogger logger,
 		KanbanApiClient apiClient,
 		WorkerConfig config,
 		string repoDir,
@@ -171,55 +182,6 @@ public class Program
 		{
 			WorkerSession.Stop();
 		}
-	}
-
-	private static WorkerConfig BuildConfiguration(WorkerOptions options)
-	{
-		string ticketId = options.TicketId;
-		string serverUrl = options.ServerUrl;
-
-		SettingsFile settings = LoadWorkerSettings();
-
-		string resolvedPromptDirectory = ResolvePromptDirectory();
-
-		if (!Directory.Exists(resolvedPromptDirectory))
-		{
-			Console.WriteLine($"Error: Prompt directory not found: {resolvedPromptDirectory}");
-			throw new DirectoryNotFoundException($"Prompt directory not found: {resolvedPromptDirectory}");
-		}
-
-		string[] requiredPrompts = new string[] { "planning", "planning-active", "developer", "subagent-dev", "subagent-planning", "compaction" };
-
-		Dictionary<string, string> prompts = new Dictionary<string, string>();
-		string[] promptFiles = Directory.GetFiles(resolvedPromptDirectory, "*.txt");
-
-		foreach (string filePath in promptFiles)
-		{
-			string key = Path.GetFileNameWithoutExtension(filePath);
-			string content = File.ReadAllText(filePath);
-			prompts[key] = content;
-			Console.WriteLine($"Loaded prompt: {key}");
-		}
-
-		foreach (string required in requiredPrompts)
-		{
-			if (!prompts.ContainsKey(required))
-			{
-				Console.WriteLine($"Error: Required prompt file not found: {required}.txt");
-				throw new FileNotFoundException($"Required prompt file not found: {required}.txt", Path.Combine(resolvedPromptDirectory, $"{required}.txt"));
-			}
-		}
-
-		WorkerConfig config = new WorkerConfig
-		{
-			TicketId = ticketId,
-			ServerUrl = serverUrl,
-			Settings = settings,
-			Prompts = prompts,
-			PromptDirectory = resolvedPromptDirectory
-		};
-
-		return config;
 	}
 
 	private static SettingsFile LoadWorkerSettings()
@@ -307,14 +269,3 @@ public class Program
 	}
 }
 
-public class WorkerOptions
-{
-	[Option("ticket-id", Required = true, HelpText = "Ticket id for the worker.")]
-	public required string TicketId { get; set; }
-
-	[Option("server-url", Required = true, HelpText = "Server URL for the worker.")]
-	public required string ServerUrl { get; set; }
-
-	[Option("repo", Required = false, Default = "/repo", HelpText = "Path where the git repository will be cloned.")]
-	public string RepoPath { get; set; } = string.Empty;
-}
