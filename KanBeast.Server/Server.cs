@@ -12,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using System;
 using System.IO;
+using System.Reflection;
 
 namespace KanBeast.Server;
 
@@ -20,7 +21,6 @@ public class Server
     public static async Task Run()
     {
         WebApplicationBuilder builder = WebApplication.CreateBuilder();
-		Environment.CurrentDirectory = "/workspace";  // for some reason, Visual Studio forces the working directory to /app when in debug mode, so I have to force it back to /workspace.
 
         // Configure clean console logging - just timestamp and message
         builder.Logging.ClearProviders();
@@ -37,11 +37,17 @@ public class Server
         builder.Logging.AddFilter("Microsoft.AspNetCore.StaticFiles", LogLevel.Warning);
 
         // Add services to the container
-        builder.Services.AddControllers()
+        var mvcBuilder = builder.Services.AddControllers()
             .AddJsonOptions(options =>
             {
                 options.JsonSerializerOptions.Converters.Add(new JsonStringEnumConverter());
             });
+
+        // Add all loaded assemblies as application parts for controller discovery
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            mvcBuilder.AddApplicationPart(assembly);
+        }
         builder.Services.AddSignalR(options =>
         {
             options.MaximumReceiveMessageSize = 10 * 1024 * 1024;

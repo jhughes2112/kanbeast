@@ -12,6 +12,7 @@ public class Program
 {
 	public static async Task<int> Main(string[] args)
 	{
+		Environment.CurrentDirectory = "/workspace";  // for some reason, Visual Studio forces the working directory to /app when in debug mode, so I have to force it back to /workspace.
 		using ILoggerFactory loggerFactory = LoggerFactory.Create(builder =>
 		{
 			builder.AddConsole();

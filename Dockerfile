@@ -2,7 +2,9 @@
 # Build stage
 # -----------------------------
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+USER root
 WORKDIR /src
+ARG BUILD_CONFIGURATION=Release
 
 # Copy project files first for better layer caching
 COPY ["Entrypoint/Entrypoint.csproj", "Entrypoint/"]
@@ -17,7 +19,7 @@ COPY . .
 
 WORKDIR /src/Entrypoint
 RUN dotnet publish "Entrypoint.csproj" \
-    -c Release \
+    -c $BUILD_CONFIGURATION \
     -o /app/publish \
     /p:UseAppHost=false
 
@@ -26,7 +28,7 @@ RUN dotnet publish "Entrypoint.csproj" \
 # Runtime stage (full tooling)
 # -----------------------------
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS final
-
+USER root
 WORKDIR /app
 EXPOSE 8080
 
@@ -72,6 +74,9 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 RUN git config --global init.defaultBranch main \
     && git config --global core.autocrlf input \
     && git config --global pull.rebase true
+
+# Inject Visual Studio debugging script to /root/
+RUN mkdir /root/.vs-debugger && curl -sSL https://aka.ms/getvsdbgsh -o '/root/.vs-debugger/GetVsDbg.sh'
 
 # Copy published application
 COPY --from=build /app/publish .

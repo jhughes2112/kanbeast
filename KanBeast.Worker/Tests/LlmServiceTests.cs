@@ -242,47 +242,47 @@ public static class LlmServiceTests
 
 	private static void TestTryAdaptToError(TestContext ctx)
 	{
-		// Fresh instance so _toolChoiceMode starts at Required.
-        LLMConfig config = new LLMConfig(
+		LLMConfig config = new LLMConfig(
 			"test-model", // model
-			128000,        // contextLength
-			0m,            // inputTokenPrice
-			0m,            // outputTokenPrice
-			0.2,           // temperature
-			string.Empty,  // strengths
-			string.Empty   // weaknesses
+			128000,       // contextLength
+			0m,           // inputTokenPrice
+			0m,           // outputTokenPrice
+			0.2,          // temperature
+			string.Empty, // strengths
+			string.Empty  // weaknesses
 		);
-		LlmService freshService = new LlmService(config, "https://test.example.com/v1", "test-key");
-		Type[] types = [typeof(HttpResponseMessage), typeof(string)];
+    
+		LlmService service = new LlmService(config, "https://test.example.com/v1", "test-key");
+		Type[] types = new Type[] { typeof(HttpResponseMessage), typeof(string) };
 
+		// 400 with parallel_tool_calls triggers adaptation
 		HttpResponseMessage r400 = new HttpResponseMessage(HttpStatusCode.BadRequest);
-		string toolChoiceBody = "{\"error\": \"tool_choice is not supported\"}";
+		string parallelBody = "{\"error\": \"parallel_tool_calls not supported\"}";
+		bool adapted = (bool)Reflect.Instance(service, "TryAdaptToError", types, new object[] { r400, parallelBody })!;
+		ctx.Assert(adapted, "TryAdaptToError: disables parallel_tool_calls on 400");
 
-		// First call: Required → Auto, returns true.
-		bool first = (bool)Reflect.Instance(freshService, "TryAdaptToError", types, [r400, toolChoiceBody])!;
-		ctx.Assert(first, "TryAdaptToError: Required→Auto returns true");
+		// Subsequent call with same error returns false (already disabled)
+		bool second = (bool)Reflect.Instance(service, "TryAdaptToError", types, new object[] { r400, parallelBody })!;
+		ctx.Assert(!second, "TryAdaptToError: already disabled returns false");
 
-		// Second call: Auto → Omit, returns true.
-		bool second = (bool)Reflect.Instance(freshService, "TryAdaptToError", types, [r400, toolChoiceBody])!;
-		ctx.Assert(second, "TryAdaptToError: Auto→Omit returns true");
+		// 400 with upstream_error triggers adaptation
+		LlmService fresh = new LlmService(config, "https://test.example.com/v1", "test-key");
+		string upstreamBody = "{\"error\": \"upstream_error occurred\"}";
+		bool upstream = (bool)Reflect.Instance(fresh, "TryAdaptToError", types, new object[] { r400, upstreamBody })!;
+		ctx.Assert(upstream, "TryAdaptToError: disables parallel_tool_calls on upstream_error");
 
-		// Third call: already Omit, returns false.
-		bool third = (bool)Reflect.Instance(freshService, "TryAdaptToError", types, [r400, toolChoiceBody])!;
-		ctx.Assert(!third, "TryAdaptToError: Omit stays false");
-
-		// 500 status is out of range.
+		// 500 returns false
 		HttpResponseMessage r500 = new HttpResponseMessage(HttpStatusCode.InternalServerError);
-		LlmService freshService2 = new LlmService(config, "https://test.example.com/v1", "test-key");
-		bool serverErr = (bool)Reflect.Instance(freshService2, "TryAdaptToError", types, [r500, toolChoiceBody])!;
+		bool serverErr = (bool)Reflect.Instance(fresh, "TryAdaptToError", types, new object[] { r500, upstreamBody })!;
 		ctx.Assert(!serverErr, "TryAdaptToError: 500 status returns false");
 
-		// 429 is explicitly excluded.
+		// 429 returns false
 		HttpResponseMessage r429 = new HttpResponseMessage(HttpStatusCode.TooManyRequests);
-		bool rateLimit = (bool)Reflect.Instance(freshService2, "TryAdaptToError", types, [r429, toolChoiceBody])!;
+		bool rateLimit = (bool)Reflect.Instance(fresh, "TryAdaptToError", types, new object[] { r429, upstreamBody })!;
 		ctx.Assert(!rateLimit, "TryAdaptToError: 429 status returns false");
 
-		// 400 without tool_choice in body returns false.
-		bool noMatch = (bool)Reflect.Instance(freshService2, "TryAdaptToError", types, [r400, "{\"error\": \"something else\"}"])!;
-		ctx.Assert(!noMatch, "TryAdaptToError: body without tool_choice returns false");
+		// 400 without parallel_tool_calls or upstream_error returns false
+		bool noMatch = (bool)Reflect.Instance(fresh, "TryAdaptToError", types, new object[] { r400, "{\"error\": \"other\"}" })!;
+		ctx.Assert(!noMatch, "TryAdaptToError: unrelated 400 returns false");
 	}
 }

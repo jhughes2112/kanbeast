@@ -406,7 +406,8 @@ public static class SearchTools
 									sb.AppendLine("...");
 								}
 
-								sb.AppendLine($"{lineIdx + 1}: {fileLines[lineIdx]}");
+								byte hash = ToolHelper.ComputeLineHashByte(fileLines[lineIdx]);
+								sb.AppendLine($"{lineIdx + 1,6}:{hash:x2}\t{fileLines[lineIdx]}");
 								previousLine = lineIdx;
 							}
 

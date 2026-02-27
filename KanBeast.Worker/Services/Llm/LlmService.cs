@@ -10,6 +10,7 @@ using System.Text;
 using System.Text.Json.Nodes;
 using KanBeast.Shared;
 using KanBeast.Worker.Services.Tools;
+using System.Linq;
 
 namespace KanBeast.Worker.Services;
 
@@ -954,16 +955,26 @@ public class LlmService
 
 	private bool IsRateLimited(HttpResponseMessage response, string responseBody)
 	{
+		// 429 status code
 		if (response.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-		{
 			return true;
+
+		// Retry-After header present
+		if (response.Headers.Contains("Retry-After"))
+			return true;
+
+		// X-RateLimit-Remaining = 0
+		if (response.Headers.TryGetValues("X-RateLimit-Remaining", out var values))
+		{
+			if (values.Any(v => v == "0"))
+				return true;
 		}
 
-		if (responseBody.Contains("\"code\":429"))
-		{
+		// Body containing code 429
+		if (!string.IsNullOrEmpty(responseBody) && responseBody.Contains("\"code\":429"))
 			return true;
-		}
 
+		// Otherwise, not rate limited
 		return false;
 	}
 

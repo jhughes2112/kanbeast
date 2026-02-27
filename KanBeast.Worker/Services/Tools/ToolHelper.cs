@@ -342,4 +342,36 @@ public static class ToolHelper
 
         return $"{head}\n\n... [{omittedCount} characters omitted] ...\n\n{tail}";
     }
+
+    // Compute a simple non-cryptographic hash for a line after stripping all whitespace.
+    // Returns the low-order byte of an FNV-1a 32-bit hash as the anchor byte.
+    public static byte ComputeLineHashByte(string? line)
+    {
+        if (line == null)
+        {
+            return 0;
+        }
+
+        uint hash = 2166136261u; // FNV offset basis
+
+        for (int i = 0; i < line.Length; i++)
+        {
+            char c = line[i];
+            if (char.IsWhiteSpace(c))
+            {
+                continue;
+            }
+
+            // Mix low byte then high byte of the UTF-16 code unit
+            byte low = (byte)(c & 0xFF);
+            hash ^= low;
+            hash *= 16777619u;
+
+            byte high = (byte)(c >> 8);
+            hash ^= high;
+            hash *= 16777619u;
+        }
+
+        return (byte)(hash & 0xFFu);
+    }
 }

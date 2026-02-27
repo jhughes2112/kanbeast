@@ -21,7 +21,6 @@ public enum LlmRole
 // Built from a conversation to give tools access to services and execution state.
 public class ToolContext
 {
-	public ConcurrentDictionary<string, byte> ReadFiles { get; }
 	public ILlmConversation? Conversation { get; }
 	public LlmService? LlmService { get; internal set; }
 	public LlmService? SubAgentService { get; internal set; }
@@ -44,7 +43,6 @@ public class ToolContext
 
 	public ToolContext(ILlmConversation? conversation, LlmService? llmService, LlmService? subAgentService)
 	{
-		ReadFiles = new ConcurrentDictionary<string, byte>(StringComparer.OrdinalIgnoreCase);
 		Conversation = conversation;
 		LlmService = llmService;
 		SubAgentService = subAgentService;

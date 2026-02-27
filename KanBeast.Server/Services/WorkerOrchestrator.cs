@@ -78,7 +78,7 @@ public class WorkerOrchestrator : IWorkerOrchestrator, IHostedService
             Entrypoint = new List<string>
             {
                 "dotnet",
-                "/app/worker/KanBeast.Worker.dll",
+                "/app/Entrypoint.dll",
                 "--ticket-id", ticketId,
                 "--server-url", _containerContext.ServerUrl,
                 "--repo", "/repo"
